@@ -113,7 +113,7 @@ def controller():
 
 
 def test_controller_starts_all_sim_devices(controller):
-    assert len(controller.devices) == 14
+    assert len(controller.devices) == len(controller.config.enabled_devices())
     assert not controller.offline
 
 

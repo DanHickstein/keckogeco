@@ -110,7 +110,7 @@ IDN_SIGNATURES = [
 
 
 def classify_idn(raw: bytes):
-    """Map an *IDN? response to (name, driver, options)."""
+    """Map an ``*IDN?`` response to (name, driver, options)."""
     text = raw.decode("utf-8", errors="replace")
     for needle, device, driver, options in IDN_SIGNATURES:
         if needle.lower() in text.lower():
@@ -661,7 +661,7 @@ def classify_gpib_idn(idn: str):
 
 
 def classify_usbtmc_addr(addr: str):
-    """Classify a USB-TMC resource that gave no *IDN? reply, by VID:PID."""
+    """Classify a USB-TMC resource that gave no ``*IDN?`` reply, by VID:PID."""
     m = re.match(r"USB\d*::0x([0-9A-Fa-f]{4})::0x([0-9A-Fa-f]{4})::", addr)
     if not m:
         return None, "?"

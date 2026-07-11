@@ -8,3 +8,7 @@ API Reference
    keckogeco.config
    keckogeco.logsetup
    keckogeco.drivers
+   keckogeco.comb
+   keckogeco.server
+   keckogeco.discovery
+   keckogeco.check

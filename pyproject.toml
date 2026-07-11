@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["PyQt6", "pyqtgraph", "requests"]
+gui = ["PyQt6", "pyqtgraph", "requests", "pytest-qt"]
 daq = ["mcculw; platform_system == 'Windows'"]
 dev = ["pytest", "httpx", "ruff", "pre-commit"]
 docs = [

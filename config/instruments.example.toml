@@ -90,6 +90,7 @@ name = "Interlock latching relay"
 driver = "srs_sim900"
 address = "ASRL21::INSTR"
 name = "SRS SIM900 mainframe"
+im_slot = 5    # SIM960 slot used for the intensity-modulator bias lock
 
 [devices.waveshaper1]
 driver = "waveshaper"
@@ -105,6 +106,11 @@ name = "WaveShaper (D2)"
 driver = "tec_tc720"
 address = "COM16"
 name = "TC-720 TEC (PPLN)"
+
+[devices.tec_wvg]
+driver = "tec_tc720"
+address = "COM22"
+name = "TC-720 TEC (octave waveguide)"
 
 [devices.daq]
 driver = "usb2408"
