@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStatusBar,
     QVBoxLayout,
@@ -150,12 +151,48 @@ class MainWindow(QMainWindow):
             lamps.addWidget(lamp, 0, column, alignment=Qt.AlignmentFlag.AlignCenter)
             lamps.addWidget(QLabel(label), 1, column, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addLayout(lamps)
-        layout.addStretch()
 
-        refresh = QPushButton("Refresh state")
-        refresh.clicked.connect(lambda: self.statusBar().showMessage("state refreshes every poll"))
-        layout.addWidget(refresh)
+        self.action_label = QLabel("")
+        self.action_label.setWordWrap(True)
+        layout.addWidget(self.action_label, stretch=1)
+
+        buttons = QVBoxLayout()
+        for text, action in (
+            ("Go to STANDBY", "set_standby"),
+            ("Go to FULL COMB", "set_full_comb"),
+            ("Turn OFF", "set_off"),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(lambda _checked, a=action, t=text: self._start_action(a, t))
+            buttons.addWidget(button)
+        abort = QPushButton("Abort action")
+        abort.clicked.connect(self._abort_action)
+        buttons.addWidget(abort)
+        layout.addLayout(buttons)
         return box
+
+    def _start_action(self, action: str, label: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Confirm",
+            f"Really {label}? This runs a multi-step power sequence.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.client.start_action(action)
+            self.statusBar().showMessage(f"started {action}")
+        except Exception as exc:  # noqa: BLE001 - show any refusal (e.g. busy)
+            self.statusBar().showMessage(f"ACTION REFUSED: {exc}", 10000)
+
+    def _abort_action(self) -> None:
+        try:
+            self.client.abort_action()
+            self.statusBar().showMessage("abort requested")
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"abort failed: {exc}", 10000)
 
     def _edfa_panel(self, title: str, prefix: str) -> QGroupBox:
         box = QGroupBox(title)
@@ -240,6 +277,19 @@ class MainWindow(QMainWindow):
         )
         for key, lamp in self.subsystem_lamps.items():
             lamp.set_state(state.get("subsystems", {}).get(key))
+        action = state.get("action")
+        if action and action.get("running"):
+            self.action_label.setText(
+                f"⏳ {action['name']} — step {action['step']}"
+                + (f"/{action['total_steps']}" if action.get("total_steps") else "")
+                + f": {action['message']}"
+            )
+        elif action and action.get("error"):
+            self.action_label.setText(f"❌ {action['name']}: {action['error']}")
+        elif action:
+            self.action_label.setText(f"✓ last action {action['name']}: {action['message']}")
+        else:
+            self.action_label.setText("")
 
     def _on_connection(self, ok: bool, detail: str) -> None:
         if ok:

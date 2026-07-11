@@ -23,6 +23,7 @@ from importlib.metadata import version as pkg_version
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
+from ..comb.actions import ACTIONS, ActionBusy
 from ..comb.controller import LFCController
 from ..comb.keywords import KeywordError
 from ..config import Config, load_config
@@ -140,13 +141,42 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
     @app.put(f"{API_PREFIX}/keywords/{{name}}", dependencies=[auth])
     def write_keyword(name: str, body: WriteRequest) -> dict:
         keyword_spec(name)
+        if controller.executor.running:
+            action = controller.executor.current() or {}
+            raise HTTPException(
+                status_code=409,
+                detail=f"action {action.get('name')!r} is running; writes are locked "
+                "until it finishes (reads are fine)",
+            )
         try:
             value = controller.write(name, body.value)
         except KeywordError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ActionBusy as exc:  # e.g. modify LFC_SET_STANDBY during an action
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {"name": name, "value": value}
+
+    @app.post(f"{API_PREFIX}/actions/{{name}}", dependencies=[auth])
+    def start_action(name: str) -> dict:
+        if name not in ACTIONS:
+            raise HTTPException(
+                status_code=404, detail=f"unknown action {name!r}; know {sorted(ACTIONS)}"
+            )
+        try:
+            return controller.executor.submit(name)
+        except ActionBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(f"{API_PREFIX}/actions/current", dependencies=[auth])
+    def current_action() -> dict:
+        return controller.executor.current() or {"running": False}
+
+    @app.delete(f"{API_PREFIX}/actions/current", dependencies=[auth])
+    def abort_action() -> dict:
+        controller.executor.abort()
+        return controller.executor.current() or {"running": False}
 
     @app.get(f"{API_PREFIX}/schema", dependencies=[auth])
     def schema() -> dict:

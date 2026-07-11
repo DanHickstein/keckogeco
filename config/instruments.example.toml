@@ -69,6 +69,7 @@ driver = "instek_psu"
 address = "ASRL5::INSTR"
 model = "GPD-4303S"
 name = "RF oscillator DC supply"
+channel = 2    # GPD channel feeding the RF oscillator (per minicomb setup)
 
 [devices.rf_amp_psu]
 driver = "instek_psu"

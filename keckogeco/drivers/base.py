@@ -39,6 +39,10 @@ _TRANSPORTS = {
     "socket": SocketTransport,
 }
 
+# Config-block keys consumed by the orchestration layer (LFCController),
+# not by the driver or transport.
+CONTROLLER_KEYS = frozenset({"channel", "im_slot"})
+
 # Bookkeeping keys that keckogeco-find writes into [devices.*] blocks; they
 # identify the device across COM renumbering and are not transport kwargs.
 DISCOVERY_KEYS = frozenset(
@@ -139,7 +143,11 @@ class Instrument:
         # config options override driver defaults; unknown keys are rejected
         # by the transport constructor, surfacing typos at startup.
         for key, value in cfg.options.items():
-            if key not in ("transport", *cls.DRIVER_OPTIONS) and key not in DISCOVERY_KEYS:
+            if (
+                key not in ("transport", *cls.DRIVER_OPTIONS)
+                and key not in DISCOVERY_KEYS
+                and key not in CONTROLLER_KEYS
+            ):
                 options[key] = value
         return cls(transport_cls(cfg.address, **options), cfg.key, **driver_kwargs)
 

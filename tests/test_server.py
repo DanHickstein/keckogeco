@@ -53,7 +53,7 @@ def test_unknown_keyword_404(client):
 
 
 def test_unbound_keyword_501(client):
-    response = client.get("/api/v1/keywords/LFC_WSP_PHASE", params={"fresh": 1})
+    response = client.get("/api/v1/keywords/LFC_VOA1550_ATTEN", params={"fresh": 1})
     assert response.status_code == 501
 
 
@@ -77,7 +77,7 @@ def test_schema_endpoint(client):
     assert len(body) == 77
     assert body["LFC_EDFA27_P"]["max"] == 630
     assert body["LFC_EDFA27_P"]["bound"] is True
-    assert body["LFC_WSP_PHASE"]["bound"] is False
+    assert body["LFC_VOA1550_ATTEN"]["bound"] is False
 
 
 def test_bearer_token_auth(tmp_path):

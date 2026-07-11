@@ -222,11 +222,14 @@ min = 30.0
 max = 30.0
 format = "%.1f"
 
+# NOTE: units corrected from mA to A — the deployed implementation returned
+# the GPD supply's Iout in amps and the 0.35-0.7 limits only make sense in
+# amps. Tracked in ktl/keyword-changes.md.
 [LFC_RFOSCI_I]
 type = "double"
 writable = true
 help = "RF Oscillator input current"
-units = "mA"
+units = "A"
 min = 0.35
 max = 0.7
 format = "%.2f"
@@ -258,13 +261,17 @@ min = 0.0
 max = 10.0
 format = "%.1f"
 
+# NOTE: the original keywords.csv listed this as output power (mW, 50-140),
+# but the deployed implementation always read/wrote the PREAMP CURRENT in mA
+# (KeckLFC.py LFC_PTAMP_PRE_P: preAmp = '{value}mA'). Corrected to match
+# reality; tracked in ktl/keyword-changes.md for review with Keck.
 [LFC_PTAMP_PRE_P]
 type = "double"
 writable = true
-help = "High-power EDFA pre-amp output power"
-units = "mW"
-min = 50.0
-max = 140.0
+help = "High-power EDFA preamp current"
+units = "mA"
+min = 0.0
+max = 600.0
 format = "%.1f"
 
 [LFC_PTAMP_OUT]

@@ -63,6 +63,18 @@ class KeckogecoClient:
             raise RuntimeError(f"{name}: {detail}")
         return response.json()
 
+    def start_action(self, name: str) -> dict:
+        response = self.session.post(f"{self.base_url}/api/v1/actions/{name}", timeout=self.timeout)
+        if response.status_code >= 400:
+            raise RuntimeError(response.json().get("detail", response.text))
+        return response.json()
+
+    def abort_action(self) -> dict:
+        response = self.session.delete(
+            f"{self.base_url}/api/v1/actions/current", timeout=self.timeout
+        )
+        return response.json()
+
 
 class PollThread(QThread):
     """Polls /keywords and /state, emitting fresh data as Qt signals."""

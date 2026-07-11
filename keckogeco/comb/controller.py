@@ -18,13 +18,17 @@ Monitors, transition sequences, and autolocks land in Phase 2.
 from __future__ import annotations
 
 import logging
+import time
+from pathlib import Path
 
 from ..check import build_device
 from ..config import Config
 from ..drivers.base import Instrument
 from ..drivers.errors import InstrumentError
 from . import state as state_mod
+from .actions import ActionExecutor
 from .keywords import KeywordRegistry
+from .monitors import Heartbeat, TelemetryLogger
 from .state import CombState, SubsystemStatus
 
 __all__ = ["LFCController"]
@@ -48,6 +52,10 @@ class LFCController:
         self.devices: dict[str, Instrument] = {}
         self.offline: dict[str, str] = {}  # device key -> last error
         self.registry = KeywordRegistry()
+        self.executor = ActionExecutor(self)
+        self.monitors: list = []
+        # in-memory backing for ICE/TEST keywords (no hardware behind them)
+        self._softstore: dict[str, object] = {"ICESTA": 1, "ICETEST": False}
         self._started = False
 
     # ------------------------------------------------------------ lifecycle
@@ -64,6 +72,7 @@ class LFCController:
                 self.offline[key] = str(exc)
                 log.error("device %s offline at startup: %s", key, exc)
         self._register_keywords()
+        self._start_monitors()
         self._started = True
         log.info(
             "controller started: %d device(s) online, %d offline%s",
@@ -72,7 +81,23 @@ class LFCController:
             " [SIM]" if self.sim else "",
         )
 
+    def _start_monitors(self) -> None:
+        self.heartbeat = Heartbeat(self.registry)
+        self.monitors.append(self.heartbeat)
+        if self.config.logging.telemetry_s > 0:
+            telemetry_dir = Path(self.config.logging.dir) / "telemetry"
+            self.monitors.append(
+                TelemetryLogger(self.registry, telemetry_dir, self.config.logging.telemetry_s)
+            )
+        for monitor in self.monitors:
+            monitor.start()
+
     def stop(self) -> None:
+        for monitor in self.monitors:
+            monitor.stop()
+        self.monitors.clear()
+        self.executor.abort()
+        self.executor.join(timeout=5)
         for key, device in self.devices.items():
             try:
                 device.close()
@@ -94,6 +119,17 @@ class LFCController:
             reason = self.offline.get(key, "not in config or disabled")
             raise InstrumentError(f"device {key!r} unavailable: {reason}")
         return device
+
+    def psu_channel(self, key: str) -> int:
+        """Which supply channel a subsystem uses (``channel`` config option).
+
+        The RF oscillator runs on GPD channel 2 per the commissioned
+        minicomb setup; anything unspecified defaults to channel 1.
+        """
+        dev_cfg = self.config.devices.get(key)
+        if dev_cfg is None:
+            return 1
+        return int(dev_cfg.options.get("channel", 1))
 
     # ------------------------------------------------------------- keywords
 
@@ -135,6 +171,8 @@ class LFCController:
                 bind(monitor, getter=lambda k=key: self.device(k).input_power_mW())
 
         # --- Pritel amplifier + Arduino interlock
+        # Keyword units follow the deployed KTL semantics: PRE_P in mA,
+        # PTAMP_I in A (old code gated at 4.2 A), PTAMP_OUT in W.
         if has("ptamp"):
             bind(
                 "LFC_PTAMP_PRE_P",
@@ -143,10 +181,10 @@ class LFCController:
             )
             bind(
                 "LFC_PTAMP_I",
-                getter=lambda: self.device("ptamp").pwramp_mA,
-                setter=lambda v: self.device("ptamp").set_pwramp_mA(v),
+                getter=lambda: self.device("ptamp").pwramp_mA / 1000,
+                setter=lambda v: self.device("ptamp").set_pwramp_mA(v * 1000),
             )
-            bind("LFC_PTAMP_OUT", getter=lambda: self.device("ptamp").output_power_mW)
+            bind("LFC_PTAMP_OUT", getter=lambda: self.device("ptamp").output_power_mW / 1000)
             bind(
                 "LFC_PTAMP_ONOFF",
                 getter=lambda: self.device("ptamp").pump_on,
@@ -177,38 +215,39 @@ class LFCController:
                 setter=lambda v: self.device("rio").set_diode_current_mA(v),
             )
 
-        # --- RF chain power supplies
-        # NOTE: channel assignments (which GPD channel feeds the oscillator)
-        # must be verified on-site; channel 1 is assumed pending that check.
-        if has("rf_osc_psu"):
+        # --- RF chain power supplies (channels from the `channel` config
+        # option: oscillator = GPD CH2 per the commissioned minicomb setup)
+        for dev_key, kw in (("rf_osc_psu", "LFC_RFOSCI"), ("rf_amp_psu", "LFC_RFAMP")):
+            if not has(dev_key):
+                continue
+            channel = self.psu_channel(dev_key)
             bind(
-                "LFC_RFOSCI_ONOFF",
-                getter=lambda: self.device("rf_osc_psu").output_on(1),
-                setter=lambda v: self.device("rf_osc_psu").set_output(v, 1),
+                f"{kw}_ONOFF",
+                getter=lambda d=dev_key, c=channel: self.device(d).output_on(c),
+                setter=lambda v, d=dev_key, c=channel: self.device(d).set_output(v, c),
             )
-            bind("LFC_RFOSCI_I", getter=lambda: self.device("rf_osc_psu").output_current_A(1))
-            bind("LFC_RFOSCI_V", getter=lambda: self.device("rf_osc_psu").output_voltage_V(1))
-        if has("rf_amp_psu"):
             bind(
-                "LFC_RFAMP_ONOFF",
-                getter=lambda: self.device("rf_amp_psu").output_on(1),
-                setter=lambda v: self.device("rf_amp_psu").set_output(v, 1),
+                f"{kw}_I",
+                getter=lambda d=dev_key, c=channel: self.device(d).output_current_A(c),
             )
-            bind("LFC_RFAMP_I", getter=lambda: self.device("rf_amp_psu").output_current_A(1))
-            bind("LFC_RFAMP_V", getter=lambda: self.device("rf_amp_psu").output_voltage_V(1))
+            bind(
+                f"{kw}_V",
+                getter=lambda d=dev_key, c=channel: self.device(d).output_voltage_V(c),
+            )
 
-        # --- TECs
+        # --- TECs (setpoint changes stepped in 0.5 C increments, as the old
+        # LFC_PPLN_T/LFC_WGD_T did to avoid thermal shocks to the crystals)
         if has("tec_ppln"):
             bind(
                 "LFC_PPLN_T",
                 getter=lambda: self.device("tec_ppln").temperature_C,
-                setter=lambda v: self.device("tec_ppln").set_temperature_C(v),
+                setter=lambda v: self._ramp_tec("tec_ppln", v),
             )
         if has("tec_wvg"):
             bind(
                 "LFC_WGD_T",
                 getter=lambda: self.device("tec_wvg").temperature_C,
-                setter=lambda v: self.device("tec_wvg").set_temperature_C(v),
+                setter=lambda v: self._ramp_tec("tec_wvg", v),
             )
 
         # --- IM bias via the SIM960 servo (slot from config option im_slot)
@@ -236,12 +275,82 @@ class LFCController:
             bind("LFC_T_EOCB_OUT", getter=lambda: self.device("daq_eocb").temperature_C(4))
             bind("LFC_T_EOCB_IN", getter=lambda: self.device("daq_eocb").temperature_C(5))
 
+        # --- WaveShaper scalar keywords: WSP_PHASE programs 2nd-order
+        # dispersion (d2 in ps/nm), WSP_ATTEN a flat attenuation in dB —
+        # matching how the old orchestration drove the flattener.
+        if has("waveshaper1"):
+            bind(
+                "LFC_WSP_PHASE",
+                getter=lambda: self._softstore.get("LFC_WSP_PHASE", 0.0),
+                setter=self._set_wsp_phase,
+            )
+            bind(
+                "LFC_WSP_ATTEN",
+                getter=lambda: self._softstore.get("LFC_WSP_ATTEN", 0.0),
+                setter=self._set_wsp_atten,
+            )
+
         # --- comb state
         bind("LFC_CHECK_STATUS", getter=lambda: state_mod.legacy_code(self.subsystem_status()))
         bind(
             "LFC_CHECK_FULLCOMB",
             getter=lambda: 1 if self.comb_state() == CombState.FULL_COMB else 0,
         )
+
+        # --- transitions: KTL writes enqueue the action (non-blocking);
+        # progress is visible via LFC_CHECK_STATUS and /actions/current
+        for kw, action in (
+            ("LFC_SET_STANDBY", "set_standby"),
+            ("LFC_SET_FULL_COMB", "set_full_comb"),
+            ("LFC_SET_OFF", "set_off"),
+            ("LFC_MINICOMB_AUTO_SETUP", "minicomb_auto_setup"),
+            ("LFC_CLOSE_ALL", "close_all"),
+        ):
+            bind(
+                kw,
+                getter=lambda a=action: self._action_result(a),
+                setter=lambda v, a=action: self._submit_if_true(a, v),
+            )
+
+        # --- ICE-transport keywords (semantics preserved for the KTL side)
+        bind("ICECLK", getter=lambda: int(time.time()))
+        bind(
+            "ICECLK_ONOFF",
+            getter=lambda: self.heartbeat.enabled if self.monitors else False,
+            setter=self._set_heartbeat,
+        )
+        bind(
+            "ICESTA",
+            getter=lambda: self._softstore["ICESTA"],
+            setter=lambda v: self._softstore.__setitem__("ICESTA", v),
+        )
+        bind("ICESTA2", getter=lambda: 1)
+        bind(
+            "ICETEST",
+            getter=lambda: self._softstore["ICETEST"],
+            setter=lambda v: self._softstore.__setitem__("ICETEST", v),
+        )
+
+        # --- TEST* keywords: pure soft values for dispatcher integration
+        for name, default in (
+            ("TESTMODE", False),
+            ("TESTINT", 0),
+            ("TESTFLOAT", 0.0),
+            ("TESTENUM", 0),
+            ("TESTSTRING", ""),
+            ("TESTARRAY", [0.0, 0.0]),
+        ):
+            self._softstore.setdefault(name, default)
+            spec = self.registry.schema.get(name)
+            if spec is None:
+                continue
+            bind(
+                name,
+                getter=lambda n=name: self._softstore[n],
+                setter=(lambda v, n=name: self._softstore.__setitem__(n, v))
+                if spec.writable
+                else None,
+            )
 
         log.info(
             "keyword bindings: %d bound, %d unbound",
@@ -266,6 +375,49 @@ class LFCController:
             relay.open_yj()
         else:
             relay.close_yj()
+
+    def _ramp_tec(self, key: str, target_C: float) -> None:
+        """Step a TC-720 setpoint in 0.5 C increments with settle waits,
+        as the old LFC_PPLN_T/LFC_WGD_T setters did."""
+        tec = self.device(key)
+        now_C = tec.temperature_C
+        step = 0.5 if target_C >= now_C else -0.5
+        value = now_C
+        while abs(target_C - value) > 0.5:
+            value += step
+            tec.set_temperature_C(round(value, 2))
+            if not self.sim:
+                time.sleep(4)
+        tec.set_temperature_C(target_C)
+
+    def _submit_if_true(self, action: str, value) -> None:
+        """Transition keywords fire on a truthy write (modify kw=1)."""
+        if value in (1, True):
+            self.executor.submit(action)
+
+    def _action_result(self, action: str) -> int:
+        current = self.executor.current()
+        if current and current["name"] == action and current["error"] is None:
+            return 1
+        return 0
+
+    def _set_heartbeat(self, on: bool) -> None:
+        if self.monitors:
+            self.heartbeat.enabled = bool(on)
+
+    def _set_wsp_phase(self, d2_ps_nm: float) -> None:
+        ws = self.device("waveshaper1")
+        ws.set_dispersion(d2_ps_nm=float(d2_ps_nm))
+        ws.write_profile()
+        self._softstore["LFC_WSP_PHASE"] = float(d2_ps_nm)
+
+    def _set_wsp_atten(self, atten_dB: float) -> None:
+        ws = self.device("waveshaper1")
+        level = float(atten_dB)
+        ws.atten = lambda f: level
+        ws.atten_description = f"flat {level:.1f} dB"
+        ws.write_profile()
+        self._softstore["LFC_WSP_ATTEN"] = level
 
     def _latch_state(self) -> int:
         """LFC_PTAMP_LATCH enum: 1 ready, 0 stop-but-resettable,
@@ -326,5 +478,6 @@ class LFCController:
             },
             "devices_online": sorted(self.devices),
             "devices_offline": dict(self.offline),
+            "action": self.executor.current(),
             "sim": self.sim,
         }
