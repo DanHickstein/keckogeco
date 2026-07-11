@@ -21,6 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy",
+    "scipy",
     "pyvisa",
     "pyserial",
     "fastapi",
