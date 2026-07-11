@@ -1,0 +1,486 @@
+# KTL keyword schema for the 'comb' service.
+# Generated from the old repo's KTL server/LFC.xml.sin (the authoritative
+# 77-keyword set agreed with Keck) merged with keywords.csv metadata
+# (units/min/max/format). Edit deliberately - changes must be tracked in
+# ktl/keyword-changes.md for review with Keck.
+
+[LFC_RFOSCI_ONOFF]
+type = "boolean"
+writable = true
+help = "set on or off rfosc powersup"
+
+[LFC_RFAMP_ONOFF]
+type = "boolean"
+writable = true
+help = "set on or off rfamp powersup"
+
+[LFC_PTAMP_LATCH]
+type = "enumerated"
+writable = true
+help = "RESET preamp and pwramp latching circuits"
+
+[LFC_PTAMP_LATCH.enum]
+1 = "ready"
+0 = "stop but ok after reset"
+3 = "too high input"
+5 = "too low input"
+4 = "unkown error"
+
+[LFC_YJ_SHUTTER]
+type = "boolean"
+writable = true
+help = "YJ shutter status"
+
+[LFC_YJ_SHUT]
+type = "enumerated"
+writable = true
+help = "YJ shutter status"
+
+[LFC_YJ_SHUT.enum]
+0 = "shut light, 0"
+
+[LFC_2BY2_SWITCH]
+type = "enumerated"
+writable = true
+help = "Set 2 by 2 switch"
+
+[LFC_2BY2_SWITCH.enum]
+1 = "YJ"
+2 = "HK"
+
+[LFC_HK_SHUTTER]
+type = "boolean"
+writable = true
+help = "HK shutter status"
+
+[LFC_VOA1550_ATTEN]
+type = "double"
+writable = true
+help = "set attenuation in db"
+
+[LFC_VOA1310_ATTEN]
+type = "double"
+writable = true
+help = "set attenuation in db"
+
+[LFC_VOA2000_ATTEN]
+type = "double"
+writable = true
+help = "set attenuation in db"
+
+[LFC_IM_LOCK_MODE]
+type = "boolean"
+writable = true
+help = "set lock mode"
+
+[LFC_TEMP_MONITOR]
+type = "boolean"
+writable = false
+help = "auto temp monitor"
+
+[LFC_RFOSCI_MONITOR]
+type = "boolean"
+writable = false
+help = "rfosci monitor"
+
+[LFC_RFAMP_MONITOR]
+type = "boolean"
+writable = false
+help = "rfamp monitor"
+
+[LFC_PENDULEM_FREQ_MONITOR]
+type = "boolean"
+writable = false
+help = "rf freq monitor"
+
+[LFC_CLOSE_ALL]
+type = "boolean"
+writable = true
+help = "shut up all power device"
+
+[LFC_TEMP_TEST1]
+type = "double array"
+writable = false
+help = "Temperature test 1"
+
+[LFC_TEMP_TEST2]
+type = "double array"
+writable = false
+help = "Temperature test 2"
+
+[LFC_T_GLY_RACK_IN]
+type = "double"
+writable = false
+help = "Glycol inlet temp to instrument rack"
+format = "%.3f"
+
+[LFC_T_GLY_RACK_OUT]
+type = "double"
+writable = false
+help = "Glycol outlet temp from instrument rack"
+format = "%.3f"
+
+[LFC_T_EOCB_IN]
+type = "double"
+writable = false
+help = "Glycol inlet temp to EO comb board"
+
+[LFC_T_EOCB_OUT]
+type = "double"
+writable = false
+help = "Glycol outlet temp from EO comb board"
+
+[LFC_T_RACK_TOP]
+type = "double"
+writable = false
+help = "Instrument rack top temp"
+format = "%.3f"
+
+[LFC_T_RACK_MID]
+type = "double"
+writable = false
+help = "Instrument rack middle temp"
+format = "%.3f"
+
+[LFC_T_RACK_BOT]
+type = "double"
+writable = false
+help = "Instrument rack bottom temp"
+format = "%.3f"
+
+[LFC_RIO_T]
+type = "double"
+writable = true
+help = "RIO pump laser temperature"
+units = "C"
+min = -5.0
+max = 75.0
+format = "%.1f"
+
+[LFC_RIO_I]
+type = "double"
+writable = true
+help = "RIO pump laser current"
+units = "mA"
+format = "%.1f"
+
+[LFC_EDFA27_P]
+type = "double"
+writable = true
+help = "Small  EDFA (500 mW) 1 output power"
+units = "mW"
+min = 0.0
+max = 630.0
+format = "%.1f"
+
+[LFC_EDFA27_ONOFF]
+type = "boolean"
+writable = true
+help = "Small EDFA (500 mW) 1 emission on/off"
+
+[LFC_EDFA13_P]
+type = "double"
+writable = true
+help = "Small EDFA (20 mW) 2 output power"
+units = "mW"
+min = 0.0
+max = 20.0
+format = "%.1f"
+
+[LFC_EDFA13_ONOFF]
+type = "boolean"
+writable = true
+help = "Small EDFA (20 mW) 2 emission on/off"
+
+[LFC_EDFA23_P]
+type = "double"
+writable = true
+help = "Small EDFA (200 mW) 3 output power"
+units = "mW"
+min = 0.0
+max = 20.0
+format = "%.1f"
+
+[LFC_EDFA23_ONOFF]
+type = "boolean"
+writable = true
+help = "Small EDFA (200 mW) 3 emission on/off"
+
+[LFC_RFAMP_I]
+type = "double"
+writable = true
+help = "RF Amp current"
+units = "Amp"
+format = "%.1f"
+
+[LFC_RFAMP_V]
+type = "double"
+writable = true
+help = "RF Amp voltage"
+units = "V"
+min = 30.0
+max = 30.0
+format = "%.1f"
+
+[LFC_RFOSCI_I]
+type = "double"
+writable = true
+help = "RF Oscillator input current"
+units = "mA"
+min = 0.35
+max = 0.7
+format = "%.2f"
+
+[LFC_RFOSCI_V]
+type = "double"
+writable = true
+help = "RF Oscillator input voltage"
+units = "V"
+min = 15.0
+max = 15.0
+format = "%.1f"
+
+[LFC_IM_BIAS]
+type = "double"
+writable = true
+help = "Mini-comb amplitude lock offset bias"
+units = "V"
+min = -3.0
+max = 3.0
+format = "%.1f"
+
+[LFC_IM_RF_ATT]
+type = "double"
+writable = true
+help = "Mini-comb RF voltage controlled variable attenuation setting"
+units = "V"
+min = 0.0
+max = 10.0
+format = "%.1f"
+
+[LFC_PTAMP_PRE_P]
+type = "double"
+writable = true
+help = "High-power EDFA pre-amp output power"
+units = "mW"
+min = 50.0
+max = 140.0
+format = "%.1f"
+
+[LFC_PTAMP_OUT]
+type = "double"
+writable = false
+help = "High-power EDFA output power"
+units = "W"
+min = 0.0
+max = 4.0
+format = "%.1f"
+
+[LFC_PTAMP_I]
+type = "double"
+writable = true
+help = "High-power EDFA pump current"
+units = "Amp"
+min = 0.0
+max = 4.2
+format = "%.2f"
+
+[LFC_PTAMP_ONOFF]
+type = "boolean"
+writable = true
+help = "High-power EDFA emission on/standby"
+
+[LFC_CHECK_FULLCOMB]
+type = "enumerated"
+writable = true
+help = "High-power EDFA emission on/standby"
+
+[LFC_CHECK_FULLCOMB.enum]
+0 = "standby"
+1 = "full comb"
+2 = "checking"
+
+[LFC_WGD_T]
+type = "double"
+writable = true
+help = "Waveguide TEC control"
+format = "%.3f"
+
+[LFC_PPLN_T]
+type = "double"
+writable = true
+help = "PPLN TEC control"
+format = "%.3f"
+
+[LFC_CLARITY_ONOFF]
+type = "enumerated"
+writable = true
+help = "clarity onoff"
+
+[LFC_CLARITY_ONOFF.enum]
+0 = "off"
+1 = "locked"
+
+[LFC_EDFA27_INPUT_POWER_MONITOR]
+type = "boolean"
+writable = false
+help = "edfa27 input monitor"
+
+[LFC_EDFA23_INPUT_POWER_MONITOR]
+type = "boolean"
+writable = false
+help = "edfa23 input monitor"
+
+[LFC_EDFA27_P_DEFAULT]
+type = "boolean"
+writable = true
+help = "EDFA27 default POWER set"
+
+[LFC_EDFA23_P_DEFAULT]
+type = "boolean"
+writable = true
+help = "EDFA23 default POWER set"
+
+[LFC_EDFA27_AUTO_ON]
+type = "boolean"
+writable = true
+help = "EDFA27 default POWER set"
+
+[LFC_EDFA23_AUTO_ON]
+type = "boolean"
+writable = true
+help = "EDFA23 default POWER set"
+
+[LFC_RFAMP_DEFAULT]
+type = "boolean"
+writable = true
+help = "rfamp default set"
+
+[LFC_RFOSCI_DEFAULT]
+type = "boolean"
+writable = true
+help = "rfosci default set"
+
+[LFC_WSP_PHASE]
+type = "double"
+writable = true
+help = "wsp phase"
+
+[LFC_WSP_ATTEN]
+type = "double"
+writable = true
+help = "wsp atten"
+
+[LFC_PTAMP_PRE_P_DEFAULT]
+type = "boolean"
+writable = true
+help = "ptamp pre p default set"
+
+[LFC_PTAMP_I_DEFAULT]
+type = "boolean"
+writable = true
+help = "ptamp i default set"
+
+[LFC_IM_AUTO_LOCK]
+type = "boolean"
+writable = true
+help = "Im auto lock"
+
+[LFC_CHECK_STATUS]
+type = "integer"
+writable = true
+help = "ptamp i default set"
+
+[LFC_SET_STANDBY]
+type = "integer"
+writable = true
+help = "ptamp i default set"
+
+[LFC_SET_FULL_COMB]
+type = "integer"
+writable = true
+help = "ptamp i default set"
+
+[LFC_SET_OFF]
+type = "integer"
+writable = true
+help = "ptamp i default set"
+
+[LFC_MINICOMB_AUTO_SETUP]
+type = "enumerated"
+writable = true
+help = "ptamp i default set"
+
+[LFC_MINICOMB_AUTO_SETUP.enum]
+1 = "DONE"
+0 = "WRONG"
+
+[ICETEST]
+type = "integer"
+writable = true
+help = "test integer"
+
+[ICESTA]
+type = "enumerated"
+writable = true
+help = "Ice connection status"
+
+[ICESTA.enum]
+1 = "Connected"
+2 = "Disconnected"
+3 = "Initializing"
+
+[ICESTA2]
+type = "boolean"
+writable = false
+help = "Ice connection status"
+
+[ICECLK]
+type = "string"
+writable = true
+help = "current time returned by ICE"
+
+[ICECLK_ONOFF]
+type = "boolean"
+writable = true
+help = "turn on / turn off the ICECLK"
+
+[SHOW_ALL_VAL]
+type = "boolean"
+writable = true
+help = "show all"
+
+[TESTMODE]
+type = "boolean"
+writable = true
+help = "turn on test mode"
+
+[TESTINT]
+type = "integer"
+writable = true
+help = "test integer"
+
+[TESTFLOAT]
+type = "double"
+writable = true
+help = "test double"
+
+[TESTENUM]
+type = "enumerated"
+writable = true
+help = "test enumerated"
+
+[TESTENUM.enum]
+1 = "first state"
+2 = "second state"
+3 = "third state"
+
+[TESTSTRING]
+type = "string"
+writable = true
+help = "test string"
+
+[TESTARRAY]
+type = "double array"
+writable = true
+help = "test double array"
