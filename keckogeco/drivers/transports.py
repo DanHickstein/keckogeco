@@ -59,6 +59,11 @@ class Transport(Protocol):
 
     def read_bytes(self, n: int = 1) -> bytes: ...
 
+    def read_available(self) -> bytes: ...
+
+    def clear(self) -> None:
+        """Device-clear / flush; optional, default no-op."""
+
 
 class VisaTransport:
     """pyvisa-backed transport (GPIB, USB-TMC, and ASRL serial resources).
@@ -129,6 +134,15 @@ class VisaTransport:
 
     def read_bytes(self, n: int = 1) -> bytes:
         return bytes(self._require_open().read_bytes(n))
+
+    def read_available(self) -> bytes:
+        resource = self._require_open()
+        pending = getattr(resource, "bytes_in_buffer", 0)
+        return bytes(resource.read_bytes(pending)) if pending else b""
+
+    def clear(self) -> None:
+        """VISA device clear (used by the SIM900 to escape a module link)."""
+        self._require_open().clear()
 
 
 class SerialTransport:
@@ -202,6 +216,15 @@ class SerialTransport:
     def read_bytes(self, n: int = 1) -> bytes:
         return self._require_open().read(n)
 
+    def read_available(self) -> bytes:
+        port = self._require_open()
+        return port.read(port.in_waiting) if port.in_waiting else b""
+
+    def clear(self) -> None:
+        port = self._require_open()
+        port.reset_input_buffer()
+        port.reset_output_buffer()
+
 
 class SocketTransport:
     """Line-oriented TCP transport (Red Pitaya SCPI server)."""
@@ -273,6 +296,13 @@ class SocketTransport:
             self._buffer += chunk
         data, self._buffer = self._buffer[:n], self._buffer[n:]
         return data
+
+    def read_available(self) -> bytes:
+        data, self._buffer = self._buffer, b""
+        return data
+
+    def clear(self) -> None:
+        self._buffer = b""
 
 
 class SimTransport:
@@ -358,3 +388,16 @@ class SimTransport:
             data, self._pending_bytes = self._pending_bytes[:n], self._pending_bytes[n:]
             return data
         return b"\x00" * n
+
+    def read_available(self) -> bytes:
+        """Return the pending text reply (as bytes) and/or pending bytes."""
+        data = self._pending_bytes
+        self._pending_bytes = b""
+        if self._pending_reply is not None:
+            data += self._pending_reply.encode()
+            self._pending_reply = None
+        return data
+
+    def clear(self) -> None:
+        self._pending_reply = None
+        self._pending_bytes = b""

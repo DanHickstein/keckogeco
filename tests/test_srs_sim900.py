@@ -1,0 +1,86 @@
+"""Tests for the SIM900 mainframe + SIM960/SIM928 module drivers."""
+
+import pytest
+
+from keckogeco.config import DeviceConfig
+from keckogeco.drivers.srs_sim900 import SIM900
+
+
+@pytest.fixture
+def srs():
+    cfg = DeviceConfig(key="srs", driver="srs_sim900", address="ASRL21::INSTR")
+    inst = SIM900.from_config(cfg, sim=True)
+    inst.connect()
+    return inst
+
+
+def test_slot_routing_sends_conn(srs):
+    servo = srs.sim960(5)
+    _ = servo.setpoint_V
+    conn_cmds = [c for c in srs.transport.sent if c.startswith("CONN")]
+    assert conn_cmds and conn_cmds[-1] == 'CONN 5, "xyx"'
+
+
+def test_slots_have_independent_state(srs):
+    servo5 = srs.sim960(5)
+    servo3 = srs.sim960(3)
+    servo5.setpoint_V = 1.5
+    servo3.setpoint_V = -0.25
+    assert servo5.setpoint_V == pytest.approx(1.5)
+    assert servo3.setpoint_V == pytest.approx(-0.25)
+
+
+def test_pid_terms_roundtrip(srs):
+    servo = srs.sim960(5)
+    servo.proportional_gain = -2.5
+    servo.integral_gain = 500
+    servo.proportional_on = True
+    assert servo.proportional_gain == pytest.approx(-2.5)
+    assert servo.integral_gain == pytest.approx(500)
+    assert servo.proportional_on is True
+
+
+def test_gain_limits(srs):
+    servo = srs.sim960(5)
+    with pytest.raises(ValueError, match="above maximum"):
+        servo.proportional_gain = 2000
+    with pytest.raises(ValueError, match="below minimum"):
+        servo.integral_gain = 1e-3
+
+
+def test_output_mode_and_setpoint_source(srs):
+    servo = srs.sim960(5)
+    assert servo.output_mode == "MAN"
+    servo.output_mode = "PID"
+    assert servo.output_mode == "PID"
+    servo.setpoint_source = "EXT"
+    assert servo.setpoint_source == "EXT"
+    with pytest.raises(ValueError):
+        servo.output_mode = "AUTO"
+
+
+def test_manual_output_limits_and_ramp(srs):
+    servo = srs.sim960(5)
+    servo.manual_output_min, servo.manual_output_max = -4.0, 4.0
+    with pytest.raises(ValueError, match="outside"):
+        servo.manual_output_V = 5.0
+    servo.manual_output_ramp = 0.5
+    servo.manual_output_V = 2.0
+    mouts = [c for c in srs.transport.sent if c.startswith("MOUT") and not c.endswith("?")]
+    assert len(mouts) >= 4  # ramped in steps
+    assert servo.manual_output_V == pytest.approx(2.0)
+
+
+def test_setpoint_resolution_rounding(srs):
+    servo = srs.sim960(5)
+    servo.setpoint_V = 1.23456
+    assert servo.setpoint_V == pytest.approx(1.235)  # 1 mV resolution
+
+
+def test_sim928_voltage_and_output(srs):
+    source = srs.sim928(2)
+    source.voltage_V = 3.3
+    assert source.voltage_V == pytest.approx(3.3)
+    assert source.output_on is False
+    source.output_on = True
+    assert source.output_on is True
