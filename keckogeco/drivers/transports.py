@@ -292,6 +292,9 @@ class SimTransport:
     responses : dict
         ``{command: reply}`` where command is a ``str`` or ``re.Pattern``
         and reply is a ``str`` or ``callable(match | cmd) -> str``.
+        Binary protocols use the reserved key ``bytes`` whose value is a
+        ``callable(data: bytes) -> bytes`` producing the framed reply for a
+        raw write.
     default : str
         Reply for any query with no matching entry.
     """
@@ -299,10 +302,12 @@ class SimTransport:
     def __init__(self, responses: dict | None = None, default: str = "0", address: str = "SIM"):
         self.address = address
         self.responses = dict(responses or {})
+        self.bytes_responder = self.responses.pop(bytes, None)
         self.default = default
         self.sent: list[str] = []
         self._is_open = False
         self._pending_reply: str | None = None
+        self._pending_bytes = b""
 
     def open(self) -> None:
         self._is_open = True
@@ -345,6 +350,11 @@ class SimTransport:
         if not self._is_open:
             raise NotConnected("SimTransport is not open")
         self.sent.append(data.hex())
+        if self.bytes_responder is not None:
+            self._pending_bytes += self.bytes_responder(data) or b""
 
     def read_bytes(self, n: int = 1) -> bytes:
+        if self._pending_bytes:
+            data, self._pending_bytes = self._pending_bytes[:n], self._pending_bytes[n:]
+            return data
         return b"\x00" * n

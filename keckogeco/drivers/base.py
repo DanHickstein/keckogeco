@@ -71,6 +71,9 @@ class Instrument:
     DEFAULT_TRANSPORT: ClassVar[str] = "visa"
     TRANSPORT_DEFAULTS: ClassVar[dict] = {}
     SIM_RESPONSES: ClassVar[dict] = {}
+    #: config-block option keys consumed by the driver's __init__ rather
+    #: than the transport (e.g. ("model",) for the Instek supplies)
+    DRIVER_OPTIONS: ClassVar[tuple[str, ...]] = ()
 
     #: seconds to wait between reopening the transport and retrying I/O
     RECONNECT_SETTLE_S: ClassVar[float] = 0.2
@@ -95,11 +98,20 @@ class Instrument:
         return dict(cls.SIM_RESPONSES)
 
     @classmethod
+    def transport_defaults(cls, cfg: DeviceConfig) -> dict:
+        """Transport kwargs for this device; may depend on config options
+        (e.g. the Instek baud rate differs by model)."""
+        del cfg
+        return dict(cls.TRANSPORT_DEFAULTS)
+
+    @classmethod
     def from_config(cls, cfg: DeviceConfig, sim: bool = False) -> Self:
         """Build the instrument (and its transport) from a config block."""
+        driver_kwargs = {k: cfg.options[k] for k in cls.DRIVER_OPTIONS if k in cfg.options}
         if sim:
-            return cls(SimTransport(cls.sim_responses(), address=f"SIM::{cfg.address}"), cfg.key)
-        options = dict(cls.TRANSPORT_DEFAULTS)
+            transport = SimTransport(cls.sim_responses(), address=f"SIM::{cfg.address}")
+            return cls(transport, cfg.key, **driver_kwargs)
+        options = cls.transport_defaults(cfg)
         transport_name = cfg.options.get("transport", cls.DEFAULT_TRANSPORT)
         transport_cls = _TRANSPORTS.get(transport_name)
         if transport_cls is None:
@@ -110,9 +122,9 @@ class Instrument:
         # config options override driver defaults; unknown keys are rejected
         # by the transport constructor, surfacing typos at startup.
         for key, value in cfg.options.items():
-            if key not in ("transport",):
+            if key not in ("transport", *cls.DRIVER_OPTIONS):
                 options[key] = value
-        return cls(transport_cls(cfg.address, **options), cfg.key)
+        return cls(transport_cls(cfg.address, **options), cfg.key, **driver_kwargs)
 
     def connect(self) -> None:
         """Open the transport and run the driver's ``_configure()`` hook."""
