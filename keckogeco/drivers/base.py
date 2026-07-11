@@ -84,10 +84,21 @@ class Instrument:
     # ------------------------------------------------------------- lifecycle
 
     @classmethod
+    def sim_responses(cls) -> dict:
+        """Sim-mode response table; override for per-instance stateful tables.
+
+        The default returns a copy of ``SIM_RESPONSES``. Drivers whose
+        setters verify the device state (write-then-read-back loops) should
+        override this to return a table whose callables share a small state
+        dict, so a sim write is visible to the following read.
+        """
+        return dict(cls.SIM_RESPONSES)
+
+    @classmethod
     def from_config(cls, cfg: DeviceConfig, sim: bool = False) -> Self:
         """Build the instrument (and its transport) from a config block."""
         if sim:
-            return cls(SimTransport(cls.SIM_RESPONSES, address=f"SIM::{cfg.address}"), cfg.key)
+            return cls(SimTransport(cls.sim_responses(), address=f"SIM::{cfg.address}"), cfg.key)
         options = dict(cls.TRANSPORT_DEFAULTS)
         transport_name = cfg.options.get("transport", cls.DEFAULT_TRANSPORT)
         transport_cls = _TRANSPORTS.get(transport_name)
