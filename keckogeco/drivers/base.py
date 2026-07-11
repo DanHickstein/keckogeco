@@ -39,6 +39,23 @@ _TRANSPORTS = {
     "socket": SocketTransport,
 }
 
+# Bookkeeping keys that keckogeco-find writes into [devices.*] blocks; they
+# identify the device across COM renumbering and are not transport kwargs.
+DISCOVERY_KEYS = frozenset(
+    {
+        "device",
+        "usb_serial",
+        "vid_pid",
+        "adapter",
+        "probe",
+        "match_token",
+        "confidence",
+        "passive",
+        "found_on",
+        "verified_on",
+    }
+)
+
 
 class Instrument:
     """A physical instrument reachable through a :class:`Transport`.
@@ -122,7 +139,7 @@ class Instrument:
         # config options override driver defaults; unknown keys are rejected
         # by the transport constructor, surfacing typos at startup.
         for key, value in cfg.options.items():
-            if key not in ("transport", *cls.DRIVER_OPTIONS):
+            if key not in ("transport", *cls.DRIVER_OPTIONS) and key not in DISCOVERY_KEYS:
                 options[key] = value
         return cls(transport_cls(cfg.address, **options), cfg.key, **driver_kwargs)
 
