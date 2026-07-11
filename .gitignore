@@ -1,0 +1,35 @@
+# Local configuration — real instrument addresses, credentials, network details.
+# Only instruments.example.toml is committed.
+config/keckogeco.toml
+config/secrets.toml
+*.local.toml
+
+# Logs and telemetry
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Docs build
+docs/_build/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Sphinx autosummary output
+docs/api/generated/

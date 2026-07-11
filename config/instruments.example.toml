@@ -1,0 +1,112 @@
+# keckogeco configuration — EXAMPLE
+#
+# Copy this file to keckogeco.toml (same directory) and fill in the real
+# addresses for your installation. keckogeco.toml is git-ignored: real COM
+# ports, VISA addresses, hostnames, and credentials must never be committed.
+#
+# `keckogeco-find` can discover the instruments on the rack and write/update
+# the [devices.*] blocks for you.
+#
+# Config search order:
+#   1. --config PATH command-line flag
+#   2. KECKOGECO_CONFIG environment variable
+#   3. ~/.keckogeco/keckogeco.toml
+#   4. ./config/keckogeco.toml (relative to the current directory)
+
+[server]
+host = "0.0.0.0"
+port = 8000
+# Optional static bearer token for the REST API. Empty string disables auth.
+api_token = ""
+
+[logging]
+# Directory for application logs and telemetry CSVs.
+dir = "logs"
+level = "INFO"
+
+[alerts]
+enabled = false
+# SMTP settings go here when alerts are enabled (Phase 4).
+# Credentials belong in the OS keyring or the git-ignored secrets.toml,
+# never in this file's committed example.
+
+# ---------------------------------------------------------------------------
+# Devices. One block per instrument. Keys:
+#   driver   – module name in keckogeco.drivers (required)
+#   address  – VISA resource / COM port / host:port, per the transport (required)
+#   enabled  – set false to skip the device entirely (default true)
+#   name     – human-readable label for logs and GUIs (default: block name)
+# Extra keys (baud_rate, usb_serial, model, ...) are passed to the driver.
+# ---------------------------------------------------------------------------
+
+[devices.edfa27]
+driver = "amonics_edfa"
+address = "ASRL13::INSTR"
+name = "Amonics 27 dBm EDFA"
+
+[devices.edfa13]
+driver = "amonics_edfa"
+address = "ASRL4::INSTR"
+name = "Amonics 13 dBm EDFA"
+
+[devices.edfa23]
+driver = "amonics_edfa"
+address = "ASRL10::INSTR"
+name = "Amonics 23 dBm EDFA"
+
+[devices.ptamp]
+driver = "pritel_amp"
+address = "ASRL6::INSTR"
+name = "Pritel high-power amplifier"
+
+[devices.rio]
+driver = "orion_laser"
+address = "ASRL12::INSTR"
+name = "ORION/RIO seed laser"
+
+[devices.rf_osc_psu]
+driver = "instek_psu"
+address = "ASRL5::INSTR"
+model = "GPD-4303S"
+name = "RF oscillator DC supply"
+
+[devices.rf_amp_psu]
+driver = "instek_psu"
+address = "ASRL8::INSTR"
+model = "GPP-1326"
+name = "RF amplifier DC supply"
+
+[devices.rb_clock]
+driver = "rb_clock"
+address = "ASRL9::INSTR"
+name = "SRS FS725 Rb standard"
+
+[devices.arduino_relay]
+driver = "arduino_relay"
+address = "COM3"
+name = "Interlock latching relay"
+
+[devices.srs]
+driver = "srs_sim900"
+address = "ASRL21::INSTR"
+name = "SRS SIM900 mainframe"
+
+[devices.waveshaper1]
+driver = "waveshaper"
+address = "SN201904"
+name = "WaveShaper (flattener)"
+
+[devices.waveshaper2]
+driver = "waveshaper"
+address = "SN201905"
+name = "WaveShaper (D2)"
+
+[devices.tec_ppln]
+driver = "tec_tc720"
+address = "COM16"
+name = "TC-720 TEC (PPLN)"
+
+[devices.daq]
+driver = "usb2408"
+address = "0"
+name = "USB-2408 thermocouple DAQ"
