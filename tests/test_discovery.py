@@ -34,6 +34,8 @@ def test_extract_token_idn_model_field():
     assert extract_token("*IDN? @ 9600", "GW-INSTEK,GPD-4303S,SN123,V1.0") == "GPD-4303S"
     assert extract_token(":CAL:SYS:MODEL? @ 19200", "AEDFA-PA-30-B-FA") == "AEDFA-PA-30-B-FA"
     assert extract_token("SN? @ 9600 (OZ Optics)", "Serial No.: 123456-01, Cal") == "NO-123456-01"
+    # FS725 replies with a bare serial (escaped CR from printable())
+    assert extract_token("SN? @ 9600", "34437\\r") == "SN34437"
 
 
 def test_address_for():
@@ -63,6 +65,7 @@ def test_save_config_preserves_other_sections(tmp_path: Path):
             "match_token": "AEDFA-PA-30-B-FA",
         },
         "mystery": {"driver": "?", "address": "COM9", "device": "Unknown device"},
+        "eaton": {"driver": "eaton_pdu", "address": "ASRL7::INSTR", "device": "Eaton PDU"},
     }
     save_config(instruments, config_path)
     text = config_path.read_text()
@@ -73,6 +76,8 @@ def test_save_config_preserves_other_sections(tmp_path: Path):
     assert cfg.devices["edfa27"].driver == "amonics_edfa"
     assert cfg.devices["edfa27"].options["usb_serial"] == "FT0001"
     assert cfg.devices["mystery"].enabled is False  # unidentified -> disabled
+    assert cfg.devices["eaton"].enabled is False  # driver not ported -> disabled
+    assert "not yet ported" in text
 
     # and the drivers can consume the block (metadata keys ignored)
     from keckogeco.drivers.amonics_edfa import AmonicsEDFA

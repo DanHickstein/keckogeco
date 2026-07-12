@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
 import logging
 import re
 import time
@@ -508,6 +509,9 @@ def extract_token(probe_name: str, response_text: str) -> str | None:
     if probe_name.startswith("SN? @ 9600 (OZ"):
         m = re.search(r"Serial No\.?:?\s*([\w-]+)", text, re.IGNORECASE)
         return f"NO-{m.group(1)}" if m else None
+    if probe_name.startswith("SN? @ 9600"):  # FS725: bare numeric serial
+        m = re.search(r"\d{3,}", text)
+        return f"SN{m.group(0)}" if m else None
     if probe_name.startswith("CD"):
         m = re.search(r"WAVELENGTH:\s*(\d+)", text)
         if m:
@@ -804,9 +808,13 @@ def save_config(instruments: dict, config_path: Path) -> None:
             value = entry.get(field) or entry.get("device" if field == "name" else field)
             if value is not None:
                 block[field] = value
-        if entry.get("driver") in (None, "?"):
+        driver = entry.get("driver")
+        if driver in (None, "?"):
             block["enabled"] = False
             block.add(tomlkit.comment("unidentified device - review manually"))
+        elif importlib.util.find_spec(f"keckogeco.drivers.{driver}") is None:
+            block["enabled"] = False
+            block.add(tomlkit.comment(f"driver '{driver}' not yet ported - kept for reference"))
         for extra_key in (
             "model",
             "usb_serial",
@@ -876,9 +884,9 @@ def report(instruments: dict, gpib_notes: list, unidentified_ports: list) -> Non
                     where += f" (usb serial {entry['usb_serial']})"
                 flag = "" if entry.get("verified_on") else " [newly discovered]"
                 p(f"  FOUND      {friendly:45s} -> {where}{flag}")
-                extra = entry.get("match_token") or entry.get("response", "")
-                if extra:
-                    p(f"             id: {extra}")
+                token = entry.get("match_token")
+                if token and "\\" not in str(token):
+                    p(f"             id: {token}")
         else:
             p(f"  NOT FOUND  {friendly}")
 
@@ -1017,8 +1025,11 @@ def main(argv=None) -> int:
         }
         key = make_key(hit["driver"], hit["match_token"], port_info.serial_number, instruments)
         instruments[key] = entry
-        print(f"    => {hit['device']}")  # noqa: T201
-        print(f"       {hit['probe']} -> {hit['response']}")  # noqa: T201
+        tag = "" if hit["confidence"] == "high" else "  [LOW CONFIDENCE - verify manually]"
+        token = f" ({hit['match_token']})" if hit.get("match_token") else ""
+        print(f"    => {hit['device']}{token}{tag}")  # noqa: T201
+        if args.verbose or hit["confidence"] != "high":
+            print(f"       {hit['probe']} -> {hit['response']}")  # noqa: T201
 
     # ---- GPIB / VISA ----
     gpib_notes: list[str] = []
