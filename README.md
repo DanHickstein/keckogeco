@@ -33,6 +33,10 @@ python -m keckogeco.server.app    # start the control server (add --sim for no h
 python -m keckogeco.gui.app       # engineering GUI (talks to the server over REST)
 ```
 
+These four entry points also run as plain files — open `keckogeco/discovery.py`,
+`keckogeco/check.py`, `keckogeco/server/app.py`, or `keckogeco/gui/app.py` in
+your editor and press Run.
+
 ## Simulation mode
 
 Everything opens without hardware for development and layout work:

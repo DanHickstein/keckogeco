@@ -20,15 +20,21 @@ import logging
 import threading
 from importlib.metadata import version as pkg_version
 
+if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-from ..comb.actions import ACTIONS, ActionBusy
-from ..comb.controller import LFCController
-from ..comb.keywords import KeywordError
-from ..config import Config, load_config
-from ..drivers.errors import InstrumentError
-from ..logsetup import setup_logging
+from keckogeco.comb.actions import ACTIONS, ActionBusy
+from keckogeco.comb.controller import LFCController
+from keckogeco.comb.keywords import KeywordError
+from keckogeco.config import Config, load_config
+from keckogeco.drivers.errors import InstrumentError
+from keckogeco.logsetup import setup_logging
 
 __all__ = ["create_app", "main"]
 
@@ -221,7 +227,7 @@ def _version() -> str:
     try:
         return pkg_version("keckogeco")
     except Exception:  # noqa: BLE001 - not installed (e.g. vendored)
-        from .. import __version__
+        from keckogeco import __version__
 
         return __version__
 

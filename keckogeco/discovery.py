@@ -44,7 +44,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .config import CONFIG_FILENAME, ConfigError, find_config_file, load_config
+if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from keckogeco.config import CONFIG_FILENAME, ConfigError, find_config_file, load_config
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +89,7 @@ def printable(raw, limit=200):
 
 def tc720_probe_message():
     """Read-only 'read input1 temperature' message for the TC-720."""
-    from .drivers.tec_tc720 import _build_message
+    from keckogeco.drivers.tec_tc720 import _build_message
 
     return _build_message("01").encode("ascii")
 

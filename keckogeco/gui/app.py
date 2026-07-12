@@ -1,13 +1,19 @@
-"""``python -m keckogeco.gui.app``: launch the engineering GUI.
+"""Launch the engineering GUI.
 
-Talks to a running ``python -m keckogeco.server.app`` (start one with ``--sim`` for an
-offline layout check).
+Run with ``python -m keckogeco.gui.app``, or just open this file and press
+Run in VSCode. Talks to a running server (``keckogeco/server/app.py``;
+start it with ``--sim`` for an offline layout check).
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+
+if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 __all__ = ["main"]
 
@@ -22,8 +28,8 @@ def main(argv: list[str] | None = None) -> int:
 
     from PyQt6.QtWidgets import QApplication, QMessageBox
 
-    from .client import KeckogecoClient
-    from .mainwindow import MainWindow
+    from keckogeco.gui.client import KeckogecoClient
+    from keckogeco.gui.mainwindow import MainWindow
 
     app = QApplication(sys.argv[:1])
     client = KeckogecoClient(args.url, token=args.token)

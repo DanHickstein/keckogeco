@@ -15,9 +15,15 @@ import importlib
 import inspect
 import sys
 
-from .config import Config, ConfigError, DeviceConfig, load_config
-from .drivers.base import Instrument
-from .logsetup import setup_logging
+if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from keckogeco.config import Config, ConfigError, DeviceConfig, load_config
+from keckogeco.drivers.base import Instrument
+from keckogeco.logsetup import setup_logging
 
 __all__ = ["build_device", "main"]
 
