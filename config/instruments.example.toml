@@ -4,7 +4,7 @@
 # addresses for your installation. keckogeco.toml is git-ignored: real COM
 # ports, VISA addresses, hostnames, and credentials must never be committed.
 #
-# `keckogeco-find` can discover the instruments on the rack and write/update
+# `python -m keckogeco.discovery` can discover the instruments on the rack and write/update
 # the [devices.*] blocks for you.
 #
 # Config search order:
@@ -137,13 +137,13 @@ name = "OZ Optics VOA 1550 nm"
 driver = "oz_voa"
 address = "ASRL11::INSTR"
 name = "OZ Optics VOA 1310 nm"
-enabled = false    # enable once keckogeco-find confirms the port
+enabled = false    # enable once python -m keckogeco.discovery confirms the port
 
 [devices.voa2000]
 driver = "oz_voa"
 address = "ASRL15::INSTR"
 name = "OZ Optics VOA 2000 nm"
-enabled = false    # enable once keckogeco-find confirms the port
+enabled = false    # enable once python -m keckogeco.discovery confirms the port
 
 [devices.hk_shutter]
 driver = "hk_shutter"

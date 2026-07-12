@@ -1,6 +1,6 @@
-"""``keckogeco-gui``: launch the engineering GUI.
+"""``python -m keckogeco.gui.app``: launch the engineering GUI.
 
-Talks to a running ``keckogeco-server`` (start one with ``--sim`` for an
+Talks to a running ``python -m keckogeco.server.app`` (start one with ``--sim`` for an
 offline layout check).
 """
 
@@ -14,7 +14,9 @@ __all__ = ["main"]
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="keckogeco engineering GUI")
-    parser.add_argument("--url", default="http://localhost:8000", help="keckogeco-server base URL")
+    parser.add_argument(
+        "--url", default="http://localhost:8000", help="python -m keckogeco.server.app base URL"
+    )
     parser.add_argument("--token", default="", help="API bearer token, if the server uses one")
     args = parser.parse_args(argv)
 
@@ -32,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
             None,
             "keckogeco",
             f"Cannot reach the server at {args.url}:\n{exc}\n\n"
-            "Start one with:  keckogeco-server   (or keckogeco-server --sim)",
+            "Start one with:  python -m keckogeco.server.app   (or python -m keckogeco.server.app --sim)",
         )
         return 1
     window = MainWindow(client)

@@ -9,8 +9,8 @@ To set up a new machine:
 
 ```bash
 cp config/instruments.example.toml config/keckogeco.toml
-keckogeco-find        # auto-discover instruments and update the [devices.*] blocks
-keckogeco-check       # validate the file and try connecting to each device
+python -m keckogeco.discovery        # auto-discover instruments and update the [devices.*] blocks
+python -m keckogeco.check       # validate the file and try connecting to each device
 ```
 
 Rules:

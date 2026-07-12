@@ -27,10 +27,10 @@ Instrument addresses and site-specific settings live in a git-ignored config
 file — see [config/README.md](config/README.md). To get started:
 
 ```bash
-keckogeco-find              # auto-discover instruments, write config
-keckogeco-check             # validate config, try connecting to each device
-keckogeco-server            # start the control server (add --sim for no hardware)
-keckogeco-gui               # engineering GUI (talks to the server over REST)
+python -m keckogeco.discovery     # auto-discover instruments, write config
+python -m keckogeco.check         # validate config, try connecting to each device
+python -m keckogeco.server.app    # start the control server (add --sim for no hardware)
+python -m keckogeco.gui.app       # engineering GUI (talks to the server over REST)
 ```
 
 ## Simulation mode
@@ -38,8 +38,8 @@ keckogeco-gui               # engineering GUI (talks to the server over REST)
 Everything opens without hardware for development and layout work:
 
 ```bash
-keckogeco-server --sim
-keckogeco-gui
+python -m keckogeco.server.app --sim
+python -m keckogeco.gui.app
 ```
 
 Simulated instruments return canned values only — this is for exercising the

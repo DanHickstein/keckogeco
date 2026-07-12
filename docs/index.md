@@ -23,8 +23,8 @@ development
 
 ```bash
 pip install -e ".[gui,dev]"
-keckogeco-server --sim      # start the server without hardware
-keckogeco-gui               # engineering GUI
+python -m keckogeco.server.app --sim      # start the server without hardware
+python -m keckogeco.gui.app               # engineering GUI
 ```
 
 See {doc}`user_guide/index` for operating procedures and

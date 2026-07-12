@@ -43,7 +43,7 @@ _TRANSPORTS = {
 # not by the driver or transport.
 CONTROLLER_KEYS = frozenset({"channel", "im_slot"})
 
-# Bookkeeping keys that keckogeco-find writes into [devices.*] blocks; they
+# Bookkeeping keys that discovery writes into [devices.*] blocks; they
 # identify the device across COM renumbering and are not transport kwargs.
 DISCOVERY_KEYS = frozenset(
     {

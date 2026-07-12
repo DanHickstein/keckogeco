@@ -28,7 +28,7 @@ def test_missing_file_gives_helpful_error(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("KECKOGECO_CONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
-    with pytest.raises(ConfigError, match="keckogeco-find"):
+    with pytest.raises(ConfigError, match="python -m keckogeco.discovery"):
         find_config_file()
 
 

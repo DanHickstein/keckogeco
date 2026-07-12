@@ -41,11 +41,11 @@ docs = [
     "sphinx-copybutton",
 ]
 
-[project.scripts]
-keckogeco-server = "keckogeco.server.app:main"
-keckogeco-gui = "keckogeco.gui.app:main"
-keckogeco-check = "keckogeco.check:main"
-keckogeco-find = "keckogeco.discovery:main"
+# No console-script entry points: everything runs via `python -m`
+# (keckogeco.server.app, keckogeco.gui.app, keckogeco.check,
+# keckogeco.discovery). Windows user-site installs put generated .exe
+# shims on a directory that isn't on PATH, so the -m form is the one
+# that always works.
 
 [project.urls]
 Repository = "https://github.com/danhickstein/keckogeco"

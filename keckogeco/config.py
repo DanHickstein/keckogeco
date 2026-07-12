@@ -122,7 +122,7 @@ def find_config_file(explicit: str | Path | None = None) -> Path:
     raise ConfigError(
         f"No {CONFIG_FILENAME} found. Searched:\n  {searched}\n"
         "Copy config/instruments.example.toml to one of these locations "
-        "and fill in your instrument addresses (or run keckogeco-find)."
+        "and fill in your instrument addresses (or run python -m keckogeco.discovery)."
     )
 
 

@@ -23,7 +23,7 @@ commands a driver sends.
 
 ## Simulation mode
 
-`keckogeco-server --sim` builds every configured device with a
+`python -m keckogeco.server.app --sim` builds every configured device with a
 `SimTransport`, so the full server + GUI stack runs on any machine. Sim mode
 returns canned values only; it exists to exercise plumbing and GUI layout,
 not to model the comb.

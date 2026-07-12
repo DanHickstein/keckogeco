@@ -1,4 +1,4 @@
-"""``keckogeco-check``: validate the config and try talking to each device.
+"""``python -m keckogeco.check``: validate the config and try talking to each device.
 
 Replaces the 17 ad-hoc ``if __name__ == "__main__"`` blocks in the old
 drivers with one place to sanity-check an installation:
