@@ -119,7 +119,50 @@ class MainWindow(QMainWindow):
         grid.addWidget(self._temperature_panel(), 2, 0, 1, 3)
         outer.addLayout(grid)
 
+        spectra = self._spectra_panel()
+        if spectra is not None:
+            outer.addWidget(spectra, stretch=1)
+
         self.setCentralWidget(central)
+
+    def _spectra_panel(self) -> QGroupBox | None:
+        """OSA spectrum + WaveShaper profile plots (pyqtgraph), if the
+        server exposes those arrays."""
+        try:
+            available = self.client.arrays()
+        except Exception:  # noqa: BLE001 - older server or offline
+            available = []
+        wanted = [name for name in ("osa_spectrum", "wsp_profile") if name in available]
+        if not wanted:
+            return None
+        try:
+            import pyqtgraph as pg
+        except ImportError:
+            self.statusBar().showMessage("pyqtgraph not installed; spectra hidden")
+            return None
+
+        box = QGroupBox("Spectra")
+        layout = QHBoxLayout(box)
+        self._plots: dict[str, object] = {}
+        titles = {"osa_spectrum": "OSA", "wsp_profile": "WaveShaper profile"}
+        for name in wanted:
+            plot = pg.PlotWidget(title=titles[name])
+            plot.showGrid(x=True, y=True, alpha=0.3)
+            curve = plot.plot(pen=pg.mkPen("#1565c0", width=1))
+            self._plots[name] = (plot, curve)
+            layout.addWidget(plot)
+        self.poller.array_names = wanted
+        self.poller.array_ready.connect(self._on_array)
+        return box
+
+    def _on_array(self, name: str, data: dict) -> None:
+        entry = getattr(self, "_plots", {}).get(name)
+        if entry is None:
+            return
+        plot, curve = entry
+        curve.setData(data.get("x", []), data.get("y", []))
+        plot.setLabel("bottom", data.get("x_label", ""))
+        plot.setLabel("left", data.get("y_label", ""))
 
     def _comb_state_panel(self) -> QGroupBox:
         box = QGroupBox("Comb State")

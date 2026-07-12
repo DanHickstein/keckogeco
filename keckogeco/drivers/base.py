@@ -92,6 +92,8 @@ class Instrument:
     DEFAULT_TRANSPORT: ClassVar[str] = "visa"
     TRANSPORT_DEFAULTS: ClassVar[dict] = {}
     SIM_RESPONSES: ClassVar[dict] = {}
+    #: reply for unmatched sim commands (e.g. the OZ VOA answers "Done")
+    SIM_DEFAULT: ClassVar[str] = "0"
     #: config-block option keys consumed by the driver's __init__ rather
     #: than the transport (e.g. ("model",) for the Instek supplies)
     DRIVER_OPTIONS: ClassVar[tuple[str, ...]] = ()
@@ -130,7 +132,9 @@ class Instrument:
         """Build the instrument (and its transport) from a config block."""
         driver_kwargs = {k: cfg.options[k] for k in cls.DRIVER_OPTIONS if k in cfg.options}
         if sim:
-            transport = SimTransport(cls.sim_responses(), address=f"SIM::{cfg.address}")
+            transport = SimTransport(
+                cls.sim_responses(), default=cls.SIM_DEFAULT, address=f"SIM::{cfg.address}"
+            )
             return cls(transport, cfg.key, **driver_kwargs)
         options = cls.transport_defaults(cfg)
         transport_name = cfg.options.get("transport", cls.DEFAULT_TRANSPORT)

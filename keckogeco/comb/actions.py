@@ -251,9 +251,12 @@ def minicomb_auto_setup(controller, ctx: ActionContext) -> None:
     edfa23.activate()
     ctx.sleep(0.5)
 
-    ctx.step("IM auto-lock (not yet ported - run manually)")
-    # TODO Phase 2b: port LFC_IM_AUTO_LOCK (KeckLFC.py:1976) and call it here.
-    log.warning("minicomb setup complete, but the IM bias auto-lock is not yet ported")
+    if getattr(controller, "_im_servo", None) is not None:
+        ctx.step("running IM bias auto-lock")
+        im_auto_lock_action(controller, ctx)
+    else:
+        ctx.step("IM auto-lock skipped (no SRS mainframe configured)")
+        log.warning("minicomb setup complete without the IM bias lock (srs not configured)")
 
 
 def set_standby(controller, ctx: ActionContext) -> None:
@@ -301,10 +304,24 @@ def set_off(controller, ctx: ActionContext) -> None:
     raise RuntimeError(f"cannot go to OFF from {state.value}; inspect the system first")
 
 
+def im_auto_lock_action(controller, ctx: ActionContext) -> None:
+    """Run the IM bias auto-lock on the configured SIM960 servo."""
+    from .locking import im_auto_lock
+
+    servo = getattr(controller, "_im_servo", None)
+    if servo is None:
+        raise RuntimeError("no SRS mainframe configured; cannot run the IM bias lock")
+    if ctx._status.total_steps == 0:
+        ctx.step("IM bias auto-lock", total=6)
+    result = im_auto_lock(servo, sim=controller.sim, progress=ctx.step)
+    log.info("IM lock engaged: %s", result)
+
+
 ACTIONS = {
     "set_standby": set_standby,
     "set_full_comb": set_full_comb,
     "set_off": set_off,
     "minicomb_auto_setup": minicomb_auto_setup,
     "close_all": close_all,
+    "im_auto_lock": im_auto_lock_action,
 }

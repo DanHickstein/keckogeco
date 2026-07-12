@@ -72,6 +72,7 @@ class LFCController:
                 self.offline[key] = str(exc)
                 log.error("device %s offline at startup: %s", key, exc)
         self._register_keywords()
+        self._register_arrays()
         self._start_monitors()
         self._started = True
         log.info(
@@ -275,6 +276,35 @@ class LFCController:
             bind("LFC_T_EOCB_OUT", getter=lambda: self.device("daq_eocb").temperature_C(4))
             bind("LFC_T_EOCB_IN", getter=lambda: self.device("daq_eocb").temperature_C(5))
 
+        # --- VOAs, HK shutter, pendulum rep-rate monitor
+        for key, kw in (
+            ("voa1550", "LFC_VOA1550_ATTEN"),
+            ("voa1310", "LFC_VOA1310_ATTEN"),
+            ("voa2000", "LFC_VOA2000_ATTEN"),
+        ):
+            if has(key):
+                bind(
+                    kw,
+                    getter=lambda k=key: self.device(k).attenuation_dB,
+                    setter=lambda v, k=key: setattr(self.device(k), "attenuation_dB", v),
+                )
+        if has("hk_shutter"):
+            bind(
+                "LFC_HK_SHUTTER",
+                getter=lambda: self.device("hk_shutter").open,
+                setter=lambda v: self.device("hk_shutter").set_open(v),
+            )
+        if has("pendulum"):
+            bind("LFC_PENDULEM_FREQ_MONITOR", getter=lambda: self._rep_rate_ok() is True)
+
+        # --- IM bias auto-lock (write 1 to run; enqueued like transitions)
+        if has("srs"):
+            bind(
+                "LFC_IM_AUTO_LOCK",
+                getter=lambda: self._action_result("im_auto_lock"),
+                setter=lambda v: self._submit_if_true("im_auto_lock", v),
+            )
+
         # --- WaveShaper scalar keywords: WSP_PHASE programs 2nd-order
         # dispersion (d2 in ps/nm), WSP_ATTEN a flat attenuation in dB —
         # matching how the old orchestration drove the flattener.
@@ -358,6 +388,36 @@ class LFCController:
             len(self.registry.missing_getters()),
         )
 
+    def _register_arrays(self) -> None:
+        """Array data sources for /api/v1/arrays (spectra, WS profiles)."""
+        self.arrays: dict = {}
+        if "osa" in self.devices:
+
+            def osa_spectrum() -> dict:
+                wavelength, power = self.device("osa").get_spectrum()
+                return {
+                    "x": wavelength.tolist(),
+                    "y": power.tolist(),
+                    "x_label": "wavelength (nm)",
+                    "y_label": "power (dBm)",
+                }
+
+            self.arrays["osa_spectrum"] = osa_spectrum
+        if "waveshaper1" in self.devices:
+
+            def wsp_profile() -> dict:
+                freq, atten, phase = self.device("waveshaper1").profile_arrays()
+                return {
+                    "x": freq.tolist(),
+                    "y": (-atten).tolist(),
+                    "y2": phase.tolist(),
+                    "x_label": "frequency (THz)",
+                    "y_label": "-attenuation (dB)",
+                    "y2_label": "phase (rad)",
+                }
+
+            self.arrays["wsp_profile"] = wsp_profile
+
     # ------------------------------------------------------------- helpers
 
     def _edfa_onoff(self, key: str, on: bool) -> None:
@@ -435,6 +495,37 @@ class LFCController:
 
     # ----------------------------------------------------------- comb state
 
+    #: rep rate must be within this of 16 GHz to count as detected
+    REP_RATE_HZ = 16e9
+    REP_RATE_TOLERANCE_HZ = 1000.0
+
+    def _rep_rate_ok(self) -> bool:
+        """Rep-rate factor of the comb state (Pendulum counter, channel C).
+
+        The old check only consulted the counter when both RF supplies were
+        on — and it shut the whole comb down (CLOSE_ALL + email) on a bad
+        reading. Auto-shutdown from inside a status probe is a hair
+        trigger, so here a bad rep rate is reported (and logged loudly) but
+        acting on it is left to the operator / a future safety monitor.
+        """
+        rf_on = self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu")) and self.device(
+            "rf_amp_psu"
+        ).output_on(self.psu_channel("rf_amp_psu"))
+        if not rf_on:
+            return False
+        if "pendulum" not in self.devices:
+            return True  # counter unavailable: fall back to the RF-chain inference
+        frequency = self.device("pendulum").measure_frequency_Hz("c")
+        ok = abs(frequency - self.REP_RATE_HZ) <= self.REP_RATE_TOLERANCE_HZ
+        if not ok:
+            log.error(
+                "rep rate %.6f GHz is off 16 GHz by %+.0f Hz - CHECK THE RF CHAIN "
+                "(the old system would have shut the comb down here)",
+                frequency / 1e9,
+                frequency - self.REP_RATE_HZ,
+            )
+        return ok
+
     def subsystem_status(self) -> SubsystemStatus:
         """Probe the six state-defining subsystems (offline -> None)."""
 
@@ -448,16 +539,13 @@ class LFCController:
             ptamp_on=probe(lambda: self.device("ptamp").pump_on),
             edfa23_on=probe(lambda: self.device("edfa23").activation),
             edfa27_on=probe(lambda: self.device("edfa27").activation),
-            rf_oscillator_on=probe(lambda: self.device("rf_osc_psu").output_on(1)),
-            rf_amplifier_on=probe(lambda: self.device("rf_amp_psu").output_on(1)),
-            # Pendulum counter not ported yet (tier 2); infer from RF chain,
-            # as the old check only consulted it when both supplies were on.
-            rep_rate_detected=probe(
-                lambda: (
-                    self.device("rf_osc_psu").output_on(1)
-                    and self.device("rf_amp_psu").output_on(1)
-                )
+            rf_oscillator_on=probe(
+                lambda: self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu"))
             ),
+            rf_amplifier_on=probe(
+                lambda: self.device("rf_amp_psu").output_on(self.psu_channel("rf_amp_psu"))
+            ),
+            rep_rate_detected=probe(self._rep_rate_ok),
         )
 
     def comb_state(self) -> CombState:

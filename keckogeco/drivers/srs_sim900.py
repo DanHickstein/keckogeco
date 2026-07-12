@@ -90,6 +90,7 @@ class SIM900(Instrument):
 
     @classmethod
     def sim_responses(cls) -> dict:
+        import math
         import re
 
         # Per-slot module state; CONN selects the active slot. Defaults are
@@ -137,9 +138,11 @@ class SIM900(Instrument):
         return {
             re.compile(r'CONN (\d+), ".*"$'): conn,
             "*IDN?": "Stanford_Research_Systems,SIM960,s/n012345,ver2.17",
-            # monitors mirror internal state where sensible
+            # monitors mirror internal state where sensible; MMON tracks the
+            # manual output through a sinusoid so bias-lock sweeps see a
+            # realistic IM transfer function in sim
             "SMON?": lambda _: module()["SETP"],
-            "MMON?": lambda _: "0.001",
+            "MMON?": lambda _: f"{0.5 * math.sin(2.0 * float(module()['MOUT']) + 1.0):.4f}",
             "EMON?": lambda _: "0.000",
             "OMON?": lambda _: module()["MOUT"],
             "OPON": lambda _: module().__setitem__("EXON", "1") or "",

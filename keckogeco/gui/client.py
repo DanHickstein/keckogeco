@@ -75,20 +75,32 @@ class KeckogecoClient:
         )
         return response.json()
 
+    def arrays(self) -> list[str]:
+        return self._get("arrays")["arrays"]
+
+    def array(self, name: str) -> dict:
+        return self._get(f"arrays/{name}")
+
 
 class PollThread(QThread):
     """Polls /keywords and /state, emitting fresh data as Qt signals."""
 
     keywords_ready = pyqtSignal(dict)
     state_ready = pyqtSignal(dict)
+    array_ready = pyqtSignal(str, dict)
     connection_changed = pyqtSignal(bool, str)
+
+    #: arrays are fetched every Nth poll cycle (spectra sweeps are slow)
+    ARRAY_EVERY = 3
 
     def __init__(self, client: KeckogecoClient, period_ms: int = 1000):
         super().__init__()
         self.client = client
         self.period_ms = period_ms
+        self.array_names: list[str] = []  # set by the main window
         self._running = True
         self._connected = None
+        self._cycle = 0
 
     def run(self) -> None:
         while self._running:
@@ -96,8 +108,15 @@ class PollThread(QThread):
                 self.keywords_ready.emit(self.client.snapshot())
                 self.state_ready.emit(self.client.state())
                 self._set_connected(True, "")
+                if self._cycle % self.ARRAY_EVERY == 0:
+                    for name in list(self.array_names):
+                        try:
+                            self.array_ready.emit(name, self.client.array(name))
+                        except Exception as exc:  # noqa: BLE001 - one bad array is fine
+                            log.debug("array %s fetch failed: %s", name, exc)
             except Exception as exc:  # noqa: BLE001 - report and keep polling
                 self._set_connected(False, str(exc))
+            self._cycle += 1
             self.msleep(self.period_ms)
 
     def _set_connected(self, ok: bool, detail: str) -> None:

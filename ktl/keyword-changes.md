@@ -29,9 +29,17 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 - `LFC_YJ_SHUTTER` vs `LFC_YJ_SHUT`: apparent duplicates in the baseline;
   only `LFC_YJ_SHUTTER` is implemented. Propose retiring `LFC_YJ_SHUT`.
 
-## Not yet implemented (need tier-2 drivers or Phase-2b autolocks)
+## Not yet implemented (remaining drivers or design decisions)
 
-`LFC_VOA*_ATTEN`, `LFC_2BY2_SWITCH`, `LFC_HK_SHUTTER`,
-`LFC_CLARITY_ONOFF`, `LFC_IM_AUTO_LOCK`, `LFC_IM_LOCK_MODE`,
-`LFC_IM_RF_ATT`, the `*_MONITOR` toggles, `*_DEFAULT`/`*_AUTO_ON`
-keywords, `LFC_PENDULEM_FREQ_MONITOR`, `LFC_TEMP_TEST1/2`.
+`LFC_2BY2_SWITCH`, `LFC_CLARITY_ONOFF` (drivers not yet ported),
+`LFC_IM_LOCK_MODE`, `LFC_IM_RF_ATT`, the `LFC_TEMP/RFOSCI/RFAMP_MONITOR`
+toggles, `*_DEFAULT`/`*_AUTO_ON` keywords, `LFC_TEMP_TEST1/2`.
+
+Note: the Rb-lock automation from the old system is **not planned** for
+the rewrite (per Octave, its implementation is undecided).
+
+Safety-behavior change: the old `LFC_CHECK_STATUS` executed `CLOSE_ALL`
+(full comb shutdown) from inside the status read if the Pendulum counter
+was more than 1 kHz off 16 GHz. The rewrite reports/logs the fault
+instead of auto-shutting down; whether an automatic response belongs in a
+dedicated safety monitor is an open discussion item.

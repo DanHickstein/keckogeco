@@ -200,6 +200,20 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
     def state() -> dict:
         return controller.state_summary()
 
+    @app.get(f"{API_PREFIX}/arrays", dependencies=[auth])
+    def list_arrays() -> dict:
+        return {"arrays": sorted(getattr(controller, "arrays", {}))}
+
+    @app.get(f"{API_PREFIX}/arrays/{{name}}", dependencies=[auth])
+    def read_array(name: str) -> dict:
+        source = getattr(controller, "arrays", {}).get(name)
+        if source is None:
+            raise HTTPException(status_code=404, detail=f"unknown array {name!r}")
+        try:
+            return {"name": name, **source()}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     return app
 
 

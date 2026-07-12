@@ -117,3 +117,35 @@ name = "TC-720 TEC (octave waveguide)"
 driver = "usb2408"
 address = "0"
 name = "USB-2408 thermocouple DAQ"
+
+[devices.pendulum]
+driver = "pendulum_cnt90"
+address = "GPIB0::10::INSTR"
+name = "Pendulum CNT-90 counter"
+
+[devices.osa]
+driver = "agilent_86142b"
+address = "GPIB0::30::INSTR"
+name = "Agilent 86142B OSA"
+
+[devices.voa1550]
+driver = "oz_voa"
+address = "ASRL7::INSTR"
+name = "OZ Optics VOA 1550 nm"
+
+[devices.voa1310]
+driver = "oz_voa"
+address = "ASRL11::INSTR"
+name = "OZ Optics VOA 1310 nm"
+enabled = false    # enable once keckogeco-find confirms the port
+
+[devices.voa2000]
+driver = "oz_voa"
+address = "ASRL15::INSTR"
+name = "OZ Optics VOA 2000 nm"
+enabled = false    # enable once keckogeco-find confirms the port
+
+[devices.hk_shutter]
+driver = "hk_shutter"
+address = "COM12"
+name = "HK shutter (SC10 style)"
