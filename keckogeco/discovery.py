@@ -645,6 +645,25 @@ def verify_entry(entry: dict, ports_by_serial: dict, ports_by_name: dict) -> str
     return port
 
 
+def normalize_visa_addr(addr: str) -> str:
+    """USB VISA resources appear both with and without the interface
+    number (``USB0::v::p::serial::INSTR`` vs ``...::serial::0::INSTR``);
+    treat them as one address."""
+    return re.sub(r"^(USB\d*(?:::[^:]+){3})::\d+::INSTR$", r"\1::INSTR", addr, flags=re.IGNORECASE)
+
+
+def find_existing_key(instruments: dict, usb_serial: str | None, address: str | None) -> str | None:
+    """Key of an entry that is the same physical device, if any."""
+    for key, entry in instruments.items():
+        if usb_serial and entry.get("usb_serial") == usb_serial:
+            return key
+        if address and normalize_visa_addr(str(entry.get("address", ""))) == normalize_visa_addr(
+            address
+        ):
+            return key
+    return None
+
+
 def make_key(driver: str, token: str | None, usb_serial: str | None, existing: dict) -> str:
     base = driver if driver and driver != "?" else "unknown_serial_device"
     if token:
@@ -950,6 +969,15 @@ def main(argv=None) -> int:
 
     # ---- fast path: verify previously found devices ----
     existing = {} if args.rescan else load_existing(config_path)
+    # drop duplicates saved by earlier runs (same adapter or address)
+    deduped: dict[str, dict] = {}
+    for key, entry in existing.items():
+        match = find_existing_key(deduped, entry.get("usb_serial"), entry.get("address"))
+        if match is None:
+            deduped[key] = entry
+        else:
+            print(f"  dropping duplicate config entry {key} (same device as {match})")  # noqa: T201
+    existing = deduped
     if existing:
         print("Verifying devices from saved configuration ...")  # noqa: T201
         for key, entry in existing.items():
@@ -978,6 +1006,7 @@ def main(argv=None) -> int:
     for port_info in remaining:
         sig = passive_match(port_info)
         if sig:
+            existing_key = find_existing_key(instruments, port_info.serial_number, None)
             entry = {
                 "device": sig["device"],
                 "driver": sig["driver"],
@@ -991,8 +1020,10 @@ def main(argv=None) -> int:
                 "confidence": "high",
                 "found_on": now,
             }
-            key = make_key(sig["driver"], port_info.serial_number, None, instruments)
-            instruments[key] = entry
+            key = existing_key or make_key(
+                sig["driver"], port_info.serial_number, None, instruments
+            )
+            instruments[key] = {**instruments.get(key, {}), **entry}
             print(  # noqa: T201
                 f"  {port_info.device}: {sig['device']} (passive USB match, not probed)"
             )
@@ -1038,12 +1069,11 @@ def main(argv=None) -> int:
         gpib_found, gpib_notes = scan_gpib(verbose=args.verbose)
         for entry in gpib_found:
             entry["found_on"] = now
-            key = make_key(entry["driver"], entry.get("match_token"), None, instruments)
-            # keep an existing key for the same address (verified GPIB entry)
-            for old_key, old in list(instruments.items()):
-                if old.get("address") == entry["address"]:
-                    key = old_key
-                    break
+            entry["address"] = normalize_visa_addr(entry["address"])
+            existing_key = find_existing_key(instruments, None, entry["address"])
+            key = existing_key or make_key(
+                entry["driver"], entry.get("match_token"), None, instruments
+            )
             instruments[key] = {**instruments.get(key, {}), **entry}
         for note in gpib_notes:
             print(f"  {note}")  # noqa: T201

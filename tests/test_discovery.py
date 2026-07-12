@@ -45,6 +45,25 @@ def test_address_for():
     assert address_for({"driver": "waveshaper"}, "COM9", "WS201904D") == "SN201904"
 
 
+def test_normalize_visa_addr():
+    from keckogeco.discovery import find_existing_key, normalize_visa_addr
+
+    with_iface = "USB0::0x0699::0x03A6::C031910::0::INSTR"
+    without = "USB0::0x0699::0x03A6::C031910::INSTR"
+    assert normalize_visa_addr(with_iface) == without
+    assert normalize_visa_addr(without) == without
+    # GPIB addresses must NOT be rewritten
+    assert normalize_visa_addr("GPIB0::10::INSTR") == "GPIB0::10::INSTR"
+
+    instruments = {
+        "tds": {"driver": "tds2024c", "address": without},
+        "ws": {"driver": "waveshaper", "address": "SN201904", "usb_serial": "WS201904D"},
+    }
+    assert find_existing_key(instruments, None, with_iface) == "tds"
+    assert find_existing_key(instruments, "WS201904D", None) == "ws"
+    assert find_existing_key(instruments, "OTHER", "GPIB0::30::INSTR") is None
+
+
 def test_make_key_uniqueness():
     existing = {"amonics_edfa_A": {}}
     key1 = make_key("amonics_edfa", "A", None, existing)

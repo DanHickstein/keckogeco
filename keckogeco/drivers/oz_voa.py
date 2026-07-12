@@ -7,6 +7,7 @@ multi-line replies terminated by a ``Done`` line. Ported from
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from typing import ClassVar
@@ -61,7 +62,20 @@ class OZOpticsVOA(Instrument):
 
     @property
     def attenuation_dB(self) -> float:
-        reply = self._ask("A?")  # e.g. 'Atten:12.00(dB)'
+        """Current attenuation; NaN if the unit hasn't homed yet.
+
+        After a power cycle the unit answers ``Atten:unknown`` until the
+        first attenuation set (rack observation, 2026-07-12) — that's a
+        real state, not an error.
+        """
+        reply = self._ask("A?")  # e.g. 'Atten:12.00(dB)' or 'Atten:unknown'
+        if "unknown" in reply.casefold():
+            self.log.warning(
+                "%s: attenuation unknown (not homed since power-up); set an "
+                "attenuation once to initialize it",
+                self.name,
+            )
+            return math.nan
         match = re.search(r"Atten\s*:\s*([\d.]+)", reply, re.IGNORECASE)
         if match is None:
             raise ResponseError(f"{self.name}: bad attenuation reply {reply!r}")

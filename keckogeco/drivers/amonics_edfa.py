@@ -56,7 +56,9 @@ class AmonicsEDFA(Instrument):
     """
 
     TRANSPORT_DEFAULTS: ClassVar[dict] = {
-        "timeout_ms": 25_000,
+        # 5 s (not the old 25 s): the units answer within tens of ms when
+        # they answer at all, and the wake-up handshake handles the rest
+        "timeout_ms": 5_000,
         "baud_rate": 19_200,
         "read_termination": "\r\n",
         "write_termination": "\r\n",
@@ -64,6 +66,34 @@ class AmonicsEDFA(Instrument):
 
     #: seconds to keep re-sending a state change before giving up
     STATE_CHANGE_TIMEOUT_S: ClassVar[float] = 3.0
+    #: wake-up attempts after opening the port (see _configure)
+    WAKEUP_TRIES: ClassVar[int] = 3
+
+    def _configure(self) -> None:
+        """Wake the unit after opening the port.
+
+        Rack observation (2026-07-12): some units (the PM-13 and PM-23)
+        drop the first command that arrives after the serial port is
+        opened, so the first query times out — and because the base
+        class's recovery is close-reopen-retry, the retry was a "first
+        command" again and also died. Re-sending on the *same open port*
+        is what works, so do that here until the model query answers.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, self.WAKEUP_TRIES + 1):
+            try:
+                model = self.transport.query(":CAL:SYS:MODEL?").strip()
+                if model:
+                    if attempt > 1:
+                        self.log.info("%s woke after %d tries (%s)", self.name, attempt, model)
+                    return
+            except Exception as exc:  # noqa: BLE001 - timeout/garbage: try again
+                last_error = exc
+                self.log.debug("%s: wake-up try %d failed: %s", self.name, attempt, exc)
+        raise ResponseError(
+            f"{self.name}: no reply to :CAL:SYS:MODEL? after "
+            f"{self.WAKEUP_TRIES} tries ({last_error})"
+        )
 
     # ------------------------------------------------------------- identity
 
@@ -233,16 +263,28 @@ class AmonicsEDFA(Instrument):
     # ---------------------------------------------------------------- misc
 
     def status(self) -> dict:
-        """Snapshot of everything a GUI panel or keyword read needs."""
+        """Snapshot of everything a GUI panel or keyword read needs.
+
+        Per-field tolerant: a unit that rejects one query (model quirks)
+        reports None for that field instead of failing the whole snapshot.
+        """
+
+        def grab(fn):
+            try:
+                return fn()
+            except Exception as exc:  # noqa: BLE001 - partial status is useful
+                self.log.warning("%s: status field failed: %s", self.name, exc)
+                return None
+
         return {
-            "interlocked": self.interlocked,
-            "case_temperature_C": self.case_temperature_C,
-            "activation": self.activation,
-            "mode": self.mode(),
-            "channel_state": self.channel_state(),
-            "setpoint": self.setpoint(),
-            "output_power_mW": self.output_power_mW(),
-            "input_power_mW": self.input_power_mW(),
+            "interlocked": grab(lambda: self.interlocked),
+            "case_temperature_C": grab(lambda: self.case_temperature_C),
+            "activation": grab(lambda: self.activation),
+            "mode": grab(self.mode),
+            "channel_state": grab(self.channel_state),
+            "setpoint": grab(self.setpoint),
+            "output_power_mW": grab(self.output_power_mW),
+            "input_power_mW": grab(self.input_power_mW),
         }
 
     def _retry_until(self, command: str, readback, target: str, what: str) -> None:

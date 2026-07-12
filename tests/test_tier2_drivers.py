@@ -54,6 +54,28 @@ def test_voa_attenuation_roundtrip():
     assert "A12.50" in voa.transport.sent
 
 
+def test_voa_unknown_attenuation_is_nan():
+    """Fresh power-up: unit answers 'Atten:unknown' until first move."""
+    import math
+
+    voa = make("oz_voa", "OZOpticsVOA", "voa1550", "ASRL7::INSTR")
+    voa.transport.responses["A?"] = "Atten:unknown"
+    assert math.isnan(voa.attenuation_dB)
+
+
+def test_amonics_wakeup_retries_on_same_connection():
+    """PM-13/PM-23 drop the first command after port-open; the wake-up
+    handshake must resend on the same open transport."""
+    from keckogeco.drivers.amonics_edfa import AmonicsEDFA
+    from tests.test_instrument_base import FlakyTransport
+
+    transport = FlakyTransport(fail_count=2, responses=AmonicsEDFA.sim_responses())
+    edfa = AmonicsEDFA(transport, "edfa13")
+    edfa.connect()  # would raise without the retry loop
+    assert transport.open_count == 1  # retried WITHOUT reopening the port
+    assert edfa.output_power_mW() == pytest.approx(150.0)
+
+
 def test_hk_shutter_toggle_semantics():
     shutter = make("hk_shutter", "HKShutter", "hk_shutter", "COM12")
     assert shutter.open is False
