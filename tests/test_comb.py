@@ -155,6 +155,15 @@ def test_controller_temperatures(controller):
     assert controller.read("LFC_PPLN_T").value == pytest.approx(25.0)
 
 
+def test_controller_switch_and_clarity(controller):
+    assert controller.read("LFC_2BY2_SWITCH").value == 1  # sim starts on YJ
+    controller.write("LFC_2BY2_SWITCH", "2")
+    assert controller.read("LFC_2BY2_SWITCH").value == 2
+    assert controller.read("LFC_CLARITY_ONOFF").value == 0
+    controller.write("LFC_CLARITY_ONOFF", "1")
+    assert controller.read("LFC_CLARITY_ONOFF").value == 1
+
+
 def test_bound_keyword_count(controller):
     # tier-1 target: a solid fraction of the 77 keywords already answer
     assert len(controller.registry.bound) >= 30

@@ -297,6 +297,23 @@ class LFCController:
         if has("pendulum"):
             bind("LFC_PENDULEM_FREQ_MONITOR", getter=lambda: self._rep_rate_ok() is True)
 
+        # --- Agiltron 2x2 switch (enumerated: 1 = YJ path, 2 = HK path)
+        if has("switch2x2"):
+            bind(
+                "LFC_2BY2_SWITCH",
+                getter=lambda: self.device("switch2x2").position,
+                setter=lambda v: self.device("switch2x2").set_position(v),
+            )
+
+        # --- Clarity laser: the keyword collapses the 4-state status to
+        # off/on exactly like the old orchestration (1/2/3 -> 1)
+        if has("clarity"):
+            bind(
+                "LFC_CLARITY_ONOFF",
+                getter=lambda: 1 if self.device("clarity").status_code > 0 else 0,
+                setter=lambda v: self.device("clarity").set_output(bool(int(v))),
+            )
+
         # --- IM bias auto-lock (write 1 to run; enqueued like transitions)
         if has("srs"):
             bind(

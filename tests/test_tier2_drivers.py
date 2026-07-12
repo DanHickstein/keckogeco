@@ -89,6 +89,52 @@ def test_hk_shutter_toggle_semantics():
     assert shutter.open is False
 
 
+def test_agiltron_switch_positions():
+    switch = make("agiltron_switch", "AgiltronSwitch2x2", "switch2x2", "COM12")
+    assert switch.position == 1  # sim powers up on the YJ path
+    switch.set_position(2)
+    assert switch.position == 2
+    assert switch.status() == {"position": 2, "route": "HK"}
+    sent_before = len(switch.transport.sent)
+    switch.set_position(2)  # already there: must not send the 0x14 set frame
+    assert not any(cmd.startswith("0114") for cmd in switch.transport.sent[sent_before:])
+    with pytest.raises(ValueError, match="position"):
+        switch.set_position(3)
+
+
+def test_clarity_status_and_output():
+    laser = make("clarity", "Clarity", "clarity", "ASRL23::INSTR")
+    assert laser.status_code == 0
+    assert laser.output is False
+    laser.set_output(True)
+    assert laser.output is True
+    assert laser.status() == {"status": "locked", "output": True}
+    assert "SOUR:STAT 1" in laser.transport.sent
+
+
+def test_keysight_fg_channel_roundtrip():
+    fg = make("keysight_fg33500", "KeysightFG33500", "fg1", "USB0::0x0957::0x2807::MY1::INSTR")
+    assert "33512B" in fg.idn()
+    fg.set_frequency_Hz(2, 5e6)
+    fg.set_amplitude_V(2, 0.25)
+    fg.set_offset_V(2, 0.1)
+    fg.set_function(2, "square")
+    fg.set_output(2, True)
+    params = fg.channel_parameters(2)
+    assert params["frequency_Hz"] == pytest.approx(5e6)
+    assert params["amplitude_V"] == pytest.approx(0.25)
+    assert params["offset_V"] == pytest.approx(0.1)
+    assert params["function"] == "SQU"
+    assert params["output"] is True
+    # channel 1 untouched
+    assert fg.frequency_Hz(1) == pytest.approx(1000.0)
+    assert fg.output(1) is False
+    with pytest.raises(ValueError, match="channel"):
+        fg.frequency_Hz(3)
+    with pytest.raises(ValueError, match="function"):
+        fg.set_function(1, "noise")
+
+
 def test_im_auto_lock_sim():
     """The lock finds a midpoint bias on the sim's sinusoidal response."""
     from keckogeco.comb.locking import im_auto_lock
