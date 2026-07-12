@@ -27,13 +27,28 @@ rewrite makes, for discussion before the dispatcher is redeployed.
   Candidates to retire once the HTTP dispatcher is deployed: `ICESTA2`,
   `ICETEST`, `TEST*`.
 - `LFC_YJ_SHUTTER` vs `LFC_YJ_SHUT`: apparent duplicates in the baseline;
-  only `LFC_YJ_SHUTTER` is implemented. Propose retiring `LFC_YJ_SHUT`.
+  the old `LFC_YJ_SHUT` handler was already a stub (its shutter call was
+  commented out). The rewrite answers reads with 0 and logs-and-ignores
+  writes, purely for compatibility. Propose retiring `LFC_YJ_SHUT`.
+- `LFC_TEMP_MONITOR` / `LFC_RFOSCI_MONITOR` / `LFC_RFAMP_MONITOR` now
+  read **True = within range** (temperatures below 40 C; RF supplies at
+  their commissioned 15 V/~0.4 A and 30 V/~4.2 A envelopes, or off). The
+  old handlers returned 0 normally and 1 *after* executing `CLOSE_ALL`
+  and sending an email; like the rep-rate check, out-of-range now logs an
+  error without auto-shutdown (see the safety note below).
+- `*_DEFAULT` / `*_AUTO_ON` presets: write 1 to push the commissioned
+  setpoints (EDFA27 APC 450 mW, EDFA23 ACC 80 mA, RF amp 30 V/4.2 A, RF
+  osc 15 V/3 A, Pritel 600 mA/3.9 A); `AUTO_ON` variants also enable
+  emission. Reads return False (the old handlers returned nothing).
+- `SHOW_ALL_VAL` writes dump the keyword snapshot to the server log
+  instead of stdout.
 
 ## Not yet implemented (remaining drivers or design decisions)
 
-`LFC_2BY2_SWITCH`, `LFC_CLARITY_ONOFF` (drivers not yet ported),
-`LFC_IM_LOCK_MODE`, `LFC_IM_RF_ATT`, the `LFC_TEMP/RFOSCI/RFAMP_MONITOR`
-toggles, `*_DEFAULT`/`*_AUTO_ON` keywords, `LFC_TEMP_TEST1/2`.
+`LFC_TEMP_TEST2` and `LFC_T_EOCB_IN/OUT` bind automatically once the
+second DAQ board (`daq_eocb`) is configured; `LFC_VOA1310/2000_ATTEN`
+once those VOA ports are confirmed by discovery. Everything else is
+bound.
 
 Note: the Rb-lock automation from the old system is **not planned** for
 the rewrite (per Octave, its implementation is undecided).
