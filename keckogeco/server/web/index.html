@@ -52,16 +52,7 @@
   .lamp.off .dot { background: #616161; }
   .lamp.unknown .dot { background: #423d2c; }
   .lamp span { font-size: 11px; color: var(--dim); }
-  /* actions */
-  #actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  button {
-    background: #2b3442; color: var(--text); border: 1px solid var(--border);
-    border-radius: 4px; padding: 8px 14px; font: inherit; cursor: pointer;
-  }
-  button:hover { border-color: var(--accent); }
-  button:disabled { opacity: 0.45; cursor: default; }
-  button.danger { background: #4a2626; }
-  #action-progress { color: var(--accent); font-size: 13px; width: 100%; min-height: 1.2em; }
+  #action-progress { color: var(--accent); font-size: 13px; }
   #action-progress.error { color: #ef5350; }
   /* telemetry table */
   table { border-collapse: collapse; width: 100%; }
@@ -89,15 +80,9 @@
     <div id="lamps"></div>
   </section>
 
-  <section class="wide">
-    <h2>Actions</h2>
-    <div id="actions">
-      <button data-action="set_standby">Go to STANDBY</button>
-      <button data-action="set_full_comb">Go to FULL COMB</button>
-      <button data-action="set_off" class="danger">Turn OFF</button>
-      <button id="abort" class="danger" style="display:none">Abort</button>
-      <div id="action-progress"></div>
-    </div>
+  <section class="wide" id="activity-box" style="display:none">
+    <h2>Activity</h2>
+    <div id="action-progress"></div>
   </section>
 
   <section>
@@ -127,7 +112,7 @@
 </main>
 
 <footer>
-  Read-mostly status page; full control lives in the engineering GUI.
+  Status only — control lives in the engineering GUI and the KTL keywords.
   API: <a href="/api/v1/health">/api/v1/health</a>
 </footer>
 
@@ -180,15 +165,13 @@ function renderState(s) {
     const el = document.getElementById("lamp-" + key);
     el.className = "lamp " + (v === true ? "on" : v === false ? "off" : "unknown");
   }
+  // read-only view of any running/last transition (control lives in the
+  // engineering GUI and the KTL keywords, not here)
   const prog = document.getElementById("action-progress");
-  const abortBtn = document.getElementById("abort");
+  const box = document.getElementById("activity-box");
   const a = s.action;
-  const running = a && a.running;
-  for (const b of document.querySelectorAll("#actions button[data-action]"))
-    b.disabled = !!running;
-  abortBtn.style.display = running ? "inline" : "none";
   prog.className = "";
-  if (running) {
+  if (a && a.running) {
     const steps = a.total_steps ? ` (step ${a.step}/${a.total_steps})` : "";
     prog.textContent = `${a.name}: ${a.message}${steps}`;
   } else if (a && a.error) {
@@ -201,32 +184,13 @@ function renderState(s) {
   } else {
     prog.textContent = "";
   }
+  box.style.display = prog.textContent ? "block" : "none";
   const offline = Object.keys(s.devices_offline || {}).length;
   document.getElementById("conn").textContent =
     `${s.devices_online.length} devices online` +
     (offline ? `, ${offline} offline` : "") +
     ` — updated ${new Date().toLocaleTimeString()}`;
 }
-
-/* --------------------------------------------------------------- actions */
-for (const btn of document.querySelectorAll("#actions button[data-action]")) {
-  btn.addEventListener("click", async () => {
-    const action = btn.dataset.action;
-    if (!confirm(`Run ${action}?`)) return;
-    const resp = await api(`/actions/${action}`, { method: "POST" });
-    if (resp.status === 409) {
-      alert("Another action is already running.");
-    } else if (!resp.ok) {
-      alert(`Failed to start ${action}: HTTP ${resp.status}`);
-    }
-    pollState();
-  });
-}
-document.getElementById("abort").addEventListener("click", async () => {
-  if (!confirm("Abort the running action?")) return;
-  await api("/actions/current", { method: "DELETE" });
-  pollState();
-});
 
 /* ------------------------------------------------------------- telemetry */
 const TABLES = {
