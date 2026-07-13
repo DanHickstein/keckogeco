@@ -1,9 +1,15 @@
 # Keck Integration
 
+```{toctree}
+:maxdepth: 1
+
+keywords
+```
+
 ```{note}
-Placeholder — the KTL keyword table (generated from the keyword schema),
-the DFW dispatcher deployment procedure, and the keyword change list will
-land here in Phase 3.
+The DFW dispatcher deployment procedure and the keyword change list land
+here in Phase 3; the change list currently lives at
+`ktl/keyword-changes.md` in the repository.
 ```
 
 Architecture: the Windows laptop runs `python -m keckogeco.server.app` (HTTP/REST). On the
