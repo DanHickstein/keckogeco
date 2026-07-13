@@ -170,3 +170,9 @@ driver = "keysight_fg33500"
 address = "USB0::0x0957::0x2807::MY59003825::INSTR"
 name = "Keysight 33512B function generator #2"
 enabled = false    # enable once python -m keckogeco.discovery confirms the address
+
+[devices.scope]
+driver = "tds2024c"
+address = "USB0::0x0699::0x03A6::C031910::INSTR"
+name = "Tektronix TDS2024C oscilloscope"
+enabled = false    # diagnostics only; enable when needed
