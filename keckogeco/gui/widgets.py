@@ -58,6 +58,9 @@ class KeywordDisplay(QLabel):
         self.setToolTip(spec.get("help") or keyword)
 
     def update_value(self, value) -> None:
+        if value is None:  # server reports unknown (e.g. VOA not homed) as null
+            self.setText("—")
+            return
         if isinstance(value, bool):
             text = "ON" if value else "OFF"
         elif isinstance(value, float):
@@ -107,6 +110,8 @@ class KeywordSpinBox(QWidget):
             self._submit(self.keyword, self.spin.value())
 
     def update_value(self, value) -> None:
+        if value is None:  # unknown (e.g. VOA not homed): keep what's shown
+            return
         if not self._editing and not self.spin.hasFocus():
             self.spin.blockSignals(True)
             self.spin.setValue(float(value))

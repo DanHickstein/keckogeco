@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import logging
+import math
 import threading
 from importlib.metadata import version as pkg_version
 
@@ -45,6 +46,15 @@ API_PREFIX = "/api/v1"
 
 class WriteRequest(BaseModel):
     value: str | float | int | bool | list[float]
+
+
+def _json_value(value):
+    """NaN/Inf are not valid JSON (the response encoder rejects them, which
+    would 500 the whole bulk read); report them as null. Real case: an OZ
+    VOA reads NaN attenuation until it has homed."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 class Poller(threading.Thread):
@@ -122,7 +132,7 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
         for name, kv in controller.registry.snapshot().items():
             spec = controller.registry.schema[name]
             out[name] = {
-                "value": kv.value,
+                "value": _json_value(kv.value),
                 "timestamp": kv.timestamp,
                 "type": spec.type,
                 "units": spec.units,
@@ -135,14 +145,23 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
         if not fresh:
             cached = controller.registry.snapshot().get(name)
             if cached is not None:
-                return {"name": name, "value": cached.value, "timestamp": cached.timestamp}
+                return {
+                    "name": name,
+                    "value": _json_value(cached.value),
+                    "timestamp": cached.timestamp,
+                }
         try:
             kv = controller.read(name)
         except KeywordError as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"name": name, "value": kv.value, "timestamp": kv.timestamp, "units": spec.units}
+        return {
+            "name": name,
+            "value": _json_value(kv.value),
+            "timestamp": kv.timestamp,
+            "units": spec.units,
+        }
 
     @app.put(f"{API_PREFIX}/keywords/{{name}}", dependencies=[auth])
     def write_keyword(name: str, body: WriteRequest) -> dict:

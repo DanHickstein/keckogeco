@@ -117,6 +117,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self._rf_panel(), 1, 1)
         grid.addWidget(self._seed_tec_panel(), 1, 2)
         grid.addWidget(self._temperature_panel(), 2, 0, 1, 3)
+        grid.addWidget(self._voa_panel(), 3, 0, 1, 3)
         outer.addLayout(grid)
 
         spectra = self._spectra_panel()
@@ -278,6 +279,24 @@ class MainWindow(QMainWindow):
         self._add_spin(form, "IM bias", "LFC_IM_BIAS")
         self._add_spin(form, "PPLN temp", "LFC_PPLN_T")
         self._add_spin(form, "Waveguide temp", "LFC_WGD_T")
+        return box
+
+    def _voa_panel(self) -> QGroupBox:
+        # Serial <-> keyword mapping mirrors config/keckogeco.toml. The VOAs
+        # are not in the optical chain, so they are listed by serial number;
+        # relabel by wavelength if they ever get installed on those fibers.
+        box = QGroupBox("VOA attenuation (not in optical chain)")
+        layout = QHBoxLayout(box)
+        for serial, keyword in [
+            ("NO-303699-01", "LFC_VOA1550_ATTEN"),
+            ("NO-303700-01", "LFC_VOA1310_ATTEN"),
+            ("NO-311029-01", "LFC_VOA2000_ATTEN"),
+        ]:
+            if keyword not in self.schema:
+                continue
+            form = QFormLayout()
+            self._add_spin(form, serial, keyword)
+            layout.addLayout(form)
         return box
 
     def _temperature_panel(self) -> QGroupBox:
