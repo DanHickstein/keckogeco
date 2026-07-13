@@ -60,6 +60,10 @@ packages = ["keckogeco"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# ktl/ deploys to Keck's kroot hosts whose Python is old and whose code
+# conventions differ (percent formatting, tolerant excepts) - do not
+# lint it against package standards.
+exclude = ["ktl"]
 
 [tool.ruff.lint]
 select = [

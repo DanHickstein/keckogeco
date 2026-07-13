@@ -1,0 +1,19 @@
+# Example configuration for the comb dispatcher (combd.sin), HTTP backend.
+# Copy alongside the deployed dispatcher and edit for the site. The
+# service/stdiosvc/dispatcher entries follow the standard DFW conventions.
+
+[main]
+service = comb
+stdiosvc = combds
+dispatcher = comb_dispatch_1
+
+# The keckogeco REST server on the LFC laptop. Host/port must match the
+# [server] section of the laptop's keckogeco.toml. Never hardcode this in
+# the dispatcher source.
+server_url = http://LAPTOP-ADDRESS:8000
+
+# Bearer token, if the laptop server sets one (empty = no auth).
+api_token =
+
+# HTTP timeout in seconds for keyword reads/writes and health probes.
+timeout = 5

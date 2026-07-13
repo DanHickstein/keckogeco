@@ -1,0 +1,484 @@
+#! @KPYTHON3@
+#
+# kpython safely sets RELDIR, KROOT, LROOT, and PYTHONPATH before invoking
+# the actual Python interpreter.
+#
+# comb dispatcher, HTTP backend.
+#
+# This is the successor to the ICE-based combd: the DFW service, keyword
+# definitions, and operator-facing semantics (ICESTA / ICECLK, per-keyword
+# polling with a fast period after writes) are unchanged, but the transport
+# to the LFC laptop is now plain HTTP against the keckogeco REST server
+# (GET/PUT /api/v1/keywords/<NAME>). Only the Python standard library is
+# used for the HTTP side, so no site packages are required beyond kroot's
+# DFW and ktl.
+#
+# ICESTA semantics (names kept from the ICE era so operator lore still
+# works):
+#   1 = Connected      dispatcher can reach the laptop server
+#   2 = Disconnected   idle; keyword reads are not attempted
+#   3 = Initializing   written by the operator to (re)connect
+#
+#   modify -s comb icesta=3   -> probe the server and connect
+#   modify -s comb icesta=2   -> disconnect
+
+import atexit
+import configparser
+import getopt
+import json
+import logging
+import os
+import signal
+import sys
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.request
+
+import DFW                  # provided by kroot/util/dfw
+import ktl                  # provided by kroot/ktl/keyword/python
+
+
+def main():
+
+    parseCommandLine()      # Need to know where the config file is.
+    parseConfigFile()
+    parseCommandLine()      # Command line overrides the config file.
+
+    checkSanity()
+
+    # Shut down cleanly in all situations.
+    atexit.register(shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    main.client = HttpClient(
+        main.config.get('main', 'server_url'),
+        main.config.get('main', 'api_token', fallback='').strip(),
+        main.config.getfloat('main', 'timeout', fallback=5.0),
+    )
+
+    main.Service = DFW.Service(main.config.get('main', 'service'),
+                main.config.get('main', 'stdiosvc'),
+                setupKeywords)
+
+    status = "DISP%dSTA" % (main.dispatcher)
+    main.Service[status].set('ready')
+    main.Service['ICESTA'].set('Disconnected')
+
+    # Main loop: watch the connection. ICESTA=3 requests a connect probe;
+    # while connected, verify the server heartbeat periodically and drop
+    # to Disconnected if it goes away.
+    while main.shutdown.is_set() == False:
+
+        try:
+            icesta = main.Service['ICESTA'].value
+
+            if icesta == '3':                       # Initializing: probe
+                if main.client.probe():
+                    main.Service['ICESTA'].set('Connected')
+                    print('connected to %s' % main.client.base_url)
+                else:
+                    print('cannot reach %s; staying disconnected'
+                          % main.client.base_url)
+                    main.Service['ICESTA'].set('Disconnected')
+
+            elif icesta == '1':                     # Connected: verify
+                if main.client.probe() == False:
+                    print('lost contact with the keckogeco server')
+                    main.Service['ICESTA'].set('Disconnected')
+
+        except Exception:
+            exception = traceback.format_exception(*sys.exc_info())
+            sys.stderr.write('\n'.join(exception) + '\n')
+
+        try:
+            main.shutdown.wait(5)
+        except (KeyboardInterrupt, SystemExit):
+            break
+
+## End of main()
+
+
+main.config = configparser.ConfigParser()
+main.config_file = None
+main.dispatcher = 1
+main.client = None
+main.Service = None
+main.shutdown = threading.Event()
+main.version = '$Revision: 1 $'.split()[1]
+
+
+def shutdown(*ignored):
+    main.shutdown.set()
+
+    if main.Service != None:
+        status = "DISP%dSTA" % (main.dispatcher)
+        main.Service[status].set('shutting down')
+        main.Service.shutdown()
+        main.Service = None
+
+
+#
+# #
+# HTTP client. Standard library only; kroot Python may lack requests.
+# #
+#
+
+class HttpClient:
+
+    def __init__(self, base_url, api_token='', timeout=5.0):
+        self.base_url = base_url.rstrip('/')
+        self.api_token = api_token
+        self.timeout = timeout
+        self.ncalls = 0
+        self.lock = threading.Lock()
+        # A short-lived bulk snapshot so the many slow-period keyword
+        # updates don't each cost an HTTP round trip.
+        self._snapshot = {}
+        self._snapshot_time = 0.0
+        self._snapshot_maxage = 2.0
+
+    def _request(self, path, data=None, method='GET'):
+        url = self.base_url + path
+        headers = {'Accept': 'application/json'}
+        if self.api_token:
+            headers['Authorization'] = 'Bearer ' + self.api_token
+        body = None
+        if data is not None:
+            body = json.dumps(data).encode('utf-8')
+            headers['Content-Type'] = 'application/json'
+        request = urllib.request.Request(url, data=body, headers=headers,
+                                         method=method)
+        with self.lock:
+            self.ncalls += 1
+        with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+
+    def probe(self):
+        ''' True if the keckogeco server answers /health. '''
+        try:
+            health = self._request('/api/v1/health')
+            return health.get('status') == 'ok'
+        except Exception:
+            return False
+
+    def read_keyword(self, name):
+        ''' Current value of one keyword, served from a <=2 s old bulk
+            snapshot when possible. '''
+        now = time.time()
+        with self.lock:
+            fresh = (now - self._snapshot_time) < self._snapshot_maxage
+            if fresh and name in self._snapshot:
+                return self._snapshot[name]['value']
+
+        snapshot = self._request('/api/v1/keywords')
+        with self.lock:
+            self._snapshot = snapshot
+            self._snapshot_time = time.time()
+        if name in snapshot:
+            return snapshot[name]['value']
+
+        # Not in the cache (never read server-side yet): force one read,
+        # and remember it so back-to-back polls don't re-fetch.
+        answer = self._request('/api/v1/keywords/%s?fresh=1' % name)
+        with self.lock:
+            self._snapshot[name] = {'value': answer['value']}
+        return answer['value']
+
+    def write_keyword(self, name, value):
+        ''' PUT one keyword; raises on validation errors (HTTP 400),
+            busy transitions (409), and instrument failures (502) so DFW
+            reports ERR_WRITE_SW_ERROR to the operator. '''
+        try:
+            self._request('/api/v1/keywords/%s' % name,
+                          data={'value': value}, method='PUT')
+        except urllib.error.HTTPError as error:
+            detail = ''
+            try:
+                detail = json.loads(error.read().decode('utf-8')).get('detail', '')
+            except Exception:
+                pass
+            raise RuntimeError('write %s=%s rejected (HTTP %d): %s'
+                               % (name, value, error.code, detail))
+
+
+#
+# #
+# Keyword plumbing: one mixin provides the HTTP-backed read/write and the
+# fast-after-write polling that the ICE keywords had.
+# #
+#
+
+def format_value(value):
+    ''' JSON value -> the string form DFW keywords expect. '''
+    if value is None:
+        return None
+    if value is True:
+        return '1'
+    if value is False:
+        return '0'
+    if isinstance(value, (list, tuple)):
+        return ' '.join(str(item) for item in value)
+    return str(value)
+
+
+class HttpKeyword:
+
+    fast_period = 3
+    slow_period = 120
+
+    def http_setup(self):
+        self.rapid_checks = 0
+        try:
+            slow_period = self.serverside('period')
+        except ValueError:
+            pass
+        else:
+            self.slow_period = int(slow_period)
+        self.period(self.slow_period)
+
+    def speed_up(self, checks=2):
+        self.rapid_checks = checks
+        self.period(self.fast_period)
+
+    def slow_down(self):
+        self.rapid_checks = 0
+        self.period(self.slow_period)
+
+    def read(self):
+        if main.Service['ICESTA'].value != '1':
+            return None                      # disconnected: leave stale
+        value = main.client.read_keyword(self.name)
+        return format_value(value)
+
+    def write(self, value):
+        main.client.write_keyword(self.name, value)
+        self.speed_up()                      # poll fast to reflect the write
+
+    def postwrite(self, value):
+        self.update()                        # immediate read-after-write
+
+    def update(self, *args, **kwargs):
+        if self.rapid_checks == 1:
+            self.slow_down()
+        elif self.rapid_checks > 1:
+            self.rapid_checks -= 1
+
+        try:
+            self.preread()
+            value = self.read()
+        except Exception as error:
+            print('update of %s failed: %s' % (self.name, error))
+            return
+        if value is not None:
+            self.postread(value)
+
+
+class HttpBoolean(HttpKeyword, DFW.Keyword.Boolean):
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.Boolean.__init__(self, *args, **kwargs)
+        self.http_setup()
+
+class HttpDouble(HttpKeyword, DFW.Keyword.Double):
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.Double.__init__(self, *args, **kwargs)
+        self.http_setup()
+
+class HttpDoubleArray(HttpKeyword, DFW.Keyword.DoubleArray):
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.DoubleArray.__init__(self, *args, **kwargs)
+        self.http_setup()
+
+class HttpEnumerated(HttpKeyword, DFW.Keyword.Enumerated):
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.Enumerated.__init__(self, *args, **kwargs)
+        self.http_setup()
+
+class HttpInteger(HttpKeyword, DFW.Keyword.Integer):
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.Integer.__init__(self, *args, **kwargs)
+        self.http_setup()
+
+class HttpString(HttpKeyword, DFW.Keyword.String):
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.String.__init__(self, *args, **kwargs)
+        self.http_setup()
+
+
+HTTP_KEYWORD_TYPES = {
+    'boolean': HttpBoolean,
+    'double': HttpDouble,
+    'double array': HttpDoubleArray,
+    'enumerated': HttpEnumerated,
+    'integer': HttpInteger,
+    'string': HttpString,
+}
+
+
+class IcestaKeyword(DFW.Keyword.Enumerated):
+    ''' Connection-control keyword; handled locally, never proxied. '''
+
+    def write(self, value):
+        # The main loop reacts to '3' (probe + connect) and '1'/'2'.
+        pass
+
+
+class Icesta2Keyword(DFW.Keyword.Boolean):
+    ''' Secondary connection flag: 1 while the server is reachable. '''
+
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.Boolean.__init__(self, *args, **kwargs)
+        self.period(30)
+
+    def update(self, *args, **kwargs):
+        connected = main.Service['ICESTA'].value == '1'
+        self.set('1' if connected and main.client.probe() else '0')
+
+
+class NcallKeyword(DFW.Keyword.Integer):
+    ''' Number of HTTP calls made to the laptop server. '''
+
+    def __init__(self, *args, **kwargs):
+        DFW.Keyword.Integer.__init__(self, *args, **kwargs)
+        self.period(30)
+
+    def update(self, *args, **kwargs):
+        self.set(str(main.client.ncalls))
+
+
+class StopKeyword(DFW.Keyword.Boolean):
+
+    def write(self, value):
+        if value == '1':
+            main.shutdown.set()
+
+
+def setupKeywords(service):
+
+    prefix = 'DISP' + str(main.dispatcher)
+    DFW.Keyword.Enumerated(prefix + 'STA', service, 'initializing')
+    StopKeyword(prefix + 'STOP', service, False)
+    DFW.Keyword.String(prefix + 'VER', service, main.version)
+    NcallKeyword('ICENCALL', service, 0)
+
+    # Locally-handled connection keywords.
+    local = {'ICESTA', 'ICESTA2', 'ICENCALL'}
+    IcestaKeyword('ICESTA', service, 'Disconnected')
+    Icesta2Keyword('ICESTA2', service, False)
+
+    # Every other keyword in the LFC bundle is proxied over HTTP. Parsing
+    # the XML directly like this is undesirable, but it keeps the bundle
+    # as the single source of truth (as the ICE dispatcher did).
+    lfc_bundle = service.xml.bundles['lfc']
+
+    for keyword_node in lfc_bundle.childNodes:
+        if keyword_node.localName != 'keyword':
+            continue
+
+        keyword_name = keyword_node.ktlxml_keyword_name
+        if keyword_name in local:
+            continue
+        keyword_attributes = service.xml.attributes(keyword_name)
+        keyword_type = keyword_attributes['type']
+
+        keyword_class = HTTP_KEYWORD_TYPES.get(keyword_type)
+        if keyword_class is None:
+            raise ValueError('unhandled keyword type in LFC bundle: '
+                             + keyword_type)
+        keyword_class(keyword_name, service)
+
+
+#
+# #
+# Helper functions.
+# #
+#
+
+def usage(verbose=False):
+    ''' How to invoke this program. '''
+
+    output = "Usage: %s -c config_file [options]" % (sys.argv[0])
+
+    if verbose == False:
+        print(output)
+        return
+
+    print(output + '''
+
+Required flags:
+
+    -c filename         Overall configuration file location
+    --config=filename       Default: None
+
+Optional flags:
+
+    -h,-?            Print verbose help (this output)
+    --help
+''')
+
+
+def parseCommandLine():
+
+    arguments = sys.argv[1:]
+    help = len(arguments) == 0
+
+    flags = '?c:h'
+    long_options = ('config=', 'help')
+    options, arguments = getopt.gnu_getopt(arguments, flags, long_options)
+
+    for option, value in options:
+        if option == '-?' or option == '-h' or option == '--help':
+            help = True
+        elif option == '-c' or option == '--config':
+            main.config_file = validateFile(value)
+
+    if help == True:
+        usage(verbose=True)
+        sys.exit(0)
+
+
+def parseConfigFile():
+
+    if main.config_file is None:
+        return
+
+    main.config.read(main.config_file)
+
+    dispatcher = main.config.get('main', 'dispatcher')
+    (service, dispatch, number) = dispatcher.split('_')
+    main.dispatcher = int(number)
+
+
+def checkSanity():
+    ''' Raise exceptions if something is wrong with the runtime
+        configuration. '''
+
+    if main.config_file is None:
+        raise ValueError('no configuration file specified')
+
+    if main.config.has_section('main') == False:
+        raise configparser.NoSectionError('[main]')
+
+    main.config.get('main', 'service')
+    main.config.get('main', 'stdiosvc')
+    main.config.get('main', 'server_url')
+
+
+def validateFile(filename):
+
+    if os.path.isabs(filename) == False:
+        filename = os.path.abspath(filename)
+
+    if os.path.isfile(filename) == False:
+        raise ValueError("file does not exist: '%s'" % (filename))
+
+    return filename
+
+
+if __name__ == '__main__':
+    main()
+
+
+# vim: set expandtab tabstop=8 softtabstop=4 shiftwidth=4 autoindent:
