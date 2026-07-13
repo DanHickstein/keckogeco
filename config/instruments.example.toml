@@ -43,16 +43,22 @@ enabled = false
 driver = "amonics_edfa"
 address = "ASRL13::INSTR"
 name = "Amonics 27 dBm EDFA"
+# Fixed control mode, "ACC" or "APC". Set it: the PM-13/PM-23 units never
+# answer the :MODE:SW query (silent timeout), so without this option the
+# driver probes once at first use and falls back to ACC.
+mode = "APC"
 
 [devices.edfa13]
 driver = "amonics_edfa"
 address = "ASRL4::INSTR"
 name = "Amonics 13 dBm EDFA"
+mode = "ACC"
 
 [devices.edfa23]
 driver = "amonics_edfa"
 address = "ASRL10::INSTR"
 name = "Amonics 23 dBm EDFA"
+mode = "ACC"
 
 [devices.ptamp]
 driver = "pritel_amp"

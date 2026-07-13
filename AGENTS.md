@@ -79,6 +79,14 @@ sessions with Dan pasting output back.
   with the base class's close-reopen-retry — reopening makes the retry a
   "first command" again and the unit never answers (that was the original
   25 s-timeout bug).
+- **Amonics unsupported queries get no reply at all** (silent VISA timeout,
+  never an error string). Probed on the rack 2026-07-12: the PM-13/PM-23
+  never answer `:MODE:SW:CHn?` (the PM-27 does), and every unit ignores
+  `:DRIV:<mode>:CUR/STAT` queries for the mode that is *not* active. The
+  control mode is fixed in config (`mode = "ACC"/"APC"` per device block;
+  edfa27 runs APC, edfa13/23 ACC) and cached in the driver — re-querying it
+  through the reconnect-once path cost a ~10 s reconnect storm per unit on
+  every poll cycle.
 - **The RF oscillator PSU is Instek GPD-4303S channel 2, not 1** (15 V / 3 A).
   The RF amp is the GPP-1326 channel 1 (30 V / 4.2 A). Channel numbers come
   from the `channel` option in the device config, read via `psu_channel()`.

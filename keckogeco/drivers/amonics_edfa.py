@@ -13,6 +13,12 @@ driver:
 * Setpoints above the unit's maximum are clamped to the maximum.
 * Master activation must not be enabled while the channel is off.
 * Some units do not support the input-power monitor query.
+* Unsupported queries get **no reply at all** (a VISA timeout, not an error
+  string). Rack probe 2026-07-12: the PM-13 and PM-23 never answer
+  ``:MODE:SW:CHn?``, and every unit ignores ``:DRIV:<mode>:...`` queries for
+  whichever mode is *not* active. The control mode is therefore taken from
+  the ``mode`` config option (or probed at most once) and cached — see
+  :meth:`AmonicsEDFA.mode`.
 """
 
 from __future__ import annotations
@@ -48,12 +54,19 @@ class AmonicsEDFA(Instrument):
     transport : Transport
     name : str
         Instance name, e.g. ``"edfa27"``.
+    mode : str, optional
+        Control mode of the unit, ``"ACC"`` or ``"APC"`` (the ``mode`` key
+        in the device's config block). The rack units run in a fixed mode
+        (edfa27 in APC, edfa13/edfa23 in ACC), and the PM-13/PM-23 never
+        answer the mode query, so configuring it avoids probing entirely.
 
     Notes
     -----
     All currents are in mA and powers in mW, matching the front panel.
     Channel arguments default to 1; only some units have a second channel.
     """
+
+    DRIVER_OPTIONS: ClassVar[tuple[str, ...]] = ("mode",)
 
     TRANSPORT_DEFAULTS: ClassVar[dict] = {
         # 5 s (not the old 25 s): the units answer within tens of ms when
@@ -68,6 +81,15 @@ class AmonicsEDFA(Instrument):
     STATE_CHANGE_TIMEOUT_S: ClassVar[float] = 3.0
     #: wake-up attempts after opening the port (see _configure)
     WAKEUP_TRIES: ClassVar[int] = 3
+
+    def __init__(self, transport, name: str = "", mode: str | None = None):
+        super().__init__(transport, name)
+        if mode is not None:
+            mode = str(mode).upper()
+            if mode not in ("ACC", "APC"):
+                raise ValueError(f"{self.name}: mode option must be 'ACC' or 'APC', got {mode!r}")
+        self._configured_mode = mode
+        self._mode_cache: dict[int, str] = {}
 
     def _configure(self) -> None:
         """Wake the unit after opening the port.
@@ -139,20 +161,50 @@ class AmonicsEDFA(Instrument):
     def mode(self, channel: int = 1) -> str:
         """Control mode, ``"ACC"`` (current) or ``"APC"`` (power).
 
-        The AEDFA-PA-30-B-FA at Keck does not answer the mode query; the old
-        driver fell back to ACC and we preserve that.
+        Resolved once per channel and cached: last :meth:`set_mode` value,
+        else the ``mode`` config option, else a single ``:MODE:SW`` query.
+        The PM-13/PM-23 at Keck never answer that query (silent timeout,
+        rack probe 2026-07-12), so a unit that stays silent falls back to
+        ACC — but only after ``:CAL:SYS:MODEL?`` confirms it is alive, so a
+        dead port cannot cache the wrong mode. Re-querying through the
+        normal reconnect-once path is exactly what caused the old
+        10-second reconnect storm on every poll, hence the raw
+        ``transport.query`` here.
         """
-        try:
-            reply = self.query(f":MODE:SW:CH{channel}?").upper()
-            return reply if reply in ("ACC", "APC") else "ACC"
-        except ResponseError:
-            return "ACC"
+        with self.lock:
+            cached = self._mode_cache.get(channel)
+            if cached is not None:
+                return cached
+            if self._configured_mode is not None:
+                self._mode_cache[channel] = self._configured_mode
+                return self._configured_mode
+            if not self.transport.is_open:
+                self.connect()
+            try:
+                reply = self.transport.query(f":MODE:SW:CH{channel}?").strip().upper()
+            except Exception:  # noqa: BLE001 - silent unit; fall back below
+                reply = ""
+            if reply not in ("ACC", "APC"):
+                self.query(":CAL:SYS:MODEL?")  # raises if the unit is really gone
+                self.log.info(
+                    "%s: no answer to :MODE:SW:CH%d?; assuming ACC (set the "
+                    "'mode' config option to silence this probe)",
+                    self.name,
+                    channel,
+                )
+                reply = "ACC"
+            self._mode_cache[channel] = reply
+            return reply
 
     def set_mode(self, mode: str, channel: int = 1) -> None:
         mode = str(mode).upper()
         if mode not in ("ACC", "APC"):
             raise ValueError(f"Mode must be 'ACC' or 'APC', got {mode!r}")
         self.write(f":MODE:SW:CH{channel} {mode}")
+        # no readback: the PM units never answer the mode query, so trust
+        # the command (a wrong cache would revive the timeout storm via the
+        # inactive-mode CUR/STAT queries — only ever command a supported mode)
+        self._mode_cache[channel] = mode
 
     # ------------------------------------------------------------- setpoint
 

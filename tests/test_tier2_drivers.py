@@ -63,6 +63,23 @@ def test_voa_unknown_attenuation_is_nan():
     assert math.isnan(voa.attenuation_dB)
 
 
+def test_voa_not_homed_state_pins_until_set():
+    """Once 'unknown' is seen, reads skip the hardware (the rack VOAs are
+    unused; don't spend poll time on them); a set re-enables real reads."""
+    import math
+
+    voa = make("oz_voa", "OZOpticsVOA", "voa1550", "ASRL7::INSTR")
+    real_query = voa.transport.responses["A?"]
+    voa.transport.responses["A?"] = "Atten:unknown"
+    assert math.isnan(voa.attenuation_dB)
+    sent_after_first = len(voa.transport.sent)
+    assert math.isnan(voa.attenuation_dB)  # pinned: no further traffic
+    assert len(voa.transport.sent) == sent_after_first
+    voa.transport.responses["A?"] = real_query
+    voa.attenuation_dB = 3.5
+    assert voa.attenuation_dB == pytest.approx(3.5)
+
+
 def test_amonics_wakeup_retries_on_same_connection():
     """PM-13/PM-23 drop the first command after port-open; the wake-up
     handshake must resend on the same open transport."""

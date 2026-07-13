@@ -77,6 +77,46 @@ def test_sim_state_is_per_instance():
     assert b.channel_state() == "OFF"
 
 
+def test_mode_from_config_option_skips_query():
+    """A configured mode is used as-is; the mode query is never sent."""
+    cfg = DeviceConfig(
+        key="edfa27", driver="amonics_edfa", address="A", options={"mode": "APC"}
+    )
+    inst = AmonicsEDFA.from_config(cfg, sim=True)
+    inst.connect()
+    assert inst.mode() == "APC"
+    assert inst.set_setpoint(50) == pytest.approx(50.0)
+    assert ":DRIV:APC:CUR:CH1 50.0" in inst.transport.sent
+    assert not any(":MODE:SW:CH1?" in c for c in inst.transport.sent)
+
+
+def test_mode_option_validated():
+    with pytest.raises(ValueError, match="ACC"):
+        AmonicsEDFA(SimTransport({}), "edfa-test", mode="AGC")
+
+
+def test_mode_falls_back_to_acc_when_query_unanswered():
+    """PM-13/PM-23 behavior: no answer to :MODE:SW -> ACC, probed only once."""
+    responses = {
+        k: v
+        for k, v in AmonicsEDFA.sim_responses().items()
+        if not (hasattr(k, "pattern") and "MODE" in k.pattern)
+    }
+    inst = AmonicsEDFA(SimTransport(responses, default=""), "edfa-test")
+    inst.connect()
+    assert inst.mode() == "ACC"
+    sent_after_first = len(inst.transport.sent)
+    assert inst.mode() == "ACC"  # cached: no further traffic
+    assert len(inst.transport.sent) == sent_after_first
+
+
+def test_set_mode_updates_cached_mode(edfa):
+    assert edfa.mode() == "ACC"
+    edfa.set_mode("APC")
+    assert edfa.mode() == "APC"
+    assert ":MODE:SW:CH1 APC" in edfa.transport.sent
+
+
 def test_unit_conversion_amps_to_mA():
     """A unit reporting in A must be converted to mA."""
     responses = AmonicsEDFA.sim_responses()

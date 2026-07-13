@@ -560,6 +560,8 @@ class LFCController:
 
         The expected current draw depends on whether the oscillator is
         driving it: ~4.2 A seeded, ~0.7 A idling (old monitor's numbers).
+        Seeded tolerance is ±0.5 A: the rack unit draws 3.87 A (measured
+        2026-07-12), comfortably healthy but outside the old ±0.15 A.
         """
         psu = self.device("rf_amp_psu")
         channel = self.psu_channel("rf_amp_psu")
@@ -570,8 +572,8 @@ class LFCController:
         osc_on = False
         if "rf_osc_psu" in self.devices:
             osc_on = self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu"))
-        expect_amps = 4.2 if osc_on else 0.7
-        ok = abs(volts - 30) <= 1 and abs(amps - expect_amps) <= 0.15
+        expect_amps, tol_amps = (4.2, 0.5) if osc_on else (0.7, 0.15)
+        ok = abs(volts - 30) <= 1 and abs(amps - expect_amps) <= tol_amps
         if not ok:
             log.error(
                 "RF amplifier out of range: %.2f V / %.3f A (expect 30 V, ~%.1f A draw)",
