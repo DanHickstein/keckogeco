@@ -70,17 +70,18 @@ class OZOpticsVOA(Instrument):
         After a power cycle the unit answers ``Atten:unknown`` until the
         first attenuation set (rack observation, 2026-07-12) — that's a
         real state, not an error, and it can only change via a set. So the
-        first such reply logs one warning and pins the not-homed state:
-        further reads return NaN with no hardware I/O (the rack VOAs are
-        currently unused; don't spend poll time or log lines on them)
-        until :attr:`attenuation_dB` is set.
+        first such reply logs one debug-level hint and pins the not-homed
+        state: further reads return NaN with no hardware I/O (the rack VOAs
+        are currently unused; don't spend poll time or log lines on them)
+        until :attr:`attenuation_dB` is set. NaN in the status output is
+        the visible signal; the log stays quiet.
         """
         if self._not_homed:
             return math.nan
         reply = self._ask("A?")  # e.g. 'Atten:12.00(dB)' or 'Atten:unknown'
         if "unknown" in reply.casefold():
             self._not_homed = True
-            self.log.warning(
+            self.log.debug(
                 "%s: attenuation unknown (not homed since power-up); reads "
                 "return NaN without polling the unit until an attenuation "
                 "is set once to initialize it",

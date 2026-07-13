@@ -91,8 +91,16 @@ sessions with Dan pasting output back.
   The RF amp is the GPP-1326 channel 1 (30 V / 4.2 A). Channel numbers come
   from the `channel` option in the device config, read via `psu_channel()`.
 - **OZ Optics VOAs answer `Atten:unknown` until their first move after
-  power-up.** That is a real state, not a protocol error: return NaN with a
-  logged hint (already implemented), never raise.
+  power-up.** That is a real state, not a protocol error: return NaN, never
+  raise. Only a set can home the unit, so the driver pins the not-homed
+  state (no repeated hardware reads, one debug-level hint) until an
+  attenuation is set — the VOAs are unused on the rack; NaN in status
+  output is the signal, the log stays quiet.
+- **`python -m keckogeco.discovery` rewrites `[devices.*]` blocks**; it must
+  pass through curated option keys (`mode`, `channel`, `baud_rate`, ...) and
+  `enabled = false` from the existing config — a 2026-07-12 run silently
+  dropped the EDFA `mode` and the RF oscillator PSU's `channel = 2` before
+  `save_config()` learned to preserve them.
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.
