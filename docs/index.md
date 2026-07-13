@@ -1,8 +1,7 @@
 # keckogeco
 
 Control system for the **Keck Observatory GHz Electro-Optic Comb** — the
-laser frequency comb (LFC) deployed at the W. M. Keck Observatory,
-maintained by [Octave Photonics](https://www.octavephotonics.com).
+laser frequency comb (LFC) deployed at the W. M. Keck Observatory.
 
 `keckogeco` runs on the comb's Windows control laptop, owns the ~20 rack
 instruments, and exposes them through a PyQt engineering GUI, an HTTP/REST

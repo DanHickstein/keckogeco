@@ -8,7 +8,7 @@ making changes. Task list lives in the
 ## What this project is
 
 Control system for the laser frequency comb (LFC) at W. M. Keck Observatory,
-maintained by Dan Hickstein (Octave Photonics). It is a ground-up rewrite of
+maintained by Dan Hickstein. It is a ground-up rewrite of
 the original Caltech [KeckLFC](https://github.com/kester2015/KeckLFC) code;
 that old repo is a **read-only reference** — port logic from it, never its
 style (no hardcoded addresses, no prints, no connect/act/disconnect churn).

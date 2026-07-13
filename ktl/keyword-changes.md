@@ -63,7 +63,7 @@ once those VOA ports are confirmed by discovery. Everything else is
 bound.
 
 Note: the Rb-lock automation from the old system is **not planned** for
-the rewrite (per Octave, its implementation is undecided).
+the rewrite (per the LFC team, its implementation is undecided).
 
 Safety-behavior change: the old `LFC_CHECK_STATUS` executed `CLOSE_ALL`
 (full comb shutdown) from inside the status read if the Pendulum counter

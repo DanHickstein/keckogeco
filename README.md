@@ -13,7 +13,7 @@ power supplies, diagnostics) and exposes them three ways:
 - through that API, the Keck-side **KTL keyword service** (`comb`) via a DFW
   dispatcher running on the observatory's Linux hosts (see `ktl/`).
 
-This package is a adapted from the original Caltech
+This package is adapted from the original Caltech
 [KeckLFC](https://github.com/kester2015/KeckLFC) control code.
 
 ## Install

@@ -3,7 +3,7 @@
 import keckogeco
 
 project = "keckogeco"
-copyright = "2026, Octave Photonics"
+copyright = "2026, the keckogeco developers"
 author = "Daniel Hickstein"
 version = release = keckogeco.__version__
 

@@ -3,7 +3,7 @@
 Hand-built panels assembled from schema-driven widgets. The Comb State
 panel mirrors the OFF / STANDBY / FULL COMB + status-lamp layout of the
 old tkinter GUI (``KTL server/server_with_gui.py``) that Keck operators
-already know; the rest is the full-control surface for Octave.
+already know; the rest is the full-control surface for the LFC engineers.
 """
 
 from __future__ import annotations
