@@ -4,6 +4,9 @@
 :maxdepth: 1
 
 installation
+menlo_flattener
+keck_operations
+locking
 ```
 
 ```{note}

@@ -11,7 +11,9 @@ keyword service `comb`.
 ```{toctree}
 :maxdepth: 2
 
+overview
 user_guide/index
+hardware/index
 instruments/index
 keck/index
 api/index
