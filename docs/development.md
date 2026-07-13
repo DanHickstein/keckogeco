@@ -1,5 +1,10 @@
 # Development
 
+Setting up an actual control station — vendor driver stacks, GPIB, the
+WaveShaper software chain — is covered in
+{doc}`user_guide/installation`. This page is about developing the
+package itself, which needs none of that.
+
 ## Setup
 
 ```bash
