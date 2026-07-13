@@ -227,7 +227,9 @@ def device_summary_lines(config: Config) -> list[str]:
         rows.append((dev.key, dev.driver, dev.address, options, note))
     widths = [max((len(row[i]) for row in rows), default=0) for i in range(4)]
     return [
-        "  ".join([*(cell.ljust(w) for cell, w in zip(row[:4], widths, strict=True)), row[4]]).rstrip()
+        "  ".join(
+            [*(cell.ljust(w) for cell, w in zip(row[:4], widths, strict=True)), row[4]]
+        ).rstrip()
         for row in rows
     ]
 
