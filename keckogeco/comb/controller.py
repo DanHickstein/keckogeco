@@ -382,10 +382,12 @@ class LFCController:
             presets["LFC_EDFA27_AUTO_ON"] = lambda: self._edfa_default(
                 "edfa27", "APC", 450, turn_on=True
             )
+        # EDFA23 default is 0 mA (not the commissioned 80) while the 23 dB
+        # EDFA is out of service — parked dark even when activated
         if has("edfa23"):
-            presets["LFC_EDFA23_P_DEFAULT"] = lambda: self._edfa_default("edfa23", "ACC", 80)
+            presets["LFC_EDFA23_P_DEFAULT"] = lambda: self._edfa_default("edfa23", "ACC", 0)
             presets["LFC_EDFA23_AUTO_ON"] = lambda: self._edfa_default(
-                "edfa23", "ACC", 80, turn_on=True
+                "edfa23", "ACC", 0, turn_on=True
             )
         if has("rf_amp_psu"):
             presets["LFC_RFAMP_DEFAULT"] = lambda: self._psu_default("rf_amp_psu", 30, 4.2)

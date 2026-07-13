@@ -164,6 +164,21 @@ def test_controller_switch_and_clarity(controller):
     assert controller.read("LFC_CLARITY_ONOFF").value == 1
 
 
+def test_startup_is_passive(controller):
+    """Connecting and binding must never enable emission or push setpoints.
+
+    The Pritel power amp (3.9 A) is the most dangerous switch in the
+    system: it may only come up through an explicit action or keyword
+    write, never as a side effect of starting the server.
+    """
+    assert controller.device("ptamp").pump_on is False
+    assert controller.device("ptamp").pwramp_mA == pytest.approx(0.0)
+    assert controller.device("edfa27").activation is False
+    assert controller.device("edfa23").activation is False
+    for key in ("rf_osc_psu", "rf_amp_psu"):
+        assert controller.device(key).output_on(controller.psu_channel(key)) is False
+
+
 def test_controller_presets_and_monitors(controller):
     # write-1 presets push the commissioned setpoints
     controller.write("LFC_RFOSCI_DEFAULT", "1")

@@ -37,9 +37,21 @@ rewrite makes, for discussion before the dispatcher is redeployed.
   and sending an email; like the rep-rate check, out-of-range now logs an
   error without auto-shutdown (see the safety note below).
 - `*_DEFAULT` / `*_AUTO_ON` presets: write 1 to push the commissioned
-  setpoints (EDFA27 APC 450 mW, EDFA23 ACC 80 mA, RF amp 30 V/4.2 A, RF
-  osc 15 V/3 A, Pritel 600 mA/3.9 A); `AUTO_ON` variants also enable
-  emission. Reads return False (the old handlers returned nothing).
+  setpoints (EDFA27 APC 450 mW, RF amp 30 V/4.2 A, RF osc 15 V/3 A,
+  Pritel 600 mA/3.9 A); `AUTO_ON` variants also enable emission. Reads
+  return False (the old handlers returned nothing). Presets only ever
+  set values — nothing is applied automatically at startup, and the
+  Pritel power amp in particular is only raised by an explicit action
+  or keyword write (driver-level current ramping applies everywhere).
+- **EDFA23 parked at 0 mA (out of service, 2026-07):** the 23 dB EDFA
+  is currently not used in the light path, so `LFC_EDFA23_P_DEFAULT` /
+  `LFC_EDFA23_AUTO_ON` and the minicomb sequence set ACC **0 mA**
+  instead of the commissioned 80 mA, with the 1-10 mW seed gate
+  suspended (meaningless at zero drive). The sequence still activates
+  the channel so the prime-product state code can reach FULL COMB.
+  Restore the 80 mA setpoint and the seed gate when the unit returns
+  to service (`comb/actions.py` and the presets in
+  `comb/controller.py`).
 - `SHOW_ALL_VAL` writes dump the keyword snapshot to the server log
   instead of stdout.
 

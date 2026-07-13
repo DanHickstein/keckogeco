@@ -4,8 +4,11 @@ Ported from ``LFC_SET_STANDBY`` / ``LFC_SET_FULL_COMB`` / ``LFC_SET_OFF`` /
 ``LFC_MINICOMB_AUTO_SETUP`` (``KeckLFC.py:2252-2464``) as ordered,
 abortable step sequences with progress reporting. The numbers (Pritel
 600 mA preamp / 3.9 A power amp, RF amp 30 V 4.2 A, RF osc 15 V 3 A,
-EDFA27 450 mW APC, EDFA23 80 mA ACC, the 1-10 mW input-power gates) are
-commissioning values carried over verbatim.
+EDFA27 450 mW APC, the 1-10 mW input-power gates) are commissioning
+values carried over verbatim. Exception: EDFA23 is parked at ACC 0 mA
+(activated but dark) because the 23 dB EDFA is currently out of service
+— restore its commissioned 80 mA and the seed-power gate when it
+returns (see ktl/keyword-changes.md).
 
 One action runs at a time on the :class:`ActionExecutor`'s thread; while
 it runs, keyword writes are rejected by the server (reads stay allowed).
@@ -234,22 +237,23 @@ def minicomb_auto_setup(controller, ctx: ActionContext) -> None:
     edfa27.activate()
     ctx.sleep(0.5)
 
-    ctx.step("EDFA23: checking seed input power")
-    edfa23 = controller.device("edfa23")
-    input_power = edfa23.input_power_mW()
-    if not 1 < input_power < 10:
-        raise RuntimeError(
-            f"EDFA23 input power {input_power:.2f} mW outside the safe 1-10 mW "
-            "window; aborting minicomb setup"
-        )
-    ctx.step("EDFA23: ACC 80 mA, channel + activation ON")
-    edfa23.set_mode("ACC")
-    ctx.sleep(0.5)
-    edfa23.set_setpoint(80)
-    ctx.sleep(0.5)
-    edfa23.set_channel(True)
-    edfa23.activate()
-    ctx.sleep(0.5)
+    # EDFA23 is out of service: park it at ACC 0 mA but still activated,
+    # so the legacy prime-product state code (which reads the activation
+    # flag) can still reach FULL COMB. No seed gate at zero drive. When
+    # the 23 dB EDFA returns to service, restore the 1-10 mW gate and
+    # the commissioned 80 mA setpoint here.
+    if "edfa23" in controller.devices:
+        ctx.step("EDFA23: parked at ACC 0 mA (out of service), activation ON")
+        edfa23 = controller.device("edfa23")
+        edfa23.set_mode("ACC")
+        ctx.sleep(0.5)
+        edfa23.set_setpoint(0)
+        ctx.sleep(0.5)
+        edfa23.set_channel(True)
+        edfa23.activate()
+        ctx.sleep(0.5)
+    else:
+        ctx.step("EDFA23 skipped (not configured)")
 
     if getattr(controller, "_im_servo", None) is not None:
         ctx.step("running IM bias auto-lock")
