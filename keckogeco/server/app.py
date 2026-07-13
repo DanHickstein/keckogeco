@@ -20,10 +20,10 @@ import logging
 import math
 import threading
 from importlib.metadata import version as pkg_version
+from pathlib import Path
 
 if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
     import sys
-    from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -238,6 +238,12 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
             return {"name": name, **source()}
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Static web status page at / (added last so API routes win). The page
+    # itself is public like /health; its API calls still honor the token.
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=Path(__file__).parent / "web", html=True), name="web")
 
     return app
 

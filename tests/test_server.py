@@ -19,6 +19,15 @@ def client():
         yield test_client
 
 
+def test_web_status_page(client):
+    """The static status page is served at / without auth."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "keckogeco" in response.text
+    assert "/api/v1" in response.text  # the page talks to the versioned API
+
+
 def test_health(client):
     body = client.get("/api/v1/health").json()
     assert body["status"] == "ok"

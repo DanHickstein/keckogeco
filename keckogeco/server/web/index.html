@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>keckogeco — LFC status</title>
+<style>
+  :root {
+    --bg: #14171c; --panel: #1e232b; --border: #313846;
+    --text: #d7dde6; --dim: #8a94a3; --accent: #4a9eda;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  #state-banner {
+    font-size: 19px; font-weight: 700; color: #fff; padding: 6px 22px;
+    border-radius: 5px; background: #9e9e9e; letter-spacing: 1px;
+  }
+  .badge {
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 3px;
+    background: #7b1fa2; color: #fff; display: none;
+  }
+  #conn { margin-left: auto; color: var(--dim); font-size: 12px; text-align: right; }
+  main {
+    display: grid; gap: 14px; padding: 14px 18px; max-width: 1500px; margin: 0 auto;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  }
+  section {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px 14px; min-width: 0;
+  }
+  section h2 {
+    margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--dim); font-weight: 600;
+  }
+  .wide { grid-column: 1 / -1; }
+  /* subsystem lamps */
+  #lamps { display: flex; gap: 18px; flex-wrap: wrap; }
+  .lamp { text-align: center; min-width: 62px; }
+  .lamp .dot {
+    width: 22px; height: 22px; border-radius: 50%; margin: 0 auto 4px;
+    background: #555; border: 2px solid #000;
+  }
+  .lamp.on .dot { background: #43a047; box-shadow: 0 0 8px #43a04788; }
+  .lamp.off .dot { background: #616161; }
+  .lamp.unknown .dot { background: #423d2c; }
+  .lamp span { font-size: 11px; color: var(--dim); }
+  /* actions */
+  #actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    background: #2b3442; color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 8px 14px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.danger { background: #4a2626; }
+  #action-progress { color: var(--accent); font-size: 13px; width: 100%; min-height: 1.2em; }
+  #action-progress.error { color: #ef5350; }
+  /* telemetry table */
+  table { border-collapse: collapse; width: 100%; }
+  td, th { padding: 3px 8px; text-align: left; font-size: 13px; }
+  td.val { font-variant-numeric: tabular-nums; text-align: right; }
+  td.units { color: var(--dim); width: 3.5em; }
+  tr:nth-child(odd) td { background: #ffffff08; }
+  .stale { color: var(--dim); }
+  canvas { width: 100%; height: 240px; display: block; }
+  footer { padding: 8px 18px 16px; color: var(--dim); font-size: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>keckogeco</h1>
+  <div id="state-banner">—</div>
+  <span class="badge" id="sim-badge">SIM</span>
+  <div id="conn">connecting…</div>
+</header>
+
+<main>
+  <section class="wide">
+    <h2>Subsystems</h2>
+    <div id="lamps"></div>
+  </section>
+
+  <section class="wide">
+    <h2>Actions</h2>
+    <div id="actions">
+      <button data-action="set_standby">Go to STANDBY</button>
+      <button data-action="set_full_comb">Go to FULL COMB</button>
+      <button data-action="set_off" class="danger">Turn OFF</button>
+      <button id="abort" class="danger" style="display:none">Abort</button>
+      <div id="action-progress"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Amplifiers</h2>
+    <table id="t-amps"></table>
+  </section>
+
+  <section>
+    <h2>RF chain &amp; seed</h2>
+    <table id="t-rf"></table>
+  </section>
+
+  <section>
+    <h2>Temperatures</h2>
+    <table id="t-temps"></table>
+  </section>
+
+  <section class="wide">
+    <h2>Temperature history</h2>
+    <canvas id="temp-chart" height="240"></canvas>
+  </section>
+
+  <section class="wide" id="spectrum-box" style="display:none">
+    <h2>OSA spectrum</h2>
+    <canvas id="spectrum" height="240"></canvas>
+  </section>
+</main>
+
+<footer>
+  Read-mostly status page; full control lives in the engineering GUI.
+  API: <a href="/api/v1/health">/api/v1/health</a>
+</footer>
+
+<script>
+"use strict";
+const API = "/api/v1";
+let token = localStorage.getItem("keckogeco_token") || "";
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers);
+  if (token) opts.headers["Authorization"] = "Bearer " + token;
+  const resp = await fetch(API + path, opts);
+  if (resp.status === 401) {
+    const entered = prompt("API token required:");
+    if (entered) {
+      token = entered;
+      localStorage.setItem("keckogeco_token", token);
+      return api(path, opts);
+    }
+  }
+  return resp;
+}
+
+/* ---------------------------------------------------------------- header */
+const STATE_COLORS = {
+  "FULL COMB": "#2e7d32", "STANDBY": "#f9a825", "OFF": "#616161",
+  "FAULT": "#c62828", "UNKNOWN": "#9e9e9e", "TRANSITIONING": "#1565c0",
+};
+const LAMPS = [
+  ["rf_oscillator", "RF osc"], ["rf_amplifier", "RF amp"],
+  ["edfa23", "EDFA23"], ["edfa27", "EDFA27"],
+  ["ptamp", "Pritel"], ["rep_rate", "Rep rate"],
+];
+const lampsDiv = document.getElementById("lamps");
+for (const [key, label] of LAMPS) {
+  const div = document.createElement("div");
+  div.className = "lamp unknown";
+  div.id = "lamp-" + key;
+  div.innerHTML = `<div class="dot"></div><span>${label}</span>`;
+  lampsDiv.appendChild(div);
+}
+
+function renderState(s) {
+  const banner = document.getElementById("state-banner");
+  banner.textContent = s.state;
+  banner.style.background = STATE_COLORS[s.state] || "#9e9e9e";
+  document.getElementById("sim-badge").style.display = s.sim ? "inline" : "none";
+  for (const [key] of LAMPS) {
+    const v = s.subsystems[key];
+    const el = document.getElementById("lamp-" + key);
+    el.className = "lamp " + (v === true ? "on" : v === false ? "off" : "unknown");
+  }
+  const prog = document.getElementById("action-progress");
+  const abortBtn = document.getElementById("abort");
+  const a = s.action;
+  const running = a && a.running;
+  for (const b of document.querySelectorAll("#actions button[data-action]"))
+    b.disabled = !!running;
+  abortBtn.style.display = running ? "inline" : "none";
+  prog.className = "";
+  if (running) {
+    const steps = a.total_steps ? ` (step ${a.step}/${a.total_steps})` : "";
+    prog.textContent = `${a.name}: ${a.message}${steps}`;
+  } else if (a && a.error) {
+    prog.className = "error";
+    prog.textContent = `${a.name} failed: ${a.error}`;
+  } else if (a && a.aborted) {
+    prog.textContent = `${a.name} aborted`;
+  } else if (a && a.finished) {
+    prog.textContent = `${a.name} finished`;
+  } else {
+    prog.textContent = "";
+  }
+  const offline = Object.keys(s.devices_offline || {}).length;
+  document.getElementById("conn").textContent =
+    `${s.devices_online.length} devices online` +
+    (offline ? `, ${offline} offline` : "") +
+    ` — updated ${new Date().toLocaleTimeString()}`;
+}
+
+/* --------------------------------------------------------------- actions */
+for (const btn of document.querySelectorAll("#actions button[data-action]")) {
+  btn.addEventListener("click", async () => {
+    const action = btn.dataset.action;
+    if (!confirm(`Run ${action}?`)) return;
+    const resp = await api(`/actions/${action}`, { method: "POST" });
+    if (resp.status === 409) {
+      alert("Another action is already running.");
+    } else if (!resp.ok) {
+      alert(`Failed to start ${action}: HTTP ${resp.status}`);
+    }
+    pollState();
+  });
+}
+document.getElementById("abort").addEventListener("click", async () => {
+  if (!confirm("Abort the running action?")) return;
+  await api("/actions/current", { method: "DELETE" });
+  pollState();
+});
+
+/* ------------------------------------------------------------- telemetry */
+const TABLES = {
+  "t-amps": [
+    ["LFC_EDFA27_P", "EDFA27 power"],
+    ["LFC_EDFA27_ONOFF", "EDFA27 emission"],
+    ["LFC_EDFA23_P", "EDFA23 power"],
+    ["LFC_EDFA23_ONOFF", "EDFA23 emission"],
+    ["LFC_PTAMP_PRE_P", "Pritel preamp"],
+    ["LFC_PTAMP_I", "Pritel power amp"],
+    ["LFC_PTAMP_OUT", "Pritel output"],
+    ["LFC_PTAMP_LATCH", "Interlock latch"],
+  ],
+  "t-rf": [
+    ["LFC_RFOSCI_V", "RF osc voltage"],
+    ["LFC_RFOSCI_I", "RF osc current"],
+    ["LFC_RFAMP_V", "RF amp voltage"],
+    ["LFC_RFAMP_I", "RF amp current"],
+    ["LFC_IM_BIAS", "IM bias"],
+    ["LFC_IM_RF_ATT", "IM RF attenuator"],
+    ["LFC_RIO_T", "RIO temperature"],
+    ["LFC_RIO_I", "RIO current"],
+  ],
+  "t-temps": [
+    ["LFC_T_RACK_TOP", "Rack top"],
+    ["LFC_T_RACK_MID", "Rack mid"],
+    ["LFC_T_RACK_BOT", "Rack bottom"],
+    ["LFC_T_GLY_RACK_IN", "Glycol in"],
+    ["LFC_T_GLY_RACK_OUT", "Glycol out"],
+    ["LFC_PPLN_T", "PPLN TEC"],
+    ["LFC_WGD_T", "Waveguide TEC"],
+  ],
+};
+
+function fmt(entry) {
+  if (entry == null || entry.value == null) return "—";
+  const v = entry.value;
+  if (typeof v === "boolean") return v ? "ON" : "OFF";
+  if (typeof v === "number" && !Number.isInteger(v)) return v.toFixed(3);
+  if (Array.isArray(v)) return `[${v.length} values]`;
+  return String(v);
+}
+
+function renderTables(kw) {
+  const now = Date.now() / 1000;
+  for (const [tableId, rows] of Object.entries(TABLES)) {
+    const table = document.getElementById(tableId);
+    table.innerHTML = "";
+    for (const [name, label] of rows) {
+      const entry = kw[name];
+      if (entry === undefined) continue; // keyword unbound on this rack
+      const tr = document.createElement("tr");
+      const stale = entry.timestamp && now - entry.timestamp > 120;
+      tr.innerHTML =
+        `<td>${label}</td>` +
+        `<td class="val${stale ? " stale" : ""}">${fmt(entry)}</td>` +
+        `<td class="units">${entry.units || ""}</td>`;
+      table.appendChild(tr);
+    }
+  }
+}
+
+/* --------------------------------------------------- canvas line plotting */
+function drawPlot(canvas, seriesList, opts = {}) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight || 240;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const pad = { l: 52, r: 10, t: 8, b: 22 };
+  const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
+
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (const s of seriesList) {
+    for (let i = 0; i < s.x.length; i++) {
+      const x = s.x[i], y = s.y[i];
+      if (!isFinite(x) || !isFinite(y)) continue;
+      if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+      if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+    }
+  }
+  if (!isFinite(xmin) || xmin === xmax) { xmin = 0; xmax = 1; }
+  if (!isFinite(ymin)) { ymin = 0; ymax = 1; }
+  if (ymin === ymax) { ymin -= 1; ymax += 1; }
+  const yspan = ymax - ymin;
+  ymin -= 0.05 * yspan; ymax += 0.05 * yspan;
+
+  const X = (x) => pad.l + ((x - xmin) / (xmax - xmin)) * pw;
+  const Y = (y) => pad.t + (1 - (y - ymin) / (ymax - ymin)) * ph;
+
+  // grid + y labels
+  ctx.strokeStyle = "#2a313d"; ctx.fillStyle = "#8a94a3";
+  ctx.font = "11px system-ui"; ctx.textAlign = "right";
+  for (let i = 0; i <= 4; i++) {
+    const y = ymin + (i / 4) * (ymax - ymin);
+    ctx.beginPath(); ctx.moveTo(pad.l, Y(y)); ctx.lineTo(w - pad.r, Y(y)); ctx.stroke();
+    ctx.fillText(y.toPrecision(4), pad.l - 6, Y(y) + 4);
+  }
+  // x labels
+  ctx.textAlign = "center";
+  for (let i = 0; i <= 4; i++) {
+    const x = xmin + (i / 4) * (xmax - xmin);
+    const label = opts.xTime ? new Date(x * 1000).toLocaleTimeString() : x.toPrecision(5);
+    ctx.fillText(label, X(x), h - 6);
+  }
+
+  const colors = ["#4a9eda", "#ef8f3a", "#66bb6a", "#ab47bc", "#ef5350", "#26c6da", "#d4e157"];
+  seriesList.forEach((s, si) => {
+    ctx.strokeStyle = colors[si % colors.length];
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < s.x.length; i++) {
+      if (!isFinite(s.y[i])) { started = false; continue; }
+      const px = X(s.x[i]), py = Y(s.y[i]);
+      if (started) ctx.lineTo(px, py); else { ctx.moveTo(px, py); started = true; }
+    }
+    ctx.stroke();
+    if (s.label) {
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.textAlign = "left";
+      ctx.fillText(s.label, pad.l + 8 + si * 92, pad.t + 12);
+    }
+  });
+}
+
+/* -------------------------------------------------- temperature history */
+const TEMP_KEYWORDS = [
+  ["LFC_T_RACK_MID", "rack"], ["LFC_T_GLY_RACK_IN", "glycol in"],
+  ["LFC_T_GLY_RACK_OUT", "glycol out"], ["LFC_PPLN_T", "PPLN"],
+  ["LFC_WGD_T", "waveguide"],
+];
+const history = new Map(); // name -> {x: [], y: []}
+const HISTORY_S = 30 * 60;
+
+function recordTemps(kw) {
+  const now = Date.now() / 1000;
+  for (const [name] of TEMP_KEYWORDS) {
+    const entry = kw[name];
+    if (!entry || typeof entry.value !== "number") continue;
+    let h = history.get(name);
+    if (!h) { h = { x: [], y: [] }; history.set(name, h); }
+    h.x.push(now); h.y.push(entry.value);
+    while (h.x.length && h.x[0] < now - HISTORY_S) { h.x.shift(); h.y.shift(); }
+  }
+  const series = TEMP_KEYWORDS
+    .filter(([name]) => history.has(name))
+    .map(([name, label]) => ({ ...history.get(name), label }));
+  if (series.length) drawPlot(document.getElementById("temp-chart"), series, { xTime: true });
+}
+
+/* --------------------------------------------------------------- spectra */
+let hasSpectra = null;
+async function pollSpectrum() {
+  try {
+    if (hasSpectra === null) {
+      const resp = await api("/arrays");
+      hasSpectra = resp.ok && (await resp.json()).arrays.includes("osa_spectrum");
+    }
+    if (!hasSpectra) return;
+    const resp = await api("/arrays/osa_spectrum");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    document.getElementById("spectrum-box").style.display = "block";
+    drawPlot(document.getElementById("spectrum"), [{ x: data.x, y: data.y, label: "OSA" }]);
+  } catch (e) { /* offline; state poll reports it */ }
+}
+
+/* --------------------------------------------------------------- polling */
+async function pollState() {
+  try {
+    const [stateResp, kwResp] = await Promise.all([api("/state"), api("/keywords")]);
+    if (stateResp.ok) renderState(await stateResp.json());
+    if (kwResp.ok) {
+      const kw = await kwResp.json();
+      renderTables(kw);
+      recordTemps(kw);
+    }
+  } catch (e) {
+    document.getElementById("conn").textContent = "server unreachable — retrying";
+  }
+}
+
+pollState();
+pollSpectrum();
+setInterval(pollState, 3000);
+setInterval(pollSpectrum, 5000);
+</script>
+</body>
+</html>
