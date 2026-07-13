@@ -793,6 +793,8 @@ def load_existing(config_path: Path) -> dict:
     for key, dev in cfg.devices.items():
         entry = {"driver": dev.driver, "address": dev.address, "device": dev.name}
         entry.update(dev.options)
+        if not dev.enabled:
+            entry["enabled"] = False
         if not str(dev.address).upper().startswith(("GPIB", "USB", "SN")):
             entry.setdefault(
                 "port",
@@ -806,9 +808,30 @@ def load_existing(config_path: Path) -> dict:
     return entries
 
 
+# bookkeeping fields discovery itself maintains, written in canonical order
+_BOOKKEEPING_FIELDS = (
+    "model",
+    "usb_serial",
+    "vid_pid",
+    "adapter",
+    "probe",
+    "match_token",
+    "confidence",
+    "passive",
+    "found_on",
+    "verified_on",
+)
+# entry keys that are internal to a discovery run and never belong in the file
+_INTERNAL_FIELDS = ("device", "port", "response")
+
+
 def save_config(instruments: dict, config_path: Path) -> None:
     """Rewrite the [devices.*] blocks of the config, preserving everything
-    else (server/logging/alerts sections, comments)."""
+    else (server/logging/alerts sections, comments) — and, within each
+    block, any curated option keys (``mode``, ``channel``, ``baud_rate``,
+    ...) that a human added: rediscovery must never clobber them (it did,
+    2026-07-12, silently dropping the EDFA ``mode`` and the RF oscillator
+    PSU's ``channel = 2``)."""
     import tomlkit
 
     if config_path.exists():
@@ -834,20 +857,16 @@ def save_config(instruments: dict, config_path: Path) -> None:
         elif importlib.util.find_spec(f"keckogeco.drivers.{driver}") is None:
             block["enabled"] = False
             block.add(tomlkit.comment(f"driver '{driver}' not yet ported - kept for reference"))
-        for extra_key in (
-            "model",
-            "usb_serial",
-            "vid_pid",
-            "adapter",
-            "probe",
-            "match_token",
-            "confidence",
-            "passive",
-            "found_on",
-            "verified_on",
-        ):
+        elif entry.get("enabled") is False:
+            block["enabled"] = False
+        for extra_key in _BOOKKEEPING_FIELDS:
             if entry.get(extra_key) not in (None, ""):
                 block[extra_key] = entry[extra_key]
+        # everything else is a curated option: pass it through untouched
+        skip = {"driver", "address", "name", "enabled", *_BOOKKEEPING_FIELDS, *_INTERNAL_FIELDS}
+        for opt in sorted(entry.keys() - skip):
+            if entry[opt] is not None and opt not in block:
+                block[opt] = entry[opt]
         devices[key] = block
     doc["devices"] = devices
     config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")

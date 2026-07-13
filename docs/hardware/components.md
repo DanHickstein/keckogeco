@@ -16,36 +16,36 @@ The astrocomb hardware with numbered components.
 
 | # | Component | Model | Control | Location | Power | Role |
 |---|---|---|---|---|---|---|
-| 1 | Signal generators | Keysight 33500B (×2) | USB/LAN (`keysight_fg33500`) | Rack | A5 | Ramps and modulation tones for the Rb lock and test signals. |
-| 2 | WaveShaper | II-VI/Finisar WS-01000A-C-R-1-AA-01 | USB, vendor API (`waveshaper`) | Rack | A9 | Programmable phase/amplitude shaping of the EO minicomb (pulse compression, spectral tailoring). |
+| 1 | Signal generators | Keysight 33500 series (×2): 33512B s/n MY62003852 + s/n MY59003824 | USB/LAN (`keysight_fg33500`) | Rack | A3, A7 | Ramps and modulation tones for the Rb lock and test signals. |
+| 2 | WaveShaper | II-VI/Finisar WS-01000A-C-R-1-AA-01 | USB, vendor API (`waveshaper`) | Rack | A5 | Programmable phase/amplitude shaping of the EO minicomb (pulse compression, spectral tailoring). |
 | 3 | Small component chassis | Custom | Arduino + dedicated drivers | Rack | Local LV rails | Safety interlock chain for the Pritel EDFA; houses VOAs and shutters. See below. |
-| 4 | High-power EDFA | Pritel LNHP-PMFA-37-IO-NMA | Serial (`pritel_amp`) | Rack | A8 (2 A) | Main high-power EDFA feeding supercontinuum generation. Spare stored at Caltech (Watson lab). |
-| 5 | 23 dB EDFA | Amonics AEDFA-PM-23-R-FA | Serial (`amonics_edfa`) | Rack | A11 (~1.5 A) | Amplifies the EO minicomb after modulation. |
-| 6 | 27 dB EDFA | Amonics AEDFA-PM-27-R-FA | Serial (`amonics_edfa`) | Rack | A6 (~2.5 A) | Pump amplifier for referencing + EO comb generation. |
-| 7 | 13 dB EDFA (spare) | Amonics AEDFA-PM-13-R-FA | Serial (`amonics_edfa`) | Rack | A7 | Spare low-gain EDFA for future upgrades. |
-| 8 | Servo mainframe | SRS SIM900 + SIM960 PIDs + SIM928 | GPIB (`srs_sim900`) | Rack | A1 (≤70 W) | PID control for the IM amplitude lock and Rb lock loops. |
-| 9 | Frequency counter | Pendulum CNT-90XL | GPIB (`pendulum_cnt90`) | Rack | 4B | Counts the 16 GHz signal → comb repetition rate. Owned by JPL. |
-| 10 | LFC laptop | Windows laptop | Ethernet | Rack | 17B | Runs the `keckogeco` server and GUIs. |
+| 4 | High-power EDFA | Pritel LNHP-PMFA-37-IO-NMA | Serial (`pritel_amp`) | Rack | A2 (2 A) | Main high-power EDFA feeding supercontinuum generation. Spare stored at Caltech (Watson lab). |
+| 5 | 23 dB EDFA | Amonics AEDFA-PM-23-R-FA | Serial (`amonics_edfa`) | Rack | B3 (~1.5 A) | Amplifies the EO minicomb after modulation. |
+| 6 | 27 dB EDFA | Amonics AEDFA-PM-27-R-FA | Serial (`amonics_edfa`) | Rack | A4 (~2.5 A) | Pump amplifier for referencing + EO comb generation. |
+| 7 | 13 dB EDFA (spare) | Amonics AEDFA-PM-13-R-FA | Serial (`amonics_edfa`) | Rack | B6 | Spare low-gain EDFA for future upgrades. |
+| 8 | Servo mainframe | SRS SIM900 + SIM960 PIDs + SIM928 | GPIB (`srs_sim900`) | Rack | A6 (≤70 W) | PID control for the IM amplitude lock and Rb lock loops. |
+| 9 | Frequency counter | Pendulum CNT-90XL | GPIB (`pendulum_cnt90`) | Rack | B4 | Counts the 16 GHz signal → comb repetition rate. Owned by JPL. |
+| 10 | LFC laptop | Windows laptop | Ethernet | Rack | B17 | Runs the `keckogeco` server and GUIs. |
 
 ## Items 11–27: optical diagnostics and rack infrastructure
 
 | # | Component | Model | Control | Location | Power | Role |
 |---|---|---|---|---|---|---|
-| 11 | Optical spectrum analyzer | Agilent/HP 86142B | GPIB (`agilent_86142b`) | Rack | 13A | Monitors minicomb and broadened comb spectra. |
+| 11 | Optical spectrum analyzer | Agilent/HP 86142B | GPIB (`agilent_86142b`) | Rack | A13 | Monitors minicomb and broadened comb spectra. |
 | 12 | Filter cavity piezo controller | TBD | Local only | Rack | Local supply | For the (currently unused) filter cavity; disconnected. |
-| 13 | Rb spectroscopy supply | Vescent D2-005 | Local panel | Rack | 18A | DC supply for the D2-210 Rb module. |
-| 14 | DC supply 1 | GW Instek GPD-4303S | Serial (`instek_psu`) | Rack | 19A | RF oscillator power (ch 2) and IM RF-attenuator bias (ch 3). |
+| 13 | Rb spectroscopy supply | Vescent D2-005 | Local panel | Rack | A18 | DC supply for the D2-210 Rb module. |
+| 14 | DC supply 1 | GW Instek GPD-4303S | Serial (`instek_psu`) | Rack | A19 | RF oscillator power (ch 2) and IM RF-attenuator bias (ch 3). |
 | 15 | Chimney fan | — | None | Rack | Facility panel | Rack airflow. |
-| 16 | Ethernet router | TP-Link | Web UI | Rack | A14 | Internal routing: laptops + ethernet instruments. |
-| 17 | Rubidium clock | SRS FS725 | Serial (`rb_clock`) | Rack | 5B (50 W) | 10 MHz GPS-disciplined reference for the RF chain and counter. |
-| 18 | USB hub A | 15-port powered | — | Rack | 15A | USB aggregation (see hub table below). |
-| 19 | USB hub B | 15-port powered | — | Rack | 23B | Additional USB capacity. |
-| 20 | Ethernet switch | Unmanaged | — | Rack | 21B | Local switching. |
+| 16 | Ethernet router | TP-Link | Web UI | Rack | B8 | Internal routing: laptops + ethernet instruments. |
+| 17 | Rubidium clock | SRS FS725 | Serial (`rb_clock`) | Rack | B5 (50 W) | 10 MHz GPS-disciplined reference for the RF chain and counter. |
+| 18 | USB hub A | 15-port powered | — | Rack | A15 | USB aggregation (see hub table below). |
+| 19 | USB hub B | 15-port powered | — | Rack | B23 | Additional USB capacity. |
+| 20 | Ethernet switch | Unmanaged | — | Rack | B21 | Local switching. |
 | 21 | DAQ 2 | MCC USB-2408 | USB (`usb2408`, board 0) | Rack | USB | Rack thermocouples. |
-| 22 | Filter cavity TEC | Wavelength Electronics LFI-3751 | Local/analog | Rack | 10A | Filter-cavity temperature (cavity unused; disconnected). |
-| 23 | FPGAs | Red Pitaya STEMlab 125-14 (×3) | Ethernet SCPI | Rack | 24A, 24B, 20B | Historically 10 MHz/lock signal generation; being phased out for the Keysight FGs. |
-| 24 | DC supply 2 | GW Instek GPP-1326 | Serial (`instek_psu`) | Rack | A2, A4 | 30 V / high-current supply for the RF amplifier. One unit was replaced by an Acopian after a failure. |
-| 25 | Heat exchanger | Liquid-cooled | None | Rack cooling panel | 22A | Removes heat from the RF amp and EDFA plate. |
+| 22 | Filter cavity TEC | Wavelength Electronics LFI-3751 | Local/analog | Rack | A10 | Filter-cavity temperature (cavity unused; disconnected). |
+| 23 | FPGAs | Red Pitaya STEMlab 125-14 (×3) | Ethernet SCPI | Rack | A24, B24, B20 | Historically 10 MHz/lock signal generation; being phased out for the Keysight FGs. |
+| 24 | DC supply 2 | GW Instek GPP-1326 | Serial (`instek_psu`) | Rack | A20 | 30 V / high-current supply for the RF amplifier. One unit was replaced by an Acopian after a failure. |
+| 25 | Heat exchanger | Liquid-cooled | None | Rack cooling panel | A22 | Removes heat from the RF amp and EDFA plate. |
 | 26–27 | Web PDUs | Eaton EMA114-10 (×2) | Ethernet web UI (`eaton_pdu`) | Interface panel | Feed-through | Remotely switchable AC outlets for everything in the rack. |
 
 ## Items 28–40: RF chain and EO modulators
@@ -54,7 +54,7 @@ The astrocomb hardware with numbered components.
 |---|---|---|---|---|---|---|
 | 28 | RF oscillator | Nexyn 16 GHz PLL-DRO | Via its DC supply | Bench | DC supply 1 ch 2 | Primary 16 GHz drive tone. |
 | 29 | RF amplifier | CTT/Kratos GaN power amp | Via its DC supply | Bench, cooled panel | DC supply 2 (30 V, ~4–5 A) | Amplifies the 16 GHz drive (41 dBm) for the modulators. |
-| 30 | RF amplifier (spare) | CTT/Kratos GaN | — | Bench / 21A | — | Replacement for item 29. |
+| 30 | RF amplifier (spare) | CTT/Kratos GaN | — | Bench / A21 | — | Replacement for item 29. |
 | 31 | RF splitter | Broadband splitter | Passive | Bench | — | Distributes RF to the three phase modulators. |
 | 32–34 | RF phase shifters | Adjustable, 16 GHz | Manual knobs | Bench | Passive | Optimize RF phase alignment across modulators. |
 | 35–37 | EO phase modulators | EOSpace PM-5SES-20-PFA-PFA-UV(-SOP1W)-UL | RF-driven | Bench | — | Generate the phase-modulated sidebands of the minicomb; one carries a small programmable RF attenuator. |
@@ -65,10 +65,10 @@ The astrocomb hardware with numbered components.
 
 | # | Component | Model | Control | Location | Power | Role |
 |---|---|---|---|---|---|---|
-| 41 | Pump laser | Rio/Luna ORION RIO0175-5-01-4-AW2 | Serial (`orion_laser`) | Bench enclosure | 9A (5 V, 16 W) | Main 1560 nm pump, normally locked to the Rb reference. |
+| 41 | Pump laser | Rio/Luna ORION RIO0175-5-01-4-AW2 | Serial (`orion_laser`) | Bench enclosure | A9 (5 V, 16 W) | Main 1560 nm pump, normally locked to the Rb reference. |
 | 42 | Filter cavity TEC (spare) | SLS TEC controller | Local | Bench (B3) | Local | Unused. |
 | 43 | Circulator | Fiber circulator | Passive | Bench | — | Routing through filter cavity / Rb module. |
-| 44 | AM photodetectors | ×3 (two on board, one in chassis) | Analog out | Bench + chassis | 18B, 19B, 17A | Amplitude monitors for the IM lock and diagnostics. |
+| 44 | AM photodetectors | ×3 (two on board, one in chassis) | Analog out | Bench + chassis | B18, B19, A17 | Amplitude monitors for the IM lock and diagnostics. |
 | 46 | Pump frequency doubler | Covesion WGHP-S-1560-40 SHG waveguide | Thermal (TEC) | Bench | — | Doubles 1560 → 780 nm for Rb spectroscopy. |
 | 47 | Rb spectroscopy module | Vescent D2-210 | Local + analog | Bench | Via D2-005 | Absorption/PDH signals for the Rb lock. |
 | 48 | Rb lock phase modulator | EOSpace PM | RF from FG | Bench | — | PDH dither on the Rb line. |
@@ -76,26 +76,26 @@ The astrocomb hardware with numbered components.
 | 51–53 | SCG waveguides | Ta₂O₅ supercontinuum waveguides (1 active, 2 spare) | Passive | Bench | — | Broadband spectrum via supercontinuum generation. |
 | 54 | WDM | 1550/2000 nm pump filter | Passive | Bench | — | Separates pump and long-wavelength comb light. |
 | 55 | DAQ 1 | MCC USB-2408 | USB (`usb2408`, board 1) | Bench | USB | Optical-table thermocouples. |
-| 56 | TEC controllers | TE Tech TC-720 OEM (×2) | Serial (`tec_tc720`) | Bench | 16A (12 V) | PPLN doubler and SCG waveguide temperatures. |
+| 56 | TEC controllers | TE Tech TC-720 OEM (×2) | Serial (`tec_tc720`) | Bench | A16 (12 V) | PPLN doubler and SCG waveguide temperatures. |
 
 ## Items 57–70: auxiliary components
 
 | # | Component | Model | Control | Location | Power | Role |
 |---|---|---|---|---|---|---|
 | 57 | USB hub 2 | 7-port powered | — | Bench | Local adapter | Breadboard USB aggregation. |
-| 58 | SLM | Santec (inside Menlo flattener) | Flattener laptop | Flattener | 16B | Per-line amplitude shaping in the flattener. |
-| 59 | Spectrometer | Arcoptix FTNIR-L1-025-2TE | USB | Flattener | 13B | Monitors the flattener output spectrum. |
+| 58 | SLM | Santec (inside Menlo flattener) | Flattener laptop | Flattener | B16 | Per-line amplitude shaping in the flattener. |
+| 59 | Spectrometer | Arcoptix FTNIR-L1-025-2TE | USB | Flattener | B13 | Monitors the flattener output spectrum. |
 | 60 | Shutter | Thorlabs | Via controller (64) | Bench | — | Beam block for flattener/diagnostic paths. |
-| 61 | Filter slider | Thorlabs motorized | Controller interface | Bench | 22B | Inserts ND filters in the flattener path (the 0–60 dB output attenuation steps). |
-| 62 | Oscilloscope | HP scope | GPIB/USB possible | Bench | 12A | Rb spectroscopy / PDH signals. **Occasionally freezes — power-cycle via ePDU**, not just the front panel. |
+| 61 | Filter slider | Thorlabs motorized | Controller interface | Bench | B22 | Inserts ND filters in the flattener path (the 0–60 dB output attenuation steps). |
+| 62 | Oscilloscope | HP scope | GPIB/USB possible | Bench | A12 | Rb spectroscopy / PDH signals. **Occasionally freezes — power-cycle via ePDU**, not just the front panel. |
 | 63 | Line-referenced pump | Clarity 1560-HP NLL (Wavelength References) | Serial (`clarity`) | Bench | A23 | Alternative pump reference (~30 cm/s stability class); used when not running the RIO+Rb lock. |
-| 64 | Shutter controller | Thorlabs | Digital interface | Bench shelf | 11A | Drives item 60. |
-| 65 | Flattener laptop | Dedicated laptop | Ethernet (remote desktop) | Near flattener | 9B | Runs Menlo software, SLM, spectrometer. |
+| 64 | Shutter controller | Thorlabs | Digital interface | Bench shelf | A11 | Drives item 60. |
+| 65 | Flattener laptop | Dedicated laptop | Ethernet (remote desktop) | Near flattener | B9 | Runs Menlo software, SLM, spectrometer. |
 | 66 | USB hub 1 | 4-port | — | Interface panel | Local adapter | Flattener-subsystem USB. |
 | 67 | Webcam | USB webcam | Host PC | Above table | USB | Visual monitoring of the optics. |
-| 68 | Autocorrelator | Femtochrome FR-103XL | Local | As needed | 14A | Pulse-duration measurements (on loan, JPL/Caltech). |
-| 69 | Rack muffin fans | Side-wall pair | ePDU on/off | Rack side | 12B | Airflow / thermal stability. |
-| 70 | Desktop monitor | External monitor | — | Desk | 14B | For the laptops' GUIs. |
+| 68 | Autocorrelator | Femtochrome FR-103XL | Local | As needed | A14 | Pulse-duration measurements (on loan, JPL/Caltech). |
+| 69 | Rack muffin fans | Side-wall pair | ePDU on/off | Rack side | B12 | Airflow / thermal stability. |
+| 70 | Desktop monitor | External monitor | — | Desk | B14 | For the laptops' GUIs. |
 
 **Candidate future hardware:** SRS SIM983 ±10 V scaling amplifier for
 the SIM900 rack (not installed).
@@ -106,13 +106,13 @@ Contents of item 3 and closely associated rack hardware:
 
 | Component | Model / notes | Power | Function |
 |---|---|---|---|
-| Interlock controller | Arduino-based | 1B | Monitors Pritel input power; trips the interlock when out of range. |
+| Interlock controller | Arduino-based | B1 | Monitors Pritel input power; trips the interlock when out of range. |
 | Interlock latching circuit | Custom | A13 | Once tripped, keeps the Pritel disabled until explicitly reset (`LFC_PTAMP_LATCH`). |
 | Interlock cables | Dedicated set (3 spares in the "Spares Box") | — | Carry the interlock signals to the Pritel interlock ports. |
-| VOA-1550 / VOA-1310 / VOA-2000 | OZ Optics VOAs (pump / YJ / HK paths) | 7B (5 V) | Programmable attenuation. **The chassis is currently bypassed in the live optical loop**, so these do not affect the beam. |
+| VOA-1550 / VOA-1310 / VOA-2000 | OZ Optics VOAs (pump / YJ / HK paths) | B7 (5 V) | Programmable attenuation. **The chassis is currently bypassed in the live optical loop**, so these do not affect the beam. |
 | 2×2 optical switch | Agiltron FFSW-222C00323 MEMS latching | Via driver | Routes YJ or HK comb to the spectrograph (`LFC_2BY2_SWITCH`). |
 | 2×2 switch driver | Agiltron SWDR-111111121 (USB/TTL/push-button) | Rack LV | Drive and control for the switch. |
-| YJ shutter | Agiltron fiber shutter | 11B | YJ output shutter (`LFC_YJ_SHUTTER`). |
+| YJ shutter | Agiltron fiber shutter | B11 | YJ output shutter (`LFC_YJ_SHUTTER`). |
 | RF mixer / RF filter | Passive | — | RF conditioning in the chain. |
 
 ## USB hub assignments
@@ -156,7 +156,7 @@ They report per-outlet power draw and are on the rack ethernet switch.
 | 4 | Amonics 27 dBm EDFA | Pendulum frequency counter |
 | 5 | Finisar WaveShaper | SRS rubidium clock |
 | 6 | SRS mainframe | Amonics 13 dBm EDFA |
-| 7 | Spare | VOAs (small chassis, ×3) |
+| 7 | Keysight function generator #2 (ePDU label "new Keysight function generator") | VOAs (small chassis, ×3) |
 | 8 | Spare | Internet router |
 | 9 | RIO laser supply | Menlo flattener laptop |
 | 10 | FC temperature controller | Spare |

@@ -37,6 +37,9 @@ class OZOpticsVOA(Instrument):
     def __init__(self, transport: Transport, name: str = ""):
         super().__init__(transport, name)
         self._sim = isinstance(transport, SimTransport)
+        # set on the first 'Atten:unknown' reply; only an attenuation set
+        # can home the unit, so until then reads skip the hardware entirely
+        self._not_homed = False
 
     def _ask(self, cmd: str) -> str:
         """Send a command; collect reply lines until 'Done'."""
@@ -66,13 +69,22 @@ class OZOpticsVOA(Instrument):
 
         After a power cycle the unit answers ``Atten:unknown`` until the
         first attenuation set (rack observation, 2026-07-12) — that's a
-        real state, not an error.
+        real state, not an error, and it can only change via a set. So the
+        first such reply logs one debug-level hint and pins the not-homed
+        state: further reads return NaN with no hardware I/O (the rack VOAs
+        are currently unused; don't spend poll time or log lines on them)
+        until :attr:`attenuation_dB` is set. NaN in the status output is
+        the visible signal; the log stays quiet.
         """
+        if self._not_homed:
+            return math.nan
         reply = self._ask("A?")  # e.g. 'Atten:12.00(dB)' or 'Atten:unknown'
         if "unknown" in reply.casefold():
-            self.log.warning(
-                "%s: attenuation unknown (not homed since power-up); set an "
-                "attenuation once to initialize it",
+            self._not_homed = True
+            self.log.debug(
+                "%s: attenuation unknown (not homed since power-up); reads "
+                "return NaN without polling the unit until an attenuation "
+                "is set once to initialize it",
                 self.name,
             )
             return math.nan
@@ -84,6 +96,7 @@ class OZOpticsVOA(Instrument):
     @attenuation_dB.setter
     def attenuation_dB(self, dB: float) -> None:
         self._ask(f"A{float(dB):.2f}")
+        self._not_homed = False
         self.log.info("%s: attenuation -> %.2f dB", self.name, dB)
 
     def config_text(self) -> str:

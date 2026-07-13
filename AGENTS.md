@@ -79,12 +79,28 @@ sessions with Dan pasting output back.
   with the base class's close-reopen-retry — reopening makes the retry a
   "first command" again and the unit never answers (that was the original
   25 s-timeout bug).
+- **Amonics unsupported queries get no reply at all** (silent VISA timeout,
+  never an error string). Probed on the rack 2026-07-12: the PM-13/PM-23
+  never answer `:MODE:SW:CHn?` (the PM-27 does), and every unit ignores
+  `:DRIV:<mode>:CUR/STAT` queries for the mode that is *not* active. The
+  control mode is fixed in config (`mode = "ACC"/"APC"` per device block;
+  edfa27 runs APC, edfa13/23 ACC) and cached in the driver — re-querying it
+  through the reconnect-once path cost a ~10 s reconnect storm per unit on
+  every poll cycle.
 - **The RF oscillator PSU is Instek GPD-4303S channel 2, not 1** (15 V / 3 A).
   The RF amp is the GPP-1326 channel 1 (30 V / 4.2 A). Channel numbers come
   from the `channel` option in the device config, read via `psu_channel()`.
 - **OZ Optics VOAs answer `Atten:unknown` until their first move after
-  power-up.** That is a real state, not a protocol error: return NaN with a
-  logged hint (already implemented), never raise.
+  power-up.** That is a real state, not a protocol error: return NaN, never
+  raise. Only a set can home the unit, so the driver pins the not-homed
+  state (no repeated hardware reads, one debug-level hint) until an
+  attenuation is set — the VOAs are unused on the rack; NaN in status
+  output is the signal, the log stays quiet.
+- **`python -m keckogeco.discovery` rewrites `[devices.*]` blocks**; it must
+  pass through curated option keys (`mode`, `channel`, `baud_rate`, ...) and
+  `enabled = false` from the existing config — a 2026-07-12 run silently
+  dropped the EDFA `mode` and the RF oscillator PSU's `channel = 2` before
+  `save_config()` learned to preserve them.
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.

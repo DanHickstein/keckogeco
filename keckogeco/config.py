@@ -12,14 +12,24 @@ Search order for the config file:
 2. ``KECKOGECO_CONFIG`` environment variable
 3. ``~/.keckogeco/keckogeco.toml``
 4. ``./config/keckogeco.toml`` (relative to the current working directory)
+
+Run as a script (``python -m keckogeco.config``) it prints the configured
+instrument list — a quick, read-only view of the TOML with the discovery
+bookkeeping keys hidden. It never touches hardware; use
+``python -m keckogeco.check`` to actually talk to the instruments.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 __all__ = [
     "AlertsConfig",
@@ -28,8 +38,10 @@ __all__ = [
     "DeviceConfig",
     "LoggingConfig",
     "ServerConfig",
+    "device_summary_lines",
     "find_config_file",
     "load_config",
+    "main",
 ]
 
 CONFIG_FILENAME = "keckogeco.toml"
@@ -195,3 +207,51 @@ def load_config(path: str | Path | None = None) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"Could not parse {config_path}: {exc}") from exc
     return parse_config(data, source=config_path)
+
+
+def device_summary_lines(config: Config) -> list[str]:
+    """One aligned text line per configured device, disabled ones included.
+
+    Discovery bookkeeping options (``usb_serial``, ``probe``, ``found_on``,
+    ...) are hidden; curated options like ``mode`` and ``channel`` are shown.
+    """
+    # Imported here because drivers.base imports this module (DeviceConfig).
+    from keckogeco.drivers.base import DISCOVERY_KEYS
+
+    rows = []
+    for dev in config.devices.values():
+        options = " ".join(
+            f"{k}={v}" for k, v in sorted(dev.options.items()) if k not in DISCOVERY_KEYS
+        )
+        note = dev.name if dev.enabled else f"{dev.name} [disabled]"
+        rows.append((dev.key, dev.driver, dev.address, options, note))
+    widths = [max((len(row[i]) for row in rows), default=0) for i in range(4)]
+    return [
+        "  ".join(
+            [*(cell.ljust(w) for cell, w in zip(row[:4], widths, strict=True)), row[4]]
+        ).rstrip()
+        for row in rows
+    ]
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m keckogeco.config``: print the configured instrument list."""
+    parser = argparse.ArgumentParser(
+        description="Show the instrument list from the config file (read-only, no hardware I/O)."
+    )
+    parser.add_argument("--config", default=None, help="config file path")
+    args = parser.parse_args(argv)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"CONFIG ERROR: {exc}", file=sys.stderr)  # noqa: T201
+        return 2
+    print(f"Config: {config.source}")  # noqa: T201
+    print(f"{len(config.devices)} device(s), {len(config.enabled_devices())} enabled\n")  # noqa: T201
+    for line in device_summary_lines(config):
+        print(f"  {line}")  # noqa: T201
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

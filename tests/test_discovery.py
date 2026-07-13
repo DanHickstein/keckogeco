@@ -9,6 +9,7 @@ from keckogeco.discovery import (
     address_for,
     classify_idn,
     extract_token,
+    load_existing,
     make_key,
     save_config,
     visa_addr_for,
@@ -103,3 +104,48 @@ def test_save_config_preserves_other_sections(tmp_path: Path):
 
     inst = AmonicsEDFA.from_config(cfg.devices["edfa27"], sim=True)
     assert inst.name == "edfa27"
+
+
+def test_rediscovery_preserves_curated_options(tmp_path: Path):
+    """load_existing -> save_config round-trip must keep human-added keys
+    (mode, channel, enabled = false); a rediscovery run clobbered them all
+    on 2026-07-12."""
+    config_path = tmp_path / "keckogeco.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[server]",
+                "port = 8000",
+                "",
+                "[devices.edfa27]",
+                'driver = "amonics_edfa"',
+                'address = "COM17"',
+                'mode = "APC"',
+                'usb_serial = "FT0002"',
+                "",
+                "[devices.rf_osc_psu]",
+                'driver = "instek_psu"',
+                'address = "COM14"',
+                'model = "GPD-4303S"',
+                "channel = 2",
+                "",
+                "[devices.spare_voa]",
+                'driver = "oz_voa"',
+                'address = "COM5"',
+                "enabled = false",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    entries = load_existing(config_path)
+    entries["edfa27"]["response"] = "AEDFA-PM-27-R-FA"  # transient probe data
+    save_config(entries, config_path)
+
+    cfg = load_config(config_path)
+    assert cfg.devices["edfa27"].options["mode"] == "APC"
+    assert cfg.devices["rf_osc_psu"].options["channel"] == 2
+    assert cfg.devices["rf_osc_psu"].options["model"] == "GPD-4303S"
+    assert cfg.devices["spare_voa"].enabled is False  # user-disabled stays disabled
+    assert "response" not in cfg.devices["edfa27"].options  # transients stay out
+    assert "port" not in cfg.devices["edfa27"].options
