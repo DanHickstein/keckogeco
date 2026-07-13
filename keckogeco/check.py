@@ -21,7 +21,13 @@ if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from keckogeco.config import Config, ConfigError, DeviceConfig, load_config
+from keckogeco.config import (
+    Config,
+    ConfigError,
+    DeviceConfig,
+    example_config_path,
+    load_config,
+)
 from keckogeco.drivers.base import Instrument
 from keckogeco.logsetup import setup_logging
 
@@ -87,8 +93,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
     except ConfigError as exc:
-        print(f"CONFIG ERROR: {exc}", file=sys.stderr)  # noqa: T201
-        return 2
+        # --sim needs no real addresses: fall back to the bundled example.
+        example = example_config_path() if args.sim and args.config is None else None
+        if example is None:
+            print(f"CONFIG ERROR: {exc}", file=sys.stderr)  # noqa: T201
+            return 2
+        config = load_config(example)
+        print(f"sim mode: no site config found, using {example}")  # noqa: T201
     setup_logging(config.logging)
 
     print(f"Config: {config.source}")  # noqa: T201

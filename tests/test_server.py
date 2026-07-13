@@ -26,6 +26,11 @@ def test_web_status_page(client):
     assert response.headers["content-type"].startswith("text/html")
     assert "keckogeco" in response.text
     assert "/api/v1" in response.text  # the page talks to the versioned API
+    # status-only by design: the page must never invoke mutating endpoints
+    assert "/actions/" not in response.text
+    assert 'method: "POST"' not in response.text
+    assert 'method: "DELETE"' not in response.text
+    assert 'method: "PUT"' not in response.text
 
 
 def test_health(client):
