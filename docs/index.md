@@ -13,6 +13,7 @@ keyword service `comb`.
 
 overview
 user_guide/index
+hardware/index
 instruments/index
 keck/index
 api/index

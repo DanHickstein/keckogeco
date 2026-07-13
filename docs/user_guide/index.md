@@ -6,6 +6,7 @@
 installation
 menlo_flattener
 keck_operations
+locking
 ```
 
 ```{note}

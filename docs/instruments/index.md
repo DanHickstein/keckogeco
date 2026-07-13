@@ -1,10 +1,15 @@
 # Instrument Reference
 
-```{note}
-Placeholder — one page per rack instrument (what it is, how it's connected,
-its driver API, safety notes) will be added as each driver is ported;
-descriptions migrate from the LaTeX manual chapter 3.
+```{toctree}
+:maxdepth: 1
+
+operations
 ```
+
+The {doc}`operations` page collects the per-instrument operating
+knowledge (setpoints, warm-up behavior, quirks, safety rules). The
+full hardware inventory is in {doc}`../hardware/components`, and the
+Python driver APIs are in the {doc}`../api/index`.
 
 Tier-1 instruments (comb on/standby/off path and safety):
 
