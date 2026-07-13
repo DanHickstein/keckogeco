@@ -1,7 +1,7 @@
 # keckogeco
 
-**Keck Observatory GHz Electro-Optic Comb** — control system for the laser
-frequency comb (LFC) deployed at the W. M. Keck Observatory.
+**Keck Observatory GHz Electro-Optic Comb** — control system for the 
+near-IR laser frequency comb (LFC) deployed at the W. M. Keck Observatory.
 
 `keckogeco` runs on the comb's Windows control laptop, where it owns the
 ~20 rack instruments (amplifiers, lasers, waveshapers, TEC controllers,
@@ -13,9 +13,8 @@ power supplies, diagnostics) and exposes them three ways:
 - through that API, the Keck-side **KTL keyword service** (`comb`) via a DFW
   dispatcher running on the observatory's Linux hosts (see `ktl/`).
 
-This package is a ground-up rewrite of the original Caltech
-[KeckLFC](https://github.com/kester2015/KeckLFC) control code by
-[Octave Photonics](https://www.octavephotonics.com).
+This package is a adapted from the original Caltech
+[KeckLFC](https://github.com/kester2015/KeckLFC) control code.
 
 ## Install
 
@@ -66,6 +65,15 @@ release.
 | `ktl/` | Keck-side files: DFW dispatcher, keyword definitions, KTL-native GUI |
 | `config/` | example configuration (the real one is git-ignored) |
 | `docs/` | Sphinx documentation |
+
+## Contributing / project status
+
+Remaining work is tracked in the
+[GitHub issues](https://github.com/danhickstein/keckogeco/issues).
+[AGENTS.md](AGENTS.md) records the settled architecture decisions and the
+hardware behaviors learned on the real rack — read it before changing
+drivers or the KTL keyword surface (AI coding assistants load it
+automatically).
 
 ## License
 

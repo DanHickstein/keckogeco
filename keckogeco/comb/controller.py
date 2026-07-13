@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import ClassVar
 
 from ..check import build_device
 from ..config import Config
@@ -297,6 +298,23 @@ class LFCController:
         if has("pendulum"):
             bind("LFC_PENDULEM_FREQ_MONITOR", getter=lambda: self._rep_rate_ok() is True)
 
+        # --- Agiltron 2x2 switch (enumerated: 1 = YJ path, 2 = HK path)
+        if has("switch2x2"):
+            bind(
+                "LFC_2BY2_SWITCH",
+                getter=lambda: self.device("switch2x2").position,
+                setter=lambda v: self.device("switch2x2").set_position(v),
+            )
+
+        # --- Clarity laser: the keyword collapses the 4-state status to
+        # off/on exactly like the old orchestration (1/2/3 -> 1)
+        if has("clarity"):
+            bind(
+                "LFC_CLARITY_ONOFF",
+                getter=lambda: 1 if self.device("clarity").status_code > 0 else 0,
+                setter=lambda v: self.device("clarity").set_output(bool(int(v))),
+            )
+
         # --- IM bias auto-lock (write 1 to run; enqueued like transitions)
         if has("srs"):
             bind(
@@ -341,6 +359,74 @@ class LFCController:
                 getter=lambda a=action: self._action_result(a),
                 setter=lambda v, a=action: self._submit_if_true(a, v),
             )
+
+        # --- IM lock mode + the mini-comb RF VCA (RF osc supply channel 3)
+        if has("srs"):
+            bind(
+                "LFC_IM_LOCK_MODE",
+                getter=lambda: self._im_servo.output_mode == "PID",
+                setter=lambda v: setattr(self._im_servo, "output_mode", "PID" if v else "MAN"),
+            )
+        if has("rf_osc_psu"):
+            bind(
+                "LFC_IM_RF_ATT",
+                getter=lambda: self.device("rf_osc_psu").output_voltage_V(3),
+                setter=lambda v: self.device("rf_osc_psu").set_voltage_V(v, 3),
+            )
+
+        # --- commissioned preset keywords: write 1 to push the default
+        # setpoints (values match the transition sequences); reads are False
+        presets: dict[str, object] = {}
+        if has("edfa27"):
+            presets["LFC_EDFA27_P_DEFAULT"] = lambda: self._edfa_default("edfa27", "APC", 450)
+            presets["LFC_EDFA27_AUTO_ON"] = lambda: self._edfa_default(
+                "edfa27", "APC", 450, turn_on=True
+            )
+        # EDFA23 default is 0 mA (not the commissioned 80) while the 23 dB
+        # EDFA is out of service — parked dark even when activated
+        if has("edfa23"):
+            presets["LFC_EDFA23_P_DEFAULT"] = lambda: self._edfa_default("edfa23", "ACC", 0)
+            presets["LFC_EDFA23_AUTO_ON"] = lambda: self._edfa_default(
+                "edfa23", "ACC", 0, turn_on=True
+            )
+        if has("rf_amp_psu"):
+            presets["LFC_RFAMP_DEFAULT"] = lambda: self._psu_default("rf_amp_psu", 30, 4.2)
+        if has("rf_osc_psu"):
+            presets["LFC_RFOSCI_DEFAULT"] = lambda: self._psu_default("rf_osc_psu", 15, 3)
+        if has("ptamp"):
+            presets["LFC_PTAMP_PRE_P_DEFAULT"] = lambda: self.device("ptamp").set_preamp_mA(600)
+            presets["LFC_PTAMP_I_DEFAULT"] = lambda: self.device("ptamp").set_pwramp_mA(3900)
+        for kw, apply in presets.items():
+            bind(
+                kw,
+                getter=lambda: False,
+                setter=lambda v, a=apply: a() if v else None,
+            )
+
+        # --- range monitors (True = OK). Out-of-range logs an error; the
+        # old auto-CLOSE_ALL/email reaction is deliberately gone (see
+        # ktl/keyword-changes.md, same policy as the rep-rate monitor).
+        if has("daq"):
+            bind("LFC_TEMP_MONITOR", getter=self._temps_ok)
+            bind(
+                "LFC_TEMP_TEST1",
+                getter=lambda: [self.device("daq").temperature_C(ch) for ch in range(8)],
+            )
+        if has("daq_eocb"):
+            bind(
+                "LFC_TEMP_TEST2",
+                getter=lambda: [self.device("daq_eocb").temperature_C(ch) for ch in range(8)],
+            )
+        if has("rf_osc_psu"):
+            bind("LFC_RFOSCI_MONITOR", getter=self._rfosc_ok)
+        if has("rf_amp_psu"):
+            bind("LFC_RFAMP_MONITOR", getter=self._rfamp_ok)
+
+        # --- legacy near-no-ops kept for KTL compatibility: LFC_YJ_SHUT is
+        # proposed for retirement (the old handler was already a stub) and
+        # SHOW_ALL_VAL dumps the snapshot to the log instead of stdout
+        bind("LFC_YJ_SHUT", getter=lambda: 0, setter=self._yj_shut)
+        bind("SHOW_ALL_VAL", getter=lambda: False, setter=self._show_all_val)
 
         # --- ICE-transport keywords (semantics preserved for the KTL side)
         bind("ICECLK", getter=lambda: int(time.time()))
@@ -417,6 +503,96 @@ class LFCController:
                 }
 
             self.arrays["wsp_profile"] = wsp_profile
+
+    # ------------------------------------------- presets and range monitors
+
+    #: rack thermocouple alarm level for LFC_TEMP_MONITOR
+    RACK_TEMP_MAX_C: ClassVar[float] = 40.0
+
+    def _edfa_default(self, key: str, mode: str, setpoint: float, turn_on: bool = False) -> None:
+        """Push the commissioned EDFA setpoint (and optionally emit)."""
+        edfa = self.device(key)
+        edfa.set_mode(mode)
+        edfa.set_setpoint(setpoint)
+        if turn_on:
+            edfa.set_channel(True)
+            edfa.activate()
+        log.info("%s preset applied: %s %s%s", key, mode, setpoint, " + ON" if turn_on else "")
+
+    def _psu_default(self, key: str, volts: float, amps: float) -> None:
+        """Push the commissioned supply limits (does not switch the output)."""
+        psu = self.device(key)
+        channel = self.psu_channel(key)
+        psu.set_voltage_V(volts, channel)
+        psu.set_current_A(amps, channel)
+        log.info("%s preset applied: %.1f V / %.2f A on channel %d", key, volts, amps, channel)
+
+    def _temps_ok(self) -> bool:
+        daq = self.device("daq")
+        hot = {
+            daq.positions[ch]: t
+            for ch in range(8)
+            if (t := daq.temperature_C(ch)) > self.RACK_TEMP_MAX_C
+        }
+        if hot:
+            log.error("rack temperature(s) above %.0f C: %s", self.RACK_TEMP_MAX_C, hot)
+        return not hot
+
+    def _rfosc_ok(self) -> bool:
+        """RF oscillator supply within the commissioned envelope (or off)."""
+        psu = self.device("rf_osc_psu")
+        channel = self.psu_channel("rf_osc_psu")
+        if not psu.output_on(channel):
+            return True
+        volts = psu.output_voltage_V(channel)
+        amps = psu.output_current_A(channel)
+        ok = abs(volts - 15) <= 1 and abs(amps - 0.4) <= 0.1
+        if not ok:
+            log.error(
+                "RF oscillator out of range: %.2f V / %.3f A (expect 15 V, ~0.4 A draw)",
+                volts,
+                amps,
+            )
+        return ok
+
+    def _rfamp_ok(self) -> bool:
+        """RF amplifier supply within the commissioned envelope (or off).
+
+        The expected current draw depends on whether the oscillator is
+        driving it: ~4.2 A seeded, ~0.7 A idling (old monitor's numbers).
+        """
+        psu = self.device("rf_amp_psu")
+        channel = self.psu_channel("rf_amp_psu")
+        if not psu.output_on(channel):
+            return True
+        volts = psu.output_voltage_V(channel)
+        amps = psu.output_current_A(channel)
+        osc_on = False
+        if "rf_osc_psu" in self.devices:
+            osc_on = self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu"))
+        expect_amps = 4.2 if osc_on else 0.7
+        ok = abs(volts - 30) <= 1 and abs(amps - expect_amps) <= 0.15
+        if not ok:
+            log.error(
+                "RF amplifier out of range: %.2f V / %.3f A (expect 30 V, ~%.1f A draw)",
+                volts,
+                amps,
+                expect_amps,
+            )
+        return ok
+
+    def _yj_shut(self, value) -> None:
+        log.info(
+            "LFC_YJ_SHUT write (%s) ignored: keyword proposed for retirement, "
+            "see ktl/keyword-changes.md",
+            value,
+        )
+
+    def _show_all_val(self, value) -> None:
+        if not value:
+            return
+        for name, reading in sorted(self.registry.snapshot().items()):
+            log.info("SHOW_ALL_VAL: %s = %s", name, reading)
 
     # ------------------------------------------------------------- helpers
 

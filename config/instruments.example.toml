@@ -147,5 +147,26 @@ enabled = false    # enable once python -m keckogeco.discovery confirms the port
 
 [devices.hk_shutter]
 driver = "hk_shutter"
-address = "COM12"
+address = "COM8"     # rack-verified 2026-07; the old code's COM12 is the 2x2 switch
 name = "HK shutter (SC10 style)"
+
+[devices.switch2x2]
+driver = "agiltron_switch"
+address = "COM12"
+name = "Agiltron 2x2 switch (1 = YJ, 2 = HK)"
+
+[devices.clarity]
+driver = "clarity"
+address = "ASRL23::INSTR"
+name = "Wavelength References Clarity laser"
+
+[devices.fg1]
+driver = "keysight_fg33500"
+address = "USB0::0x0957::0x2807::MY59003824::INSTR"
+name = "Keysight 33512B function generator #1"
+
+[devices.fg2]
+driver = "keysight_fg33500"
+address = "USB0::0x0957::0x2807::MY59003825::INSTR"
+name = "Keysight 33512B function generator #2"
+enabled = false    # enable once python -m keckogeco.discovery confirms the address

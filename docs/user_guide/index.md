@@ -1,9 +1,15 @@
 # User Guide
 
+```{toctree}
+:maxdepth: 1
+
+installation
+```
+
 ```{note}
-Placeholder — operating procedures (startup/shutdown, comb states,
-troubleshooting) will be migrated here from the LaTeX manual
-(`LFC_documentation/`, chapters 1–2) during Phase 4.
+Operating procedures (startup/shutdown, comb states, troubleshooting)
+will be migrated here from the LaTeX manual (`LFC_documentation/`,
+chapters 1–2) during Phase 4.
 ```
 
 Planned contents:

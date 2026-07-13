@@ -41,7 +41,8 @@ def test_minicomb_setup_reaches_standby(controller):
     # commissioning values landed on the devices
     assert controller.device("rf_amp_psu").voltage_setpoint_V(1) == pytest.approx(30.0)
     assert controller.device("rf_osc_psu").voltage_setpoint_V(2) == pytest.approx(15.0)
-    assert controller.device("edfa23").setpoint() == pytest.approx(80.0)
+    assert controller.device("edfa23").setpoint() == pytest.approx(0.0)  # parked: out of service
+    assert controller.device("edfa23").activation is True  # but activated for the state code
 
 
 def test_full_comb_from_off_and_back(controller):

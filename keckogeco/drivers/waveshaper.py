@@ -70,6 +70,23 @@ class WsapiLink:
         self.start_THz: float | None = None
         self.stop_THz: float | None = None
 
+    @staticmethod
+    def _register_dll_directory() -> None:
+        """Let Python find wsapi.dll in the WaveManager install.
+
+        The vendor instructions copy the DLLs into System32 (admin-only);
+        registering the install's bin directory achieves the same without
+        admin rights (Python 3.8+ no longer searches PATH for DLLs).
+        """
+        import os
+
+        for candidate in (
+            r"C:\Program Files (x86)\Finisar\WaveManager\waveshaper\bin\amd64",
+            r"C:\Program Files\Finisar\WaveManager\waveshaper\bin\amd64",
+        ):
+            if os.path.isdir(candidate):
+                os.add_dll_directory(candidate)
+
     def _default_config_path(self) -> str:
         import os
 
@@ -80,6 +97,7 @@ class WsapiLink:
     def open(self) -> None:
         if self._open:
             return
+        self._register_dll_directory()
         try:
             import wsapi
         except ImportError as exc:

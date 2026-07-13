@@ -155,6 +155,71 @@ def test_controller_temperatures(controller):
     assert controller.read("LFC_PPLN_T").value == pytest.approx(25.0)
 
 
+def test_controller_switch_and_clarity(controller):
+    assert controller.read("LFC_2BY2_SWITCH").value == 1  # sim starts on YJ
+    controller.write("LFC_2BY2_SWITCH", "2")
+    assert controller.read("LFC_2BY2_SWITCH").value == 2
+    assert controller.read("LFC_CLARITY_ONOFF").value == 0
+    controller.write("LFC_CLARITY_ONOFF", "1")
+    assert controller.read("LFC_CLARITY_ONOFF").value == 1
+
+
+def test_startup_is_passive(controller):
+    """Connecting and binding must never enable emission or push setpoints.
+
+    The Pritel power amp (3.9 A) is the most dangerous switch in the
+    system: it may only come up through an explicit action or keyword
+    write, never as a side effect of starting the server.
+    """
+    assert controller.device("ptamp").pump_on is False
+    assert controller.device("ptamp").pwramp_mA == pytest.approx(0.0)
+    assert controller.device("edfa27").activation is False
+    assert controller.device("edfa23").activation is False
+    for key in ("rf_osc_psu", "rf_amp_psu"):
+        assert controller.device(key).output_on(controller.psu_channel(key)) is False
+
+
+def test_controller_presets_and_monitors(controller):
+    # write-1 presets push the commissioned setpoints
+    controller.write("LFC_RFOSCI_DEFAULT", "1")
+    psu = controller.device("rf_osc_psu")
+    ch = controller.psu_channel("rf_osc_psu")
+    assert psu.voltage_setpoint_V(ch) == pytest.approx(15.0)
+    assert psu.current_setpoint_A(ch) == pytest.approx(3.0)
+    assert controller.read("LFC_RFOSCI_DEFAULT").value is False  # reads stay False
+    controller.write("LFC_EDFA27_AUTO_ON", "1")
+    assert controller.read("LFC_EDFA27_ONOFF").value is True
+    # monitors report OK while outputs are off / temps nominal in sim
+    assert controller.read("LFC_RFOSCI_MONITOR").value is True
+    assert controller.read("LFC_RFAMP_MONITOR").value is True
+    assert controller.read("LFC_TEMP_MONITOR").value is True
+    temps = controller.read("LFC_TEMP_TEST1").value
+    assert len(temps) == 8
+
+
+def test_controller_im_rf_att_and_lock_mode(controller):
+    controller.write("LFC_IM_RF_ATT", "0.72")
+    assert controller.read("LFC_IM_RF_ATT").value == pytest.approx(0.72)
+    controller.write("LFC_IM_LOCK_MODE", "1")
+    assert controller.read("LFC_IM_LOCK_MODE").value is True
+    controller.write("LFC_IM_LOCK_MODE", "0")
+    assert controller.read("LFC_IM_LOCK_MODE").value is False
+
+
+def test_all_keywords_bound_with_full_config(controller):
+    # with every example-config device present, only the keywords whose
+    # device is absent from the example config may remain unbound
+    allowed_unbound = {
+        "LFC_TEMP_TEST2",  # daq_eocb (EO comb board DAQ) not in example config
+        "LFC_T_EOCB_IN",
+        "LFC_T_EOCB_OUT",
+        "LFC_VOA1310_ATTEN",  # example config ships them disabled
+        "LFC_VOA2000_ATTEN",
+    }
+    unbound = {n for n in controller.registry.schema if n not in controller.registry.bound}
+    assert unbound <= allowed_unbound
+
+
 def test_bound_keyword_count(controller):
     # tier-1 target: a solid fraction of the 77 keywords already answer
     assert len(controller.registry.bound) >= 30
