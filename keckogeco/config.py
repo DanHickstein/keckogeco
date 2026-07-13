@@ -103,6 +103,23 @@ class Config:
         return {k: d for k, d in self.devices.items() if d.enabled}
 
 
+def example_config_path() -> Path | None:
+    """The bundled example config, if it can be found.
+
+    Sim mode falls back to this so ``--sim`` works on a fresh checkout
+    with no site config (the example ships at the repo root, so this
+    resolves in git checkouts and editable installs).
+    """
+    candidates = [
+        Path(__file__).resolve().parent.parent / "config" / "instruments.example.toml",
+        Path("config") / "instruments.example.toml",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def find_config_file(explicit: str | Path | None = None) -> Path:
     """Locate the config file, following the documented search order."""
     candidates: list[Path] = []

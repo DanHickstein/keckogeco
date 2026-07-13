@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from keckogeco.comb.actions import ACTIONS, ActionBusy
 from keckogeco.comb.controller import LFCController
 from keckogeco.comb.keywords import KeywordError
-from keckogeco.config import Config, load_config
+from keckogeco.config import Config, ConfigError, example_config_path, load_config
 from keckogeco.drivers.errors import InstrumentError
 from keckogeco.logsetup import setup_logging
 
@@ -266,7 +266,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--poll", type=float, default=5.0, help="cache poll period, s (0 = off)")
     args = parser.parse_args(argv)
 
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError:
+        # --sim needs no real addresses: fall back to the bundled example
+        # so the server runs on any fresh checkout.
+        example = example_config_path() if args.sim and args.config is None else None
+        if example is None:
+            raise
+        config = load_config(example)
+        log.info("sim mode: no site config found, using %s", example)
     setup_logging(config.logging)
 
     import uvicorn
