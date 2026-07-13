@@ -79,9 +79,7 @@ def test_sim_state_is_per_instance():
 
 def test_mode_from_config_option_skips_query():
     """A configured mode is used as-is; the mode query is never sent."""
-    cfg = DeviceConfig(
-        key="edfa27", driver="amonics_edfa", address="A", options={"mode": "APC"}
-    )
+    cfg = DeviceConfig(key="edfa27", driver="amonics_edfa", address="A", options={"mode": "APC"})
     inst = AmonicsEDFA.from_config(cfg, sim=True)
     inst.connect()
     assert inst.mode() == "APC"
