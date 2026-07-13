@@ -58,8 +58,11 @@ class PritelAmp(Instrument):
     All currents in mA, powers in mW.
     """
 
+    # 1 s is generous: replies arrive well under that, and _configure()'s
+    # drain loop pays one timeout per connect (was 25 s in the old code,
+    # which made every connect take ~25 s).
     TRANSPORT_DEFAULTS: ClassVar[dict] = {
-        "timeout_ms": 25_000,
+        "timeout_ms": 1_000,
         "baud_rate": 9_600,
         "read_termination": "\n",
         "write_termination": "\r\n",
