@@ -2,7 +2,13 @@
 
 import pytest
 
-from keckogeco.config import ConfigError, find_config_file, load_config, parse_config
+from keckogeco.config import (
+    ConfigError,
+    example_config_path,
+    find_config_file,
+    load_config,
+    parse_config,
+)
 
 EXAMPLE = "config/instruments.example.toml"
 
@@ -63,3 +69,17 @@ def test_invalid_toml_raises_config_error(tmp_path):
     bad.write_text("this is not toml [[[")
     with pytest.raises(ConfigError, match="Could not parse"):
         load_config(bad)
+
+
+def test_example_config_fallback_for_sim(tmp_path, monkeypatch):
+    """With no site config anywhere, sim entry points fall back to the
+    bundled example (which must exist and parse)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("KECKOGECO_CONFIG", raising=False)
+    with pytest.raises(ConfigError):
+        load_config(None)  # the search still fails without --sim
+    example = example_config_path()
+    assert example is not None and example.is_file()
+    config = load_config(example)
+    assert config.enabled_devices()
