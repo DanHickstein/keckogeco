@@ -371,7 +371,16 @@ help = "rfosci default set"
 [LFC_WSP_PHASE]
 type = "double"
 writable = true
-help = "wsp phase"
+units = "ps/nm"
+help = "wsp 2nd-order dispersion (GDD)"
+
+# New in the rewrite (see ktl/keyword-changes.md): 3rd-order dispersion
+# companion to LFC_WSP_PHASE; both program the WaveShaper together.
+[LFC_WSP_TOD]
+type = "double"
+writable = true
+units = "ps/nm^2"
+help = "wsp 3rd-order dispersion (TOD)"
 
 [LFC_WSP_ATTEN]
 type = "double"

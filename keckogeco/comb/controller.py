@@ -328,13 +328,20 @@ class LFCController:
             )
 
         # --- WaveShaper scalar keywords: WSP_PHASE programs 2nd-order
-        # dispersion (d2 in ps/nm), WSP_ATTEN a flat attenuation in dB —
-        # matching how the old orchestration drove the flattener.
+        # dispersion (GDD, d2 in ps/nm) and WSP_TOD 3rd-order (d3 in
+        # ps/nm^2) — the two are applied together as one phase profile;
+        # WSP_ATTEN a flat attenuation in dB. Reads report the value
+        # currently applied (softstore).
         if has("waveshaper1"):
             bind(
                 "LFC_WSP_PHASE",
                 getter=lambda: self._softstore.get("LFC_WSP_PHASE", 0.0),
-                setter=self._set_wsp_phase,
+                setter=lambda v: self._set_wsp_dispersion(d2_ps_nm=v),
+            )
+            bind(
+                "LFC_WSP_TOD",
+                getter=lambda: self._softstore.get("LFC_WSP_TOD", 0.0),
+                setter=lambda v: self._set_wsp_dispersion(d3_ps_nm2=v),
             )
             bind(
                 "LFC_WSP_ATTEN",
@@ -647,11 +654,21 @@ class LFCController:
         if self.monitors:
             self.heartbeat.enabled = bool(on)
 
-    def _set_wsp_phase(self, d2_ps_nm: float) -> None:
+    def _set_wsp_dispersion(
+        self, d2_ps_nm: float | None = None, d3_ps_nm2: float | None = None
+    ) -> None:
+        """Program GDD + TOD as one phase profile; either argument updates
+        its stored value and the other keeps the last applied one."""
+        if d2_ps_nm is not None:
+            self._softstore["LFC_WSP_PHASE"] = float(d2_ps_nm)
+        if d3_ps_nm2 is not None:
+            self._softstore["LFC_WSP_TOD"] = float(d3_ps_nm2)
         ws = self.device("waveshaper1")
-        ws.set_dispersion(d2_ps_nm=float(d2_ps_nm))
+        ws.set_dispersion(
+            d2_ps_nm=self._softstore.get("LFC_WSP_PHASE", 0.0),
+            d3_ps_nm2=self._softstore.get("LFC_WSP_TOD", 0.0),
+        )
         ws.write_profile()
-        self._softstore["LFC_WSP_PHASE"] = float(d2_ps_nm)
 
     def _set_wsp_atten(self, atten_dB: float) -> None:
         ws = self.device("waveshaper1")

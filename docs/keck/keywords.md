@@ -132,7 +132,8 @@ into the rewrite.
 
 | Keyword | Type | Access | Description |
 |---|---|---|---|
-| `LFC_WSP_PHASE` | double | RW 🔒 | Second-order dispersion compensation d₂ in ps/nm, programmed onto WaveShaper 1. |
+| `LFC_WSP_PHASE` | double, ps/nm | RW 🔒 | Second-order dispersion (GDD, d₂) programmed onto WaveShaper 1. Applied together with `LFC_WSP_TOD` as one phase profile; reads report the value currently applied. |
+| `LFC_WSP_TOD` | double, ps/nm² | RW 🔒 | Third-order dispersion (TOD, d₃) companion to `LFC_WSP_PHASE`. **New in the rewrite** (see `ktl/keyword-changes.md`). |
 | `LFC_WSP_ATTEN` | double | RW 🔒 | Flat attenuation level (dB) applied across the WaveShaper profile. |
 
 ## TECs and temperatures

@@ -1,9 +1,13 @@
 """Engineering GUI main window.
 
-Hand-built panels assembled from schema-driven widgets. The Comb State
-panel mirrors the OFF / STANDBY / FULL COMB + status-lamp layout of the
-old tkinter GUI (``KTL server/server_with_gui.py``) that Keck operators
-already know; the rest is the full-control surface for the LFC engineers.
+Three tabs of schema-driven panels. **Overview** mirrors the OFF /
+STANDBY / FULL COMB + status-lamp layout of the old tkinter GUI
+(``KTL server/server_with_gui.py``) that Keck operators already know,
+plus the day-to-day controls (EDFAs, Pritel, interlock, RF chain,
+temperatures, mini-comb spectrum). **IM Bias Lock** is reserved for the
+lock controls (not built yet). **Other** holds the rarely-touched
+hardware: EDFA13 (out of the light path), WaveShaper dispersion,
+TECs, YJ shutter, VOAs.
 """
 
 from __future__ import annotations
@@ -19,23 +23,20 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from .client import KeckogecoClient, PollThread, WriteThread
+from .theme import ACCENT, PLOT_BG, STATE_COLORS
 from .widgets import KeywordDisplay, KeywordSpinBox, OnOffButton, StatusLamp
 
 __all__ = ["MainWindow"]
 
-_STATE_COLORS = {
-    "FULL COMB": "#2e7d32",
-    "STANDBY": "#f9a825",
-    "OFF": "#616161",
-    "FAULT": "#c62828",
-    "UNKNOWN": "#9e9e9e",
-    "TRANSITIONING": "#1565c0",
-}
+# a subsystem mix that matches no canonical state is normal during manual
+# work — present it as engineering mode, not a fault
+_STATE_DISPLAY = {"FAULT": "ENGINEERING MODE"}
 
 # keywords whose writes toggle real optical/RF power -> confirm dialog
 _CONFIRM = {
@@ -105,121 +106,123 @@ class MainWindow(QMainWindow):
         form.addRow(label, widget)
 
     def _build_layout(self) -> None:
-        central = QWidget()
-        outer = QVBoxLayout(central)
+        tabs = QTabWidget()
+        tabs.addTab(self._overview_tab(), "Overview")
+        tabs.addTab(self._im_lock_tab(), "IM Bias Lock")
+        tabs.addTab(self._other_tab(), "Other")
+        self.setCentralWidget(tabs)
+
+    def _overview_tab(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
         outer.addWidget(self._comb_state_panel())
 
-        grid = QGridLayout()
-        grid.addWidget(self._edfa_panel("EDFA 27 dBm", "LFC_EDFA27"), 0, 0)
-        grid.addWidget(self._edfa_panel("EDFA 13 dBm", "LFC_EDFA13"), 0, 1)
-        grid.addWidget(self._edfa_panel("EDFA 23 dBm", "LFC_EDFA23"), 0, 2)
-        grid.addWidget(self._pritel_panel(), 1, 0)
-        grid.addWidget(self._rf_panel(), 1, 1)
-        grid.addWidget(self._seed_tec_panel(), 1, 2)
-        grid.addWidget(self._temperature_panel(), 2, 0, 1, 3)
-        grid.addWidget(self._voa_panel(), 3, 0, 1, 3)
-        outer.addLayout(grid)
+        row2 = QHBoxLayout()
+        row2.addWidget(self._edfa_panel("EDFA 27 dBm", "LFC_EDFA27"))
+        row2.addWidget(self._edfa_panel("EDFA 23 dBm", "LFC_EDFA23"))
+        row2.addWidget(self._interlock_panel())
+        row2.addWidget(self._pritel_panel())
+        outer.addLayout(row2)
 
-        spectra = self._spectra_panel()
-        if spectra is not None:
-            outer.addWidget(spectra, stretch=1)
+        row3 = QHBoxLayout()
+        row3.addWidget(self._rf_panel())
+        row3.addWidget(self._temperature_panel(), stretch=1)
+        outer.addLayout(row3)
 
-        self.setCentralWidget(central)
+        outer.addWidget(self._osa_panel(), stretch=1)
+        return page
 
-    def _spectra_panel(self) -> QGroupBox | None:
-        """OSA spectrum + WaveShaper profile plots (pyqtgraph), if the
-        server exposes those arrays."""
-        try:
-            available = self.client.arrays()
-        except Exception:  # noqa: BLE001 - older server or offline
-            available = []
-        wanted = [name for name in ("osa_spectrum", "wsp_profile") if name in available]
-        if not wanted:
-            return None
-        try:
-            import pyqtgraph as pg
-        except ImportError:
-            self.statusBar().showMessage("pyqtgraph not installed; spectra hidden")
-            return None
+    def _im_lock_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        placeholder = QLabel("IM bias lock controls will live here — not built yet.")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setStyleSheet("color: #5a6472; font-style: italic;")
+        layout.addWidget(placeholder)
+        return page
 
-        box = QGroupBox("Spectra")
-        layout = QHBoxLayout(box)
-        self._plots: dict[str, object] = {}
-        titles = {"osa_spectrum": "OSA", "wsp_profile": "WaveShaper profile"}
-        for name in wanted:
-            plot = pg.PlotWidget(title=titles[name])
-            plot.showGrid(x=True, y=True, alpha=0.3)
-            curve = plot.plot(pen=pg.mkPen("#1565c0", width=1))
-            self._plots[name] = (plot, curve)
-            layout.addWidget(plot)
-        self.poller.array_names = wanted
-        self.poller.array_ready.connect(self._on_array)
-        return box
+    def _other_tab(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
 
-    def _on_array(self, name: str, data: dict) -> None:
-        entry = getattr(self, "_plots", {}).get(name)
-        if entry is None:
-            return
-        plot, curve = entry
-        curve.setData(data.get("x", []), data.get("y", []))
-        plot.setLabel("bottom", data.get("x_label", ""))
-        plot.setLabel("left", data.get("y_label", ""))
+        row1 = QHBoxLayout()
+        row1.addWidget(self._edfa_panel("EDFA 13 dBm (not in use)", "LFC_EDFA13"))
+        row1.addWidget(self._waveshaper_panel())
+        row1.addWidget(self._tec_panel())
+        outer.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(self._shutter_panel())
+        row2.addWidget(self._voa_panel(), stretch=1)
+        outer.addLayout(row2)
+
+        outer.addStretch(1)
+        return page
 
     def _comb_state_panel(self) -> QGroupBox:
         box = QGroupBox("Comb State")
-        layout = QHBoxLayout(box)
+        outer = QHBoxLayout(box)
 
         self.state_banner = QLabel("UNKNOWN")
         self.state_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.state_banner.setMinimumWidth(180)
-        self.state_banner.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: white; "
-            "background-color: #9e9e9e; padding: 8px; border-radius: 4px;"
-        )
-        layout.addWidget(self.state_banner)
+        self.state_banner.setMinimumWidth(140)
+        self._set_banner("UNKNOWN")
+        outer.addWidget(self.state_banner)
 
+        # lamp order per operations: RF chain first, then amplification
         self.subsystem_lamps: dict[str, StatusLamp] = {}
         lamps = QGridLayout()
+        lamps.setHorizontalSpacing(10)
         for column, (key, label) in enumerate(
             [
-                ("rf_oscillator", "RF osc"),
-                ("rf_amplifier", "RF amp"),
-                ("edfa23", "EDFA23"),
+                ("rf_oscillator", "RF Osc"),
+                ("im_lock", "IM Lock"),  # from LFC_IM_LOCK_MODE, not /state
+                ("rf_amplifier", "RF Amp"),
                 ("edfa27", "EDFA27"),
+                ("edfa23", "EDFA23"),
                 ("ptamp", "Pritel"),
-                ("rep_rate", "Rep rate"),
             ]
         ):
             lamp = StatusLamp(label)
             self.subsystem_lamps[key] = lamp
             lamps.addWidget(lamp, 0, column, alignment=Qt.AlignmentFlag.AlignCenter)
             lamps.addWidget(QLabel(label), 1, column, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addLayout(lamps)
+        outer.addLayout(lamps)
 
         self.action_label = QLabel("")
         self.action_label.setWordWrap(True)
-        layout.addWidget(self.action_label, stretch=1)
+        outer.addWidget(self.action_label, stretch=1)
 
-        buttons = QVBoxLayout()
+        buttons = QHBoxLayout()
         for text, action in (
-            ("Go to STANDBY", "set_standby"),
-            ("Go to FULL COMB", "set_full_comb"),
-            ("Turn OFF", "set_off"),
+            ("STANDBY", "set_standby"),
+            ("FULL COMB", "set_full_comb"),
+            ("OFF", "set_off"),
         ):
             button = QPushButton(text)
+            button.setToolTip(f"Run the {text} transition sequence")
             button.clicked.connect(lambda _checked, a=action, t=text: self._start_action(a, t))
             buttons.addWidget(button)
-        abort = QPushButton("Abort action")
+        abort = QPushButton("Abort")
+        abort.setToolTip("Abort the running transition")
         abort.clicked.connect(self._abort_action)
         buttons.addWidget(abort)
-        layout.addLayout(buttons)
+        outer.addLayout(buttons)
         return box
+
+    def _set_banner(self, state_name: str) -> None:
+        color = STATE_COLORS.get(state_name, STATE_COLORS["UNKNOWN"])
+        self.state_banner.setText(_STATE_DISPLAY.get(state_name, state_name))
+        self.state_banner.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: white; "
+            f"background-color: {color}; padding: 5px 10px; border-radius: 4px;"
+        )
 
     def _start_action(self, action: str, label: str) -> None:
         answer = QMessageBox.question(
             self,
             "Confirm",
-            f"Really {label}? This runs a multi-step power sequence.",
+            f"Really go to {label}? This runs a multi-step power sequence.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -246,6 +249,15 @@ class MainWindow(QMainWindow):
         self._add_display(form, "Input power", f"{prefix}_INPUT_POWER_MONITOR")
         return box
 
+    def _interlock_panel(self) -> QGroupBox:
+        box = QGroupBox("Interlock")
+        form = QFormLayout(box)
+        self._add_display(form, "Pritel latch", "LFC_PTAMP_LATCH")
+        reset = QPushButton("Reset latch")
+        reset.clicked.connect(lambda: self._submit("LFC_PTAMP_LATCH", "1"))
+        form.addRow("", reset)
+        return box
+
     def _pritel_panel(self) -> QGroupBox:
         box = QGroupBox("Pritel amplifier")
         form = QFormLayout(box)
@@ -253,11 +265,6 @@ class MainWindow(QMainWindow):
         self._add_spin(form, "Preamp", "LFC_PTAMP_PRE_P")
         self._add_spin(form, "Power amp", "LFC_PTAMP_I")
         self._add_display(form, "Output", "LFC_PTAMP_OUT")
-        self._add_display(form, "Interlock", "LFC_PTAMP_LATCH")
-        reset = QPushButton("Reset interlock latch")
-        reset.clicked.connect(lambda: self._submit("LFC_PTAMP_LATCH", "1"))
-        form.addRow("", reset)
-        self._add_onoff(form, "YJ shutter", "LFC_YJ_SHUTTER")
         return box
 
     def _rf_panel(self) -> QGroupBox:
@@ -271,14 +278,83 @@ class MainWindow(QMainWindow):
         self._add_display(form, "Amp voltage", "LFC_RFAMP_V")
         return box
 
-    def _seed_tec_panel(self) -> QGroupBox:
-        box = QGroupBox("Seed laser + TECs")
+    def _temperature_panel(self) -> QGroupBox:
+        box = QGroupBox("Temperatures")
+        grid = QGridLayout(box)
+        grid.setHorizontalSpacing(18)
+        present = [
+            (keyword, label)
+            for keyword, label in [
+                ("LFC_T_RACK_TOP", "Rack top"),
+                ("LFC_T_RACK_MID", "Rack mid"),
+                ("LFC_T_RACK_BOT", "Rack bottom"),
+                ("LFC_T_GLY_RACK_IN", "Glycol in"),
+                ("LFC_T_GLY_RACK_OUT", "Glycol out"),
+                ("LFC_T_EOCB_IN", "EOCB in"),
+                ("LFC_T_EOCB_OUT", "EOCB out"),
+            ]
+            if keyword in self.schema
+        ]
+        for index, (keyword, label) in enumerate(present):
+            row, pair = divmod(index, 2)
+            grid.addWidget(QLabel(label), row, pair * 2)
+            display = KeywordDisplay(keyword, self._spec(keyword))
+            self.widgets[keyword] = display
+            grid.addWidget(display, row, pair * 2 + 1)
+        return box
+
+    def _osa_panel(self) -> QGroupBox:
+        """Mini-comb spectrum from the OSA, or a placeholder until the
+        instrument is connected (GPIB is down on the rack)."""
+        box = QGroupBox("Mini-comb spectrum (OSA)")
+        layout = QVBoxLayout(box)
+        try:
+            available = self.client.arrays()
+        except Exception:  # noqa: BLE001 - older server or offline
+            available = []
+        pg = None
+        if "osa_spectrum" in available:
+            try:
+                import pyqtgraph as pg
+            except ImportError:
+                self.statusBar().showMessage("pyqtgraph not installed; spectrum hidden")
+        if pg is None:
+            placeholder = QLabel("(OSA not connected)")
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
+            layout.addWidget(placeholder)
+            return box
+        plot = pg.PlotWidget()
+        plot.setBackground(PLOT_BG)
+        plot.showGrid(x=True, y=True, alpha=0.25)
+        curve = plot.plot(pen=pg.mkPen(ACCENT, width=1))
+        self._osa_plot = (plot, curve)
+        layout.addWidget(plot)
+        self.poller.array_names = ["osa_spectrum"]
+        self.poller.array_ready.connect(self._on_array)
+        return box
+
+    def _waveshaper_panel(self) -> QGroupBox:
+        # the whole interaction is two numbers; the spin boxes track the
+        # value currently applied (server reads back its softstore)
+        box = QGroupBox("WaveShaper dispersion")
         form = QFormLayout(box)
-        self._add_spin(form, "RIO temp", "LFC_RIO_T")
-        self._add_spin(form, "RIO current", "LFC_RIO_I")
+        self._add_spin(form, "GDD", "LFC_WSP_PHASE")
+        self._add_spin(form, "TOD", "LFC_WSP_TOD")
+        return box
+
+    def _tec_panel(self) -> QGroupBox:
+        box = QGroupBox("TECs + IM bias")
+        form = QFormLayout(box)
         self._add_spin(form, "IM bias", "LFC_IM_BIAS")
         self._add_spin(form, "PPLN temp", "LFC_PPLN_T")
         self._add_spin(form, "Waveguide temp", "LFC_WGD_T")
+        return box
+
+    def _shutter_panel(self) -> QGroupBox:
+        box = QGroupBox("Shutters")
+        form = QFormLayout(box)
+        self._add_onoff(form, "YJ shutter", "LFC_YJ_SHUTTER")
         return box
 
     def _voa_panel(self) -> QGroupBox:
@@ -299,28 +375,6 @@ class MainWindow(QMainWindow):
             layout.addLayout(form)
         return box
 
-    def _temperature_panel(self) -> QGroupBox:
-        box = QGroupBox("Rack temperatures")
-        layout = QHBoxLayout(box)
-        for keyword, label in [
-            ("LFC_T_RACK_TOP", "Rack top"),
-            ("LFC_T_RACK_MID", "Rack mid"),
-            ("LFC_T_RACK_BOT", "Rack bottom"),
-            ("LFC_T_GLY_RACK_IN", "Glycol in"),
-            ("LFC_T_GLY_RACK_OUT", "Glycol out"),
-            ("LFC_T_EOCB_IN", "EOCB in"),
-            ("LFC_T_EOCB_OUT", "EOCB out"),
-        ]:
-            if keyword not in self.schema:
-                continue
-            column = QVBoxLayout()
-            column.addWidget(QLabel(label), alignment=Qt.AlignmentFlag.AlignCenter)
-            display = KeywordDisplay(keyword, self._spec(keyword))
-            self.widgets[keyword] = display
-            column.addWidget(display, alignment=Qt.AlignmentFlag.AlignCenter)
-            layout.addLayout(column)
-        return box
-
     # --------------------------------------------------------------- slots
 
     def _on_keywords(self, snapshot: dict) -> None:
@@ -328,16 +382,17 @@ class MainWindow(QMainWindow):
             widget = self.widgets.get(keyword)
             if widget is not None and hasattr(widget, "update_value"):
                 widget.update_value(payload["value"])
+        # the IM lock lamp is keyword-driven (servo PID mode), not in /state
+        im_lock = snapshot.get("LFC_IM_LOCK_MODE")
+        if im_lock is not None:
+            value = im_lock.get("value")
+            self.subsystem_lamps["im_lock"].set_state(None if value is None else bool(value))
 
     def _on_state(self, state: dict) -> None:
-        name = state.get("state", "UNKNOWN")
-        color = _STATE_COLORS.get(name, "#9e9e9e")
-        self.state_banner.setText(name)
-        self.state_banner.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: white; "
-            f"background-color: {color}; padding: 8px; border-radius: 4px;"
-        )
+        self._set_banner(state.get("state", "UNKNOWN"))
         for key, lamp in self.subsystem_lamps.items():
+            if key == "im_lock":
+                continue  # driven from the keyword snapshot instead
             lamp.set_state(state.get("subsystems", {}).get(key))
         action = state.get("action")
         if action and action.get("running"):
@@ -352,6 +407,14 @@ class MainWindow(QMainWindow):
             self.action_label.setText(f"✓ last action {action['name']}: {action['message']}")
         else:
             self.action_label.setText("")
+
+    def _on_array(self, name: str, data: dict) -> None:
+        if name != "osa_spectrum" or not hasattr(self, "_osa_plot"):
+            return
+        plot, curve = self._osa_plot
+        curve.setData(data.get("x", []), data.get("y", []))
+        plot.setLabel("bottom", data.get("x_label", ""))
+        plot.setLabel("left", data.get("y_label", ""))
 
     def _on_connection(self, ok: bool, detail: str) -> None:
         if ok:

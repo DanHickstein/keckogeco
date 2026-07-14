@@ -11,6 +11,12 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 | `LFC_PTAMP_PRE_P` | "pre-amp output power", mW, 50–140 | preamp **current**, mA, 0–600 | The deployed implementation always read/wrote the Pritel preamp current in mA (`KeckLFC.py` wrote `preAmp = '{value}mA'`; standby/full-comb sequences use 0 and 600). The CSV metadata never matched. |
 | `LFC_RFOSCI_I` | units mA, min 0.35, max 0.7 | units **A** (limits unchanged) | Implementation returned the GPD supply current in amps; the 0.35–0.7 limits only make sense in A. |
 
+## Additions (new keywords, not in the 77-keyword baseline)
+
+| Keyword | Type | Why |
+|---|---|---|
+| `LFC_WSP_TOD` | double, writable, ps/nm² | 3rd-order dispersion companion to `LFC_WSP_PHASE`. The engineering GUI drives the WaveShaper as two numbers (GDD + TOD) instead of a full profile; the driver's `set_dispersion` always supported d3 but no keyword exposed it. `LFC_WSP_PHASE` gains units `ps/nm` and a help string naming it GDD (semantics unchanged: it was always d2). Both keywords read back the value currently applied. |
+
 ## Semantic notes (unchanged, but worth discussing)
 
 - `LFC_CHECK_STATUS` still reports the legacy prime-product code

@@ -90,7 +90,7 @@ def test_state_endpoint(client):
 
 def test_schema_endpoint(client):
     body = client.get("/api/v1/schema").json()
-    assert len(body) == 77
+    assert len(body) == 78  # 77 baseline keywords + LFC_WSP_TOD
     assert body["LFC_EDFA27_P"]["max"] == 630
     assert body["LFC_EDFA27_P"]["bound"] is True
     assert body["LFC_TEMP_TEST2"]["bound"] is True  # daq_eocb board in the example config

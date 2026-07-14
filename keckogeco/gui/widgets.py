@@ -22,10 +22,10 @@ from PyQt6.QtWidgets import (
 __all__ = ["KeywordDisplay", "KeywordSpinBox", "OnOffButton", "StatusLamp"]
 
 _LAMP_COLORS = {
-    True: "#2e7d32",  # green
-    False: "#616161",  # grey
-    "fault": "#c62828",  # red
-    None: "#9e9e9e",
+    True: "#35d07f",  # green
+    False: "#3a4350",  # grey (off)
+    "fault": "#e05252",  # red
+    None: "#5a6472",  # unknown
 }
 
 
@@ -41,7 +41,7 @@ class StatusLamp(QLabel):
     def set_state(self, state) -> None:
         color = _LAMP_COLORS.get(state, _LAMP_COLORS[None])
         self.setStyleSheet(
-            f"background-color: {color}; border-radius: 8px; border: 1px solid #333;"
+            f"background-color: {color}; border-radius: 8px; border: 1px solid #0b0e13;"
         )
         state_name = {True: "ON", False: "OFF", None: "?"}.get(state, str(state))
         self.setToolTip(f"{self._label}: {state_name}")
