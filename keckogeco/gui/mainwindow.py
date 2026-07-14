@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import prefs
 from .client import KeckogecoClient, PollThread, WriteThread
 from .theme import ACCENT, PLOT_BG, STATE_COLORS
 from .widgets import KeywordDisplay, KeywordSpinBox, OnOffButton, StatusLamp
@@ -53,14 +54,16 @@ _CONFIRM = {
 class OsaControls(QWidget):
     """Controls column beside the OSA spectrum plot.
 
-    The standard mini-comb view (DEFAULTS + continuous sweep) is pushed
-    to the OSA when the panel first connects, and again on the defaults
-    button. Controls re-populate from the read-back after every apply,
-    so they always show what the instrument accepted; edits go through
-    the writer thread.
+    The default view (factory values below, overridden by the user's
+    saved ``[osa_defaults]`` in the GUI prefs file) is pushed to the OSA
+    plus continuous sweep when the panel first connects, and again on
+    the Default button; "Save as default" persists the current settings.
+    Controls re-populate from the read-back after every apply, so they
+    always show what the instrument accepted; edits go through the
+    writer thread.
     """
 
-    DEFAULTS = {
+    FACTORY_DEFAULTS = {
         "start_nm": 1550.0,
         "stop_nm": 1570.0,
         "resolution_nm": 0.06,  # the 86142B's best
@@ -73,6 +76,10 @@ class OsaControls(QWidget):
         super().__init__()
         self._submit_settings = submit_settings  # (**settings) -> queued PUT
         self._submit_sweep = submit_sweep  # (mode) -> queued POST
+        saved = prefs.load_section("osa_defaults")
+        self.defaults = {
+            key: float(saved.get(key, fallback)) for key, fallback in self.FACTORY_DEFAULTS.items()
+        }
         self.setMaximumWidth(250)
 
         form = QFormLayout(self)
@@ -88,19 +95,19 @@ class OsaControls(QWidget):
         self.start = spin(
             "start_nm",
             {"units": "nm", "min": 600, "max": 1700, "help": "sweep start wavelength"},
-            self.DEFAULTS["start_nm"],
+            self.defaults["start_nm"],
         )
         self.stop = spin(
             "stop_nm",
             {"units": "nm", "min": 600, "max": 1700, "help": "sweep stop wavelength"},
-            self.DEFAULTS["stop_nm"],
+            self.defaults["stop_nm"],
         )
         self.sensitivity = spin(
             "sensitivity_dBm",
             # floor at the 86142B's -90 dBm spec: the instrument accepts
             # lower values but only gets slower, never more sensitive
             {"units": "dBm", "min": -90, "max": 30, "help": "measurement sensitivity"},
-            self.DEFAULTS["sensitivity_dBm"],
+            self.defaults["sensitivity_dBm"],
         )
         self.resolution = QComboBox()
         self.resolution.setToolTip("resolution bandwidth")
@@ -124,19 +131,50 @@ class OsaControls(QWidget):
             sweep.addWidget(button)
         form.addRow("Sweep", sweep)
 
-        defaults = QPushButton("Default view")
-        defaults.setToolTip(
-            f"{self.DEFAULTS['start_nm']:g}–{self.DEFAULTS['stop_nm']:g} nm, "
-            f"{self.DEFAULTS['resolution_nm']:g} nm resolution, "
-            f"{self.DEFAULTS['sensitivity_dBm']:g} dBm sensitivity, continuous sweep"
+        config = QHBoxLayout()
+        self._default_button = QPushButton("Default")
+        self._default_button.clicked.connect(self.apply_defaults)
+        save = QPushButton("Save as default")
+        save.setToolTip("store the current settings as the default OSA configuration")
+        save.clicked.connect(self._save_as_default)
+        config.addWidget(self._default_button)
+        config.addWidget(save)
+        form.addRow("Config", config)
+        self._refresh_default_tooltip()
+
+    def _refresh_default_tooltip(self) -> None:
+        self._default_button.setToolTip(
+            f"{self.defaults['start_nm']:g}–{self.defaults['stop_nm']:g} nm, "
+            f"{self.defaults['resolution_nm']:g} nm resolution, "
+            f"{self.defaults['sensitivity_dBm']:g} dBm sensitivity, continuous sweep"
         )
-        defaults.clicked.connect(self.apply_defaults)
-        form.addRow(defaults)
 
     def apply_defaults(self) -> None:
-        """Push the standard mini-comb view to the OSA."""
-        self._submit_settings(**self.DEFAULTS)
+        """Push the default mini-comb view to the OSA."""
+        self._submit_settings(**self.defaults)
         self._submit_sweep("continuous")
+
+    def current_settings(self) -> dict:
+        return {
+            "start_nm": self.start.spin.value(),
+            "stop_nm": self.stop.spin.value(),
+            "resolution_nm": float(self.resolution.currentData()),
+            "sensitivity_dBm": self.sensitivity.spin.value(),
+        }
+
+    def _save_as_default(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Confirm",
+            "Are you sure you want to change the default OSA configuration?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.defaults = self.current_settings()
+        prefs.save_section("osa_defaults", self.defaults)
+        self._refresh_default_tooltip()
 
     def _set_resolutions(self, values) -> None:
         self.resolution.blockSignals(True)

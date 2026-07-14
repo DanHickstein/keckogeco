@@ -93,12 +93,15 @@ def test_mainwindow_constructs_and_updates(qtbot):
     window.writer.stop()
 
 
-def test_osa_plot_wires_up_when_array_appears(qtbot):
+def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     """The spectrum panel starts as a placeholder and becomes a live plot
     the first time the server reports the osa_spectrum array."""
     pytest.importorskip("pyqtgraph")
+    from keckogeco.gui import prefs
     from keckogeco.gui.mainwindow import MainWindow
 
+    # isolate from the committed prefs file: factory defaults apply
+    monkeypatch.setattr(prefs, "GUI_CONFIG_PATH", tmp_path / "gui.toml")
     window = MainWindow(FakeClient())
     qtbot.addWidget(window)
     assert window._osa_plot is None
@@ -135,3 +138,43 @@ def test_osa_plot_wires_up_when_array_appears(qtbot):
     assert controls._sweep_buttons["single"].styleSheet() == ""
     window.poller.stop()
     window.writer.stop()
+
+
+def test_osa_save_as_default(qtbot, tmp_path, monkeypatch):
+    """'Save as default' asks for confirmation, then persists the current
+    settings; a fresh controls instance loads them back."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from keckogeco.gui import prefs
+    from keckogeco.gui.mainwindow import OsaControls
+
+    monkeypatch.setattr(prefs, "GUI_CONFIG_PATH", tmp_path / "gui.toml")
+    controls = OsaControls(lambda **s: None, lambda m: None)
+    qtbot.addWidget(controls)
+    controls.start.spin.setValue(1548.0)
+    controls.stop.spin.setValue(1572.0)
+    controls.sensitivity.spin.setValue(-80.0)
+    controls.resolution.setCurrentIndex(2)  # 0.2 nm
+
+    # declining leaves everything untouched
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
+    )
+    controls._save_as_default()
+    assert not (tmp_path / "gui.toml").exists()
+    assert controls.defaults["start_nm"] == 1550.0
+
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    controls._save_as_default()
+    assert controls.defaults == {
+        "start_nm": 1548.0,
+        "stop_nm": 1572.0,
+        "resolution_nm": 0.2,
+        "sensitivity_dBm": -80.0,
+    }
+    fresh = OsaControls(lambda **s: None, lambda m: None)
+    qtbot.addWidget(fresh)
+    assert fresh.defaults == controls.defaults
+    assert fresh.start.spin.value() == 1548.0  # controls start at the saved defaults

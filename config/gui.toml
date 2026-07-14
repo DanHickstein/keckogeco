@@ -1,0 +1,9 @@
+# keckogeco GUI preferences — committed to the repo (unlike the site
+# config next to it). "Save as default" in the GUI's OSA panel rewrites
+# [osa_defaults]; commit the change when the new view is the keeper.
+
+[osa_defaults]
+start_nm = 1550.0
+stop_nm = 1570.0
+resolution_nm = 0.06
+sensitivity_dBm = -60.0
