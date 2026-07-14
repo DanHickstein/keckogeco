@@ -10,6 +10,9 @@ config/site-info.txt
 logs/
 ws.log
 
+# Saved OSA spectra (GUI "Save" button)
+spectra/
+
 # Python
 __pycache__/
 *.py[cod]

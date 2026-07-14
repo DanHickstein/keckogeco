@@ -12,9 +12,15 @@ TECs, YJ shutter, VOAs.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+import time
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -29,7 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import prefs
+from . import prefs, spectra
 from .client import KeckogecoClient, PollThread, WriteThread
 from .theme import ACCENT, PLOT_BG, STATE_COLORS
 from .widgets import KeywordDisplay, KeywordSpinBox, OnOffButton, StatusLamp
@@ -49,6 +55,41 @@ _CONFIRM = {
     "LFC_RFOSCI_ONOFF",
     "LFC_RFAMP_ONOFF",
 }
+
+
+class SelfDestructDialog(QDialog):
+    """Requested by Steph Leifer. Fully armed and completely harmless:
+    OK and Cancel both just dismiss it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("keckogeco")
+        self._remaining = 5
+        layout = QVBoxLayout(self)
+        self.label = QLabel(self._message())
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setStyleSheet("font-size: 14px; padding: 12px;")
+        layout.addWidget(self.label)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(1000)
+
+    def _message(self) -> str:
+        return f"The system will self-destruct in {self._remaining} seconds."
+
+    def _tick(self) -> None:
+        self._remaining -= 1
+        if self._remaining > 0:
+            self.label.setText(self._message())
+        else:
+            self._timer.stop()
+            self.label.setText("💥  ...just kidding. Hi Steph!")
 
 
 class OsaControls(QWidget):
@@ -72,10 +113,12 @@ class OsaControls(QWidget):
     #: fallback resolution list until the server reports the OSA's own
     RESOLUTIONS_NM = (0.06, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)
 
-    def __init__(self, submit_settings, submit_sweep):
+    def __init__(self, submit_settings, submit_sweep, save_spectrum=None, load_spectrum=None):
         super().__init__()
         self._submit_settings = submit_settings  # (**settings) -> queued PUT
         self._submit_sweep = submit_sweep  # (mode) -> queued POST
+        self._save_spectrum = save_spectrum  # () -> save-file dialog
+        self._load_spectrum = load_spectrum  # ("loaded"|"reference") -> open-file dialog
         saved = prefs.load_section("osa_defaults")
         self.defaults = {
             key: float(saved.get(key, fallback)) for key, fallback in self.FACTORY_DEFAULTS.items()
@@ -141,6 +184,22 @@ class OsaControls(QWidget):
         config.addWidget(save)
         form.addRow("Config", config)
         self._refresh_default_tooltip()
+
+        files = QHBoxLayout()
+        for text, tooltip, action in (
+            ("Save", "save the live spectrum to a CSV file", lambda: self._save_spectrum()),
+            ("Load", "display a saved spectrum", lambda: self._load_spectrum("loaded")),
+            (
+                "Load ref",
+                "display a reference spectrum (remembered across GUI restarts)",
+                lambda: self._load_spectrum("reference"),
+            ),
+        ):
+            button = QPushButton(text)
+            button.setToolTip(tooltip)
+            button.clicked.connect(lambda _checked, a=action: a())
+            files.addWidget(button)
+        form.addRow("Spectra", files)
 
     def _refresh_default_tooltip(self) -> None:
         self._default_button.setToolTip(
@@ -377,6 +436,11 @@ class MainWindow(QMainWindow):
         abort.setToolTip("Abort the running transition")
         abort.clicked.connect(self._abort_action)
         buttons.addWidget(abort)
+        boom = QPushButton("Self-destruct")
+        boom.setToolTip("for Steph")
+        boom.setStyleSheet("color: #e05252;")
+        boom.clicked.connect(lambda: SelfDestructDialog(self).exec())
+        buttons.addWidget(boom)
         outer.addLayout(buttons)
         return box
 
@@ -499,16 +563,93 @@ class MainWindow(QMainWindow):
         plot = pg.PlotWidget()
         plot.setBackground(PLOT_BG)
         plot.showGrid(x=True, y=True, alpha=0.25)
-        curve = plot.plot(pen=pg.mkPen(ACCENT, width=1))
+        plot.addLegend(offset=(-10, 10), labelTextColor="#8b96a5")
+        curve = plot.plot(pen=pg.mkPen(ACCENT, width=1), name="live")
         self._osa_plot = (plot, curve)
+        self._osa_curves: dict[str, object] = {}  # "loaded"/"reference" overlays
         self._osa_placeholder.deleteLater()
         self._osa_layout.addWidget(plot, stretch=1)
-        self._osa_controls = OsaControls(self._osa_apply, self._osa_sweep)
+        self._osa_controls = OsaControls(
+            self._osa_apply, self._osa_sweep, self._osa_save, self._osa_load
+        )
         self._osa_layout.addWidget(self._osa_controls)
         self.poller.array_names = ["osa_spectrum"]
         # per Dan: connecting means "show me the standard mini-comb view",
         # so the defaults are applied to the OSA, not just displayed
         self._osa_controls.apply_defaults()
+        self._restore_reference()
+
+    #: overlay pens (live is the accent color); reference is dashed
+    _CURVE_STYLE = {"loaded": ("#e8a33d", None), "reference": ("#b085f5", "dash")}
+
+    def _osa_set_curve(self, kind: str, x: list, y: list) -> None:
+        curve = self._osa_curves.get(kind)
+        if curve is None:
+            import pyqtgraph as pg
+
+            color, dash = self._CURVE_STYLE[kind]
+            pen = pg.mkPen(
+                color, width=1, style=Qt.PenStyle.DashLine if dash else Qt.PenStyle.SolidLine
+            )
+            plot, _live = self._osa_plot
+            curve = plot.plot(pen=pen, name=kind)
+            self._osa_curves[kind] = curve
+        curve.setData(x, y)
+
+    def _spectra_dir(self) -> Path:
+        directory = prefs.GUI_CONFIG_PATH.parent.parent / "spectra"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def _osa_save(self) -> None:
+        data = getattr(self, "_osa_data", None)
+        if not data or not data.get("x"):
+            self.statusBar().showMessage("no live spectrum to save yet", 5000)
+            return
+        default = self._spectra_dir() / time.strftime("osa_%Y-%m-%d_%H%M%S.csv")
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save spectrum", str(default), "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        metadata = dict(self._osa_controls.current_settings())
+        metadata["x_label"] = data.get("x_label", "")
+        metadata["y_label"] = data.get("y_label", "")
+        metadata["points"] = len(data["x"])
+        try:
+            spectra.save_spectrum_csv(path, data["x"], data["y"], metadata)
+        except OSError as exc:
+            self.statusBar().showMessage(f"SAVE FAILED: {exc}", 10000)
+            return
+        self.statusBar().showMessage(f"saved {path}", 8000)
+
+    def _osa_load(self, kind: str) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self, f"Load {kind} spectrum", str(self._spectra_dir()), "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            x, y, _metadata = spectra.load_spectrum_csv(path)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"LOAD FAILED: {exc}", 10000)
+            return
+        self._osa_set_curve(kind, x, y)
+        if kind == "reference":
+            prefs.save_section("osa_reference", {"csv": Path(path).as_posix()})
+        self.statusBar().showMessage(f"{kind} spectrum: {path}", 8000)
+
+    def _restore_reference(self) -> None:
+        """Re-display the saved reference spectrum, if one was ever loaded."""
+        saved = prefs.load_section("osa_reference").get("csv")
+        if not saved:
+            return
+        try:
+            x, y, _metadata = spectra.load_spectrum_csv(saved)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"reference spectrum not restored: {exc}", 10000)
+            return
+        self._osa_set_curve("reference", x, y)
 
     def _osa_apply(self, **settings) -> None:
         if settings:
@@ -604,6 +745,7 @@ class MainWindow(QMainWindow):
     def _on_array(self, name: str, data: dict) -> None:
         if name != "osa_spectrum" or self._osa_plot is None:
             return
+        self._osa_data = data  # kept for "Save"
         plot, curve = self._osa_plot
         curve.setData(data.get("x", []), data.get("y", []))
         plot.setLabel("bottom", data.get("x_label", ""))

@@ -136,8 +136,53 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     assert "bold" in controls._sweep_buttons["stop"].styleSheet()
     assert controls._sweep_buttons["continuous"].styleSheet() == ""
     assert controls._sweep_buttons["single"].styleSheet() == ""
+
+    # --- save the live spectrum: dialog prefilled with a datetime name
+    from PyQt6.QtWidgets import QFileDialog
+
+    csv_path = tmp_path / "spec.csv"
+    prefill = {}
+
+    def fake_save(_parent, _caption, directory, _filter):
+        prefill["directory"] = directory
+        return str(csv_path), "csv"
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(fake_save))
+    window._osa_save()
+    assert "osa_20" in prefill["directory"]  # osa_<date-time>.csv suggestion
+    text = csv_path.read_text(encoding="utf-8")
+    assert "# resolution_nm: 0.1" in text  # metadata header rides along
+    assert "1550,-40" in text
+
+    # --- load it back as the reference: overlay curve + persisted path
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(csv_path), "csv"))
+    )
+    window._osa_load("reference")
+    assert list(window._osa_curves["reference"].getData()[0]) == [1550.0, 1560.0]
+    # a fresh GUI restores the reference at wire-up
+    window2 = MainWindow(FakeClient())
+    qtbot.addWidget(window2)
+    window2._on_arrays_available(["osa_spectrum"])
+    assert list(window2._osa_curves["reference"].getData()[1]) == [-40.0, -20.0]
+    window2.poller.stop()
+    window2.writer.stop()
+
     window.poller.stop()
     window.writer.stop()
+
+
+def test_self_destruct_countdown(qtbot):
+    """Fully armed and completely harmless."""
+    from keckogeco.gui.mainwindow import SelfDestructDialog
+
+    dialog = SelfDestructDialog()
+    qtbot.addWidget(dialog)
+    assert dialog.label.text() == "The system will self-destruct in 5 seconds."
+    for _ in range(5):
+        dialog._tick()
+    assert "kidding" in dialog.label.text()
+    assert "Steph" in dialog.label.text()
 
 
 def test_osa_save_as_default(qtbot, tmp_path, monkeypatch):
