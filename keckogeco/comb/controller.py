@@ -278,6 +278,10 @@ class LFCController:
             bind("LFC_T_EOCB_IN", getter=lambda: self.device("daq_eocb").temperature_C(5))
 
         # --- VOAs, HK shutter, pendulum rep-rate monitor
+        # Which physical VOA is which wavelength is not yet known; config
+        # keys stay unit-serial-based (voa_303699, ...) until each unit is
+        # identified on-site, so these keywords stay unbound until a config
+        # block is renamed to the matching wavelength key below.
         for key, kw in (
             ("voa1550", "LFC_VOA1550_ATTEN"),
             ("voa1310", "LFC_VOA1310_ATTEN"),

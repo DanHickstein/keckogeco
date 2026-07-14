@@ -67,7 +67,9 @@ def test_unknown_keyword_404(client):
 
 
 def test_unbound_keyword_501(client):
-    response = client.get("/api/v1/keywords/LFC_TEMP_TEST2", params={"fresh": 1})
+    # VOA wavelength keywords stay unbound until the units are identified
+    # on-site and their config blocks are renamed (see AGENTS.md)
+    response = client.get("/api/v1/keywords/LFC_VOA1310_ATTEN", params={"fresh": 1})
     assert response.status_code == 501
 
 
@@ -91,7 +93,8 @@ def test_schema_endpoint(client):
     assert len(body) == 77
     assert body["LFC_EDFA27_P"]["max"] == 630
     assert body["LFC_EDFA27_P"]["bound"] is True
-    assert body["LFC_TEMP_TEST2"]["bound"] is False  # daq_eocb not in the example config
+    assert body["LFC_TEMP_TEST2"]["bound"] is True  # daq_eocb board in the example config
+    assert body["LFC_VOA1310_ATTEN"]["bound"] is False  # VOAs not yet identified by wavelength
 
 
 def test_bearer_token_auth(tmp_path):

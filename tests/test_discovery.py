@@ -11,6 +11,7 @@ from keckogeco.discovery import (
     extract_token,
     load_existing,
     make_key,
+    resolve_port,
     save_config,
     visa_addr_for,
 )
@@ -149,3 +150,86 @@ def test_rediscovery_preserves_curated_options(tmp_path: Path):
     assert cfg.devices["spare_voa"].enabled is False  # user-disabled stays disabled
     assert "response" not in cfg.devices["edfa27"].options  # transients stay out
     assert "port" not in cfg.devices["edfa27"].options
+
+
+def test_save_config_keeps_note_and_missing_since_and_writes_backup(tmp_path: Path):
+    """Curated notes and the missing_since tag survive the round-trip, and
+    the pre-run file is kept as .bak."""
+    config_path = tmp_path / "keckogeco.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[devices.rio]",
+                'driver = "orion_laser"',
+                'address = "COM5"',
+                "enabled = false",
+                'note = "suspected Rio ORION; bare Prolific adapter"',
+                "",
+                "[devices.tec_tc720_AG0JO6EHA]",
+                'driver = "tec_tc720"',
+                'address = "COM13"',
+                "enabled = false",
+                'usb_serial = "AG0JO6EHA"',
+                'missing_since = "2026-07-13T14:00:00"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    original = config_path.read_text(encoding="utf-8")
+    entries = load_existing(config_path)
+    save_config(entries, config_path)
+
+    cfg = load_config(config_path)
+    assert cfg.devices["rio"].enabled is False
+    assert cfg.devices["rio"].options["note"] == "suspected Rio ORION; bare Prolific adapter"
+    assert cfg.devices["tec_tc720_AG0JO6EHA"].options["missing_since"].startswith("2026-07-13")
+    backup = config_path.with_name(config_path.name + ".bak")
+    assert backup.read_text(encoding="utf-8") == original
+
+
+def test_resolve_port_prefers_usb_serial_over_stale_port_name():
+    class FakePort:
+        def __init__(self, device):
+            self.device = device
+
+    ports_by_serial = {"AG0JO6EHA": FakePort("COM42")}
+    ports_by_name = {"COM13": FakePort("COM13"), "COM42": FakePort("COM42")}
+    # adapter renumbered COM13 -> COM42: the serial wins over the stale name
+    entry = {"usb_serial": "AG0JO6EHA", "port": "COM13"}
+    assert resolve_port(entry, ports_by_serial, ports_by_name) == "COM42"
+    # no serial (Prolific): fall back to the recorded port name
+    assert resolve_port({"port": "COM13"}, ports_by_serial, ports_by_name) == "COM13"
+    # adapter gone entirely
+    assert resolve_port({"port": "COM99"}, ports_by_serial, ports_by_name) is None
+
+
+def test_load_existing_marks_only_serial_devices_as_ports(tmp_path: Path):
+    """Only COM/ASRL addresses get a "port" key. A bare MCC serial or an
+    IP address must not - the verify loop treats "port" entries as COM
+    devices and drops them when no adapter matches (that deleted the daq
+    blocks on 2026-07-13)."""
+    config_path = tmp_path / "keckogeco.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[devices.edfa27]",
+                'driver = "amonics_edfa"',
+                'address = "COM17"',
+                "",
+                "[devices.daq]",
+                'driver = "usb2408"',
+                'address = "205F843"',
+                "",
+                "[devices.rp1]",
+                'driver = "red_pitaya"',
+                'address = "10.0.0.5"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    entries = load_existing(config_path)
+    assert entries["edfa27"]["port"] == "COM17"
+    assert "port" not in entries["daq"]
+    assert "port" not in entries["rp1"]

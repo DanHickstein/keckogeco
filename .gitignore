@@ -1,7 +1,9 @@
 # Local configuration — real instrument addresses, credentials, network details.
 # Only instruments.example.toml is committed.
 config/keckogeco.toml
+config/*.bak
 config/secrets.toml
+config/site-info.txt
 *.local.toml
 
 # Logs and telemetry

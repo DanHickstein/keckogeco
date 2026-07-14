@@ -281,11 +281,14 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     app = create_app(config, sim=args.sim, poll_s=args.poll)
+    # access_log=False: the GUIs poll every few seconds, so per-request
+    # lines drown out the interesting events. Errors still log.
     uvicorn.run(
         app,
         host=args.host or config.server.host,
         port=args.port or config.server.port,
         log_level="info",
+        access_log=False,
     )
     return 0
 

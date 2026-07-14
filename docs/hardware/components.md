@@ -41,7 +41,7 @@ The astrocomb hardware with numbered components.
 | 18 | USB hub A | 15-port powered | — | Rack | A15 | USB aggregation (see hub table below). |
 | 19 | USB hub B | 15-port powered | — | Rack | B23 | Additional USB capacity. |
 | 20 | Ethernet switch | Unmanaged | — | Rack | B21 | Local switching. |
-| 21 | DAQ 2 | MCC USB-2408 | USB (`usb2408`, board 0) | Rack | USB | Rack thermocouples. |
+| 21 | DAQ 2 | MCC USB-2408 | USB (`usb2408`, serial 205F843) | Rack | USB | Rack thermocouples (`daq`). |
 | 22 | Filter cavity TEC | Wavelength Electronics LFI-3751 | Local/analog | Rack | A10 | Filter-cavity temperature (cavity unused; disconnected). |
 | 23 | FPGAs | Red Pitaya STEMlab 125-14 (×3) | Ethernet SCPI | Rack | A24, B24, B20 | Historically 10 MHz/lock signal generation; being phased out for the Keysight FGs. |
 | 24 | DC supply 2 | GW Instek GPP-1326 | Serial (`instek_psu`) | Rack | A20 | 30 V / high-current supply for the RF amplifier. One unit was replaced by an Acopian after a failure. |
@@ -75,7 +75,7 @@ The astrocomb hardware with numbered components.
 | 49–50 | Pulse compression stages | Home-built OFS HNLF chassis (+ spare) | Passive | Bench | — | Nonlinear compression before the waveguide. |
 | 51–53 | SCG waveguides | Ta₂O₅ supercontinuum waveguides (1 active, 2 spare) | Passive | Bench | — | Broadband spectrum via supercontinuum generation. |
 | 54 | WDM | 1550/2000 nm pump filter | Passive | Bench | — | Separates pump and long-wavelength comb light. |
-| 55 | DAQ 1 | MCC USB-2408 | USB (`usb2408`, board 1) | Bench | USB | Optical-table thermocouples. |
+| 55 | DAQ 1 | MCC USB-2408 | USB (`usb2408`, serial 205F82F) | Bench | USB | Optical-table thermocouples (`daq_eocb`). |
 | 56 | TEC controllers | TE Tech TC-720 OEM (×2) | Serial (`tec_tc720`) | Bench | A16 (12 V) | PPLN doubler and SCG waveguide temperatures. |
 
 ## Items 57–70: auxiliary components

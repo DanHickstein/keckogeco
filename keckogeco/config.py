@@ -210,10 +210,12 @@ def load_config(path: str | Path | None = None) -> Config:
 
 
 def device_summary_lines(config: Config) -> list[str]:
-    """One aligned text line per configured device, disabled ones included.
+    """One compact text line per configured device, disabled ones included.
 
-    Discovery bookkeeping options (``usb_serial``, ``probe``, ``found_on``,
-    ...) are hidden; curated options like ``mode`` and ``channel`` are shown.
+    Format: ``key  address  name  options`` — the driver column is omitted
+    (implied by the key/name, and always in the TOML). Discovery bookkeeping
+    options (``usb_serial``, ``probe``, ``found_on``, ...) are hidden;
+    curated options like ``mode`` and ``channel`` are shown.
     """
     # Imported here because drivers.base imports this module (DeviceConfig).
     from keckogeco.drivers.base import DISCOVERY_KEYS
@@ -224,14 +226,12 @@ def device_summary_lines(config: Config) -> list[str]:
             f"{k}={v}" for k, v in sorted(dev.options.items()) if k not in DISCOVERY_KEYS
         )
         note = dev.name if dev.enabled else f"{dev.name} [disabled]"
-        rows.append((dev.key, dev.driver, dev.address, options, note))
-    widths = [max((len(row[i]) for row in rows), default=0) for i in range(4)]
-    return [
-        "  ".join(
-            [*(cell.ljust(w) for cell, w in zip(row[:4], widths, strict=True)), row[4]]
-        ).rstrip()
-        for row in rows
-    ]
+        rows.append((dev.key, dev.address, "  ".join(filter(None, (note, options)))))
+    key_w = max((len(key) for key, _, _ in rows), default=0)
+    # Align COM/GPIB-length addresses; a long USB VISA resource string
+    # overflows its own row instead of pushing every other row out.
+    addr_w = max((len(addr) for _, addr, _ in rows if len(addr) <= 16), default=0)
+    return [f"{key:<{key_w}}  {addr:<{addr_w}}  {note}".rstrip() for key, addr, note in rows]
 
 
 def main(argv: list[str] | None = None) -> int:
