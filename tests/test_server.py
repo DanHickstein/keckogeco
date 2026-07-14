@@ -90,11 +90,31 @@ def test_state_endpoint(client):
 
 def test_schema_endpoint(client):
     body = client.get("/api/v1/schema").json()
-    assert len(body) == 78  # 77 baseline keywords + LFC_WSP_TOD
+    assert len(body) == 84  # 77 baseline + additions in ktl/keyword-changes.md
     assert body["LFC_EDFA27_P"]["max"] == 630
     assert body["LFC_EDFA27_P"]["bound"] is True
     assert body["LFC_TEMP_TEST2"]["bound"] is True  # daq_eocb board in the example config
     assert body["LFC_VOA1310_ATTEN"]["bound"] is False  # VOAs not yet identified by wavelength
+
+
+def test_devices_endpoint(client):
+    body = client.get("/api/v1/devices").json()
+    assert body["edfa27"]["address"]  # the GUI puts this in panel titles
+    assert body["edfa27"]["online"] is True
+    assert body["osa"]["address"] == "GPIB0::30::INSTR"
+
+
+def test_new_monitor_keywords_bound(client):
+    body = client.get("/api/v1/schema").json()
+    for name in (
+        "LFC_EDFA27_OUTPUT_POWER_MONITOR",
+        "LFC_EDFA13_INPUT_POWER_MONITOR",
+        "LFC_PTAMP_IN",
+        "LFC_PTAMP_INTERLOCK_V",
+    ):
+        assert body[name]["bound"] is True, name
+    volts = client.get("/api/v1/keywords/LFC_PTAMP_INTERLOCK_V", params={"fresh": 1}).json()
+    assert 0.0 <= volts["value"] <= 5.0
 
 
 def test_osa_settings_endpoints(client):

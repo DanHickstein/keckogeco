@@ -47,8 +47,10 @@ logs an error instead (see the change list).
 | `LFC_RFOSCI_MONITOR` | boolean | RO | RF oscillator supply within its envelope (15 V; ~0.41 A steady-state, transiently up to ~0.62 A while warming). Old polling ~20 s. |
 | `LFC_RFAMP_MONITOR` | boolean | RO | RF amplifier supply within its envelope (30 V; ~4.2 A driven, ~0.7 A idling). Old polling ~20 s. |
 | `LFC_PENDULEM_FREQ_MONITOR` | boolean | RO | Rep-rate within 16 GHz ± 1 kHz on the Pendulum counter (only meaningful with the RF chain up). |
-| `LFC_EDFA27_INPUT_POWER_MONITOR` | boolean | RO | EDFA27 seed input power in range. Old polling ~120 s. |
-| `LFC_EDFA23_INPUT_POWER_MONITOR` | boolean | RO | EDFA23 seed input power in range. Old polling ~120 s. |
+| `LFC_EDFA27_INPUT_POWER_MONITOR` | double, mW | RO | EDFA27 seed input power (retyped from the baseline's "boolean": the deployed handler always returned mW). Old polling ~120 s. |
+| `LFC_EDFA23_INPUT_POWER_MONITOR` | double, mW | RO | EDFA23 seed input power (retyped, as above). Old polling ~120 s. |
+| `LFC_EDFA13_INPUT_POWER_MONITOR` | double, mW | RO | EDFA13 seed input power. **New in the rewrite.** |
+| `LFC_EDFA27/23/13_OUTPUT_POWER_MONITOR` | double, mW | RO | Amonics output power monitors (`:SENS:POW:OUT`). **New in the rewrite.** |
 
 ## Amonics EDFAs
 
@@ -91,8 +93,10 @@ against seed loss.
 | `LFC_PTAMP_I` | double, A, 0–4.2 | RW 🔒 | Power-amp pump current. Normal operation 3.8–4.2 A; the driver ramps all changes. Hardware limit is 5 A but >4.2 A risks the optics. |
 | `LFC_PTAMP_I_DEFAULT` | boolean | RW 🔒 | Write 1: power amp to the commissioned current (ramped). |
 | `LFC_PTAMP_OUT` | double, W, 0–4 | RO | Power-amp optical output power. |
+| `LFC_PTAMP_IN` | double, mW | RO | Seed input power (`FA INPUT?`). **New in the rewrite.** |
 | `LFC_PTAMP_ONOFF` | boolean | RW 🔒 | Pritel pump emission on/off. |
 | `LFC_PTAMP_LATCH` | enumerated | RW 🔒 | Arduino interlock latch: 1 = ready, 0 = tripped-but-resettable, 3 = input too high, 5 = input too low, 4 = unknown. Write 1 to reset after a trip. |
+| `LFC_PTAMP_INTERLOCK_V` | double, V, 0–5 | RO | Interlock photodiode voltage (Arduino 10-bit ADC scaled to volts) — the value the latch judges against its thresholds. **New in the rewrite.** |
 
 ## Intensity-modulator lock
 

@@ -283,6 +283,10 @@ class MainWindow(QMainWindow):
         self.widgets: dict[str, object] = {}  # keyword -> widget
 
         self.schema = client.schema()
+        try:
+            self.devices = client.devices()  # key -> {address, name, online, ...}
+        except Exception:  # noqa: BLE001 - older server: titles just lose the port
+            self.devices = {}
 
         self.writer = WriteThread(client)
         self.writer.write_failed.connect(self._on_write_failed)
@@ -347,10 +351,10 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._comb_state_panel())
 
         row2 = QHBoxLayout()
-        row2.addWidget(self._edfa_panel("EDFA 27 dBm", "LFC_EDFA27"))
-        row2.addWidget(self._edfa_panel("EDFA 23 dBm", "LFC_EDFA23"))
-        row2.addWidget(self._interlock_panel())
-        row2.addWidget(self._pritel_panel())
+        row2.addWidget(self._edfa_panel("Amonics EDFA 27 dBm", "LFC_EDFA27", "edfa27"), stretch=3)
+        row2.addWidget(self._edfa_panel("Amonics EDFA 23 dBm", "LFC_EDFA23", "edfa23"), stretch=3)
+        row2.addWidget(self._interlock_panel(), stretch=2)
+        row2.addWidget(self._pritel_panel(), stretch=4)
         outer.addLayout(row2)
 
         row3 = QHBoxLayout()
@@ -375,7 +379,7 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(page)
 
         row1 = QHBoxLayout()
-        row1.addWidget(self._edfa_panel("EDFA 13 dBm (not in use)", "LFC_EDFA13"))
+        row1.addWidget(self._edfa_panel("Amonics EDFA 13 dBm (not in use)", "LFC_EDFA13", "edfa13"))
         row1.addWidget(self._waveshaper_panel())
         row1.addWidget(self._tec_panel())
         outer.addLayout(row1)
@@ -475,27 +479,35 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             self.statusBar().showMessage(f"abort failed: {exc}", 10000)
 
-    def _edfa_panel(self, title: str, prefix: str) -> QGroupBox:
-        box = QGroupBox(title)
+    def _title_with_port(self, title: str, device_key: str) -> str:
+        """Append the device's address, e.g. 'Interlock (COM4)'."""
+        address = self.devices.get(device_key, {}).get("address")
+        return f"{title} ({address})" if address else title
+
+    def _edfa_panel(self, title: str, prefix: str, device_key: str = "") -> QGroupBox:
+        box = QGroupBox(self._title_with_port(title, device_key))
         form = QFormLayout(box)
         self._add_onoff(form, "Emission", f"{prefix}_ONOFF")
         self._add_spin(form, "Setpoint", f"{prefix}_P")
         self._add_display(form, "Input power", f"{prefix}_INPUT_POWER_MONITOR")
+        self._add_display(form, "Output power", f"{prefix}_OUTPUT_POWER_MONITOR")
         return box
 
     def _interlock_panel(self) -> QGroupBox:
-        box = QGroupBox("Interlock")
+        box = QGroupBox(self._title_with_port("Interlock", "arduino_relay"))
         form = QFormLayout(box)
-        self._add_display(form, "Pritel latch", "LFC_PTAMP_LATCH")
+        self._add_display(form, "Latch", "LFC_PTAMP_LATCH")
+        self._add_display(form, "Voltage", "LFC_PTAMP_INTERLOCK_V")
         reset = QPushButton("Reset latch")
         reset.clicked.connect(lambda: self._submit("LFC_PTAMP_LATCH", "1"))
         form.addRow("", reset)
         return box
 
     def _pritel_panel(self) -> QGroupBox:
-        box = QGroupBox("Pritel amplifier")
+        box = QGroupBox(self._title_with_port("Pritel amplifier", "ptamp"))
         form = QFormLayout(box)
         self._add_onoff(form, "Pump", "LFC_PTAMP_ONOFF")
+        self._add_display(form, "Input power", "LFC_PTAMP_IN")
         self._add_spin(form, "Preamp", "LFC_PTAMP_PRE_P")
         self._add_spin(form, "Power amp", "LFC_PTAMP_I")
         self._add_display(form, "Output", "LFC_PTAMP_OUT")

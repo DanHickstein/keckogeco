@@ -283,6 +283,25 @@ min = 0.0
 max = 4.0
 format = "%.1f"
 
+# New in the rewrite (see ktl/keyword-changes.md): Pritel seed input power
+# (FA INPUT?) and the Arduino interlock's photodiode voltage, both were
+# always readable on the hardware but never had keywords.
+[LFC_PTAMP_IN]
+type = "double"
+writable = false
+help = "High-power EDFA seed input power"
+units = "mW"
+format = "%.1f"
+
+[LFC_PTAMP_INTERLOCK_V]
+type = "double"
+writable = false
+help = "Pritel interlock photodiode voltage (Arduino ADC)"
+units = "V"
+min = 0.0
+max = 5.0
+format = "%.2f"
+
 [LFC_PTAMP_I]
 type = "double"
 writable = true
@@ -328,15 +347,52 @@ help = "clarity onoff"
 0 = "off"
 1 = "locked"
 
+# The baseline schema typed the two input monitors "boolean", but the
+# deployed implementation always returned the seed power in mW; corrected
+# to double (ktl/keyword-changes.md). The EDFA13 input + the three output
+# monitors are new keywords (same file): the Amonics units always had
+# :SENS:POW:IN/OUT queries, they just had no keywords.
 [LFC_EDFA27_INPUT_POWER_MONITOR]
-type = "boolean"
+type = "double"
 writable = false
-help = "edfa27 input monitor"
+help = "edfa27 seed input power"
+units = "mW"
+format = "%.2f"
 
 [LFC_EDFA23_INPUT_POWER_MONITOR]
-type = "boolean"
+type = "double"
 writable = false
-help = "edfa23 input monitor"
+help = "edfa23 seed input power"
+units = "mW"
+format = "%.2f"
+
+[LFC_EDFA13_INPUT_POWER_MONITOR]
+type = "double"
+writable = false
+help = "edfa13 seed input power"
+units = "mW"
+format = "%.2f"
+
+[LFC_EDFA27_OUTPUT_POWER_MONITOR]
+type = "double"
+writable = false
+help = "edfa27 output power"
+units = "mW"
+format = "%.1f"
+
+[LFC_EDFA23_OUTPUT_POWER_MONITOR]
+type = "double"
+writable = false
+help = "edfa23 output power"
+units = "mW"
+format = "%.1f"
+
+[LFC_EDFA13_OUTPUT_POWER_MONITOR]
+type = "double"
+writable = false
+help = "edfa13 output power"
+units = "mW"
+format = "%.1f"
 
 [LFC_EDFA27_P_DEFAULT]
 type = "boolean"

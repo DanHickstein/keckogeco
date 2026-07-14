@@ -75,6 +75,9 @@ class KeckogecoClient:
         )
         return response.json()
 
+    def devices(self) -> dict:
+        return self._get("devices")
+
     def arrays(self) -> list[str]:
         return self._get("arrays")["arrays"]
 

@@ -239,6 +239,22 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
     def state() -> dict:
         return controller.state_summary()
 
+    @app.get(f"{API_PREFIX}/devices", dependencies=[auth])
+    def devices() -> dict:
+        """Configured devices with their addresses (GUIs show e.g. the COM
+        port in panel titles); no hardware I/O."""
+        return {
+            key: {
+                "name": dev.name,
+                "driver": dev.driver,
+                "address": dev.address,
+                "enabled": dev.enabled,
+                "online": key in controller.devices,
+                "offline_reason": controller.offline.get(key),
+            }
+            for key, dev in controller.config.devices.items()
+        }
+
     @app.get(f"{API_PREFIX}/arrays", dependencies=[auth])
     def list_arrays() -> dict:
         return {"arrays": sorted(getattr(controller, "arrays", {}))}

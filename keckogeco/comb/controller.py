@@ -168,9 +168,14 @@ class LFCController:
                 getter=lambda k=key: self.device(k).activation,
                 setter=lambda v, k=key: self._edfa_onoff(k, v),
             )
-            monitor = f"{kw}_INPUT_POWER_MONITOR"
-            if monitor in self.registry.schema:
-                bind(monitor, getter=lambda k=key: self.device(k).input_power_mW())
+            bind(
+                f"{kw}_INPUT_POWER_MONITOR",
+                getter=lambda k=key: self.device(k).input_power_mW(),
+            )
+            bind(
+                f"{kw}_OUTPUT_POWER_MONITOR",
+                getter=lambda k=key: self.device(k).output_power_mW(),
+            )
 
         # --- Pritel amplifier + Arduino interlock
         # Keyword units follow the deployed KTL semantics: PRE_P in mA,
@@ -187,6 +192,7 @@ class LFCController:
                 setter=lambda v: self.device("ptamp").set_pwramp_mA(v * 1000),
             )
             bind("LFC_PTAMP_OUT", getter=lambda: self.device("ptamp").output_power_mW / 1000)
+            bind("LFC_PTAMP_IN", getter=lambda: self.device("ptamp").input_power_mW)
             bind(
                 "LFC_PTAMP_ONOFF",
                 getter=lambda: self.device("ptamp").pump_on,
@@ -197,6 +203,14 @@ class LFCController:
                 "LFC_PTAMP_LATCH",
                 getter=self._latch_state,
                 setter=lambda _v: self.device("arduino_relay").reset_latch(),
+            )
+            # the interlock's photodiode voltage: raw 10-bit ADC counts
+            # over a 0-5 V range, reported in volts
+            bind(
+                "LFC_PTAMP_INTERLOCK_V",
+                getter=lambda: (
+                    self.device("arduino_relay").relay_status().voltage_now * 5.0 / 1023.0
+                ),
             )
             bind(
                 "LFC_YJ_SHUTTER",
@@ -252,9 +266,11 @@ class LFCController:
                 setter=lambda v: self._ramp_tec("tec_wvg", v),
             )
 
-        # --- IM bias via the SIM960 servo (slot from config option im_slot)
+        # --- IM bias via the SIM960 servo (slot from config option im_slot).
+        # Slot 3 is the old system's "Minicomb Intensity Lock Servo"
+        # (KeckLFC.py __LFC_IM_LOCK_connect); slot 5 is the Rb lock servo.
         if has("srs"):
-            im_slot = int(self.config.devices["srs"].options.get("im_slot", 5))
+            im_slot = int(self.config.devices["srs"].options.get("im_slot", 3))
             self._im_servo = self.device("srs").sim960(im_slot, "IM bias servo")
             bind(
                 "LFC_IM_BIAS",
