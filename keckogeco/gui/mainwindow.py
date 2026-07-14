@@ -53,13 +53,19 @@ _CONFIRM = {
 class OsaControls(QWidget):
     """Controls column beside the OSA spectrum plot.
 
-    Values populate from the instrument (and re-populate from the
-    read-back after every apply, so the controls show what the OSA
-    accepted); edits go through the writer thread. The defaults button
-    sets the standard mini-comb view.
+    The standard mini-comb view (DEFAULTS + continuous sweep) is pushed
+    to the OSA when the panel first connects, and again on the defaults
+    button. Controls re-populate from the read-back after every apply,
+    so they always show what the instrument accepted; edits go through
+    the writer thread.
     """
 
-    DEFAULTS = {"start_nm": 1550.0, "stop_nm": 1570.0, "resolution_nm": 0.06}
+    DEFAULTS = {
+        "start_nm": 1550.0,
+        "stop_nm": 1570.0,
+        "resolution_nm": 0.06,  # the 86142B's best
+        "sensitivity_dBm": -60.0,
+    }
     #: fallback resolution list until the server reports the OSA's own
     RESOLUTIONS_NM = (0.06, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)
 
@@ -91,8 +97,10 @@ class OsaControls(QWidget):
         )
         self.sensitivity = spin(
             "sensitivity_dBm",
-            {"units": "dBm", "min": -120, "max": 30, "help": "measurement sensitivity"},
-            -60.0,
+            # floor at the 86142B's -90 dBm spec: the instrument accepts
+            # lower values but only gets slower, never more sensitive
+            {"units": "dBm", "min": -90, "max": 30, "help": "measurement sensitivity"},
+            self.DEFAULTS["sensitivity_dBm"],
         )
         self.resolution = QComboBox()
         self.resolution.setToolTip("resolution bandwidth")
@@ -107,23 +115,26 @@ class OsaControls(QWidget):
         form.addRow("Sensitivity", self.sensitivity)
 
         sweep = QHBoxLayout()
+        self._sweep_buttons: dict[str, QPushButton] = {}
         for text, mode in (("Single", "single"), ("Cont.", "continuous"), ("Stop", "stop")):
             button = QPushButton(text)
             button.setToolTip(f"{mode} sweep")
             button.clicked.connect(lambda _checked, m=mode: self._submit_sweep(m))
+            self._sweep_buttons[mode] = button
             sweep.addWidget(button)
         form.addRow("Sweep", sweep)
 
-        self.sweep_label = QLabel("—")
         defaults = QPushButton("Default view")
         defaults.setToolTip(
             f"{self.DEFAULTS['start_nm']:g}–{self.DEFAULTS['stop_nm']:g} nm, "
-            f"{self.DEFAULTS['resolution_nm']:g} nm resolution, continuous sweep"
+            f"{self.DEFAULTS['resolution_nm']:g} nm resolution, "
+            f"{self.DEFAULTS['sensitivity_dBm']:g} dBm sensitivity, continuous sweep"
         )
-        defaults.clicked.connect(self._apply_defaults)
-        form.addRow(self.sweep_label, defaults)
+        defaults.clicked.connect(self.apply_defaults)
+        form.addRow(defaults)
 
-    def _apply_defaults(self) -> None:
+    def apply_defaults(self) -> None:
+        """Push the standard mini-comb view to the OSA."""
         self._submit_settings(**self.DEFAULTS)
         self._submit_sweep("continuous")
 
@@ -155,10 +166,16 @@ class OsaControls(QWidget):
         self.set_sweep(settings.get("sweep_continuous"))
 
     def set_sweep(self, continuous) -> None:
-        if continuous is None:
-            self.sweep_label.setText("—")
-        else:
-            self.sweep_label.setText("sweeping" if continuous else "stopped")
+        """Highlight the sweep button matching the instrument state.
+
+        ``continuous`` False lights Stop (a single sweep also ends there:
+        Single is a momentary trigger, not a state); None clears both.
+        """
+        for mode, button in self._sweep_buttons.items():
+            if mode == "single":
+                continue
+            active = continuous is not None and (mode == "continuous") == bool(continuous)
+            button.setStyleSheet(f"color: {ACCENT}; font-weight: bold;" if active else "")
 
 
 class MainWindow(QMainWindow):
@@ -451,7 +468,9 @@ class MainWindow(QMainWindow):
         self._osa_controls = OsaControls(self._osa_apply, self._osa_sweep)
         self._osa_layout.addWidget(self._osa_controls)
         self.poller.array_names = ["osa_spectrum"]
-        self._osa_apply()  # no settings -> read, to populate the controls
+        # per Dan: connecting means "show me the standard mini-comb view",
+        # so the defaults are applied to the OSA, not just displayed
+        self._osa_controls.apply_defaults()
 
     def _osa_apply(self, **settings) -> None:
         if settings:

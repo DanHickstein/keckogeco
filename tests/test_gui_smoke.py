@@ -59,6 +59,22 @@ class FakeClient:
             "resolutions_nm": [0.06, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0],
         }
 
+    def osa_apply(self, **settings):
+        # echo the write back the way the server's read-back does
+        base = self.osa_settings()
+        base.update(
+            {
+                "wl_start_nm": settings.get("start_nm", base["wl_start_nm"]),
+                "wl_stop_nm": settings.get("stop_nm", base["wl_stop_nm"]),
+                "resolution_nm": settings.get("resolution_nm", base["resolution_nm"]),
+                "sensitivity_dBm": settings.get("sensitivity_dBm", base["sensitivity_dBm"]),
+            }
+        )
+        return base
+
+    def osa_sweep(self, mode):
+        return {"mode": mode, "sweep_continuous": mode == "continuous"}
+
 
 def test_mainwindow_constructs_and_updates(qtbot):
     from keckogeco.gui.mainwindow import MainWindow
@@ -97,16 +113,25 @@ def test_osa_plot_wires_up_when_array_appears(qtbot):
     )
     _plot, curve = window._osa_plot
     assert list(curve.getData()[1]) == [-40.0, -20.0]
-    # the controls column exists and populates from a settings read-back
+    # the controls column exists; wiring up pushes the default view to the
+    # OSA through the writer thread and populates from the read-back
     controls = window._osa_controls
     assert controls is not None
+    assert controls.sensitivity.spin.minimum() == -90.0  # the 86142B's floor
+    qtbot.waitUntil(lambda: controls.start.spin.value() == 1550.0)
+    qtbot.waitUntil(lambda: "bold" in controls._sweep_buttons["continuous"].styleSheet())
+    assert controls.stop.spin.value() == 1570.0
+    assert controls.sensitivity.spin.value() == -60.0
+    assert controls.resolution.currentData() == 0.06
+    # a later settings read-back repopulates the controls
     window._on_call_done("OSA settings", FakeClient().osa_settings())
     assert controls.start.spin.value() == 1552.0
-    assert controls.stop.spin.value() == 1568.0
     assert controls.sensitivity.spin.value() == -70.0
     assert controls.resolution.currentData() == 0.1
-    assert controls.sweep_label.text() == "sweeping"
-    window._on_call_done("OSA sweep", {"mode": "stop", "sweep_continuous": False})
-    assert controls.sweep_label.text() == "stopped"
+    # sweep-state indication follows the instrument, single ends stopped
+    window._on_call_done("OSA sweep", {"mode": "single", "sweep_continuous": False})
+    assert "bold" in controls._sweep_buttons["stop"].styleSheet()
+    assert controls._sweep_buttons["continuous"].styleSheet() == ""
+    assert controls._sweep_buttons["single"].styleSheet() == ""
     window.poller.stop()
     window.writer.stop()
