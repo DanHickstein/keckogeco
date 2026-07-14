@@ -81,6 +81,27 @@ class KeckogecoClient:
     def array(self, name: str) -> dict:
         return self._get(f"arrays/{name}")
 
+    def osa_settings(self) -> dict:
+        return self._get("osa")
+
+    def osa_apply(self, **settings) -> dict:
+        """Write the given OSA settings (start_nm, stop_nm, resolution_nm,
+        sensitivity_dBm); returns the read-back settings."""
+        response = self.session.put(
+            f"{self.base_url}/api/v1/osa", json=settings, timeout=self.timeout
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(response.json().get("detail", response.text))
+        return response.json()
+
+    def osa_sweep(self, mode: str) -> dict:
+        response = self.session.post(
+            f"{self.base_url}/api/v1/osa/sweep", json={"mode": mode}, timeout=self.timeout
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(response.json().get("detail", response.text))
+        return response.json()
+
 
 class PollThread(QThread):
     """Polls /keywords and /state, emitting fresh data as Qt signals."""
@@ -137,27 +158,39 @@ class PollThread(QThread):
 
 
 class WriteThread(QThread):
-    """Serializes keyword writes off the GUI thread."""
+    """Serializes keyword writes (and other client calls) off the GUI
+    thread. ``submit`` queues a keyword write; ``submit_call`` queues an
+    arbitrary client call (e.g. OSA settings) whose result comes back on
+    ``call_done`` under the given label."""
 
     write_ok = pyqtSignal(str, object)
     write_failed = pyqtSignal(str, str)
+    call_done = pyqtSignal(str, object)
 
     def __init__(self, client: KeckogecoClient):
         super().__init__()
         self.client = client
-        self._queue: list[tuple[str, object]] = []
+        self._queue: list[tuple] = []
         self._running = True
 
     def submit(self, name: str, value) -> None:
-        self._queue.append((name, value))
+        self._queue.append(("write", name, value))
+
+    def submit_call(self, label: str, func) -> None:
+        """Queue ``func(client)``; its return value is emitted as
+        ``call_done(label, result)`` (errors go to ``write_failed``)."""
+        self._queue.append(("call", label, func))
 
     def run(self) -> None:
         while self._running:
             if self._queue:
-                name, value = self._queue.pop(0)
+                kind, name, payload = self._queue.pop(0)
                 try:
-                    result = self.client.write(name, value)
-                    self.write_ok.emit(name, result.get("value"))
+                    if kind == "write":
+                        result = self.client.write(name, payload)
+                        self.write_ok.emit(name, result.get("value"))
+                    else:
+                        self.call_done.emit(name, payload(self.client))
                 except Exception as exc:  # noqa: BLE001
                     self.write_failed.emit(name, str(exc))
             else:

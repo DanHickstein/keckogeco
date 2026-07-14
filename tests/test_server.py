@@ -97,6 +97,33 @@ def test_schema_endpoint(client):
     assert body["LFC_VOA1310_ATTEN"]["bound"] is False  # VOAs not yet identified by wavelength
 
 
+def test_osa_settings_endpoints(client):
+    body = client.get("/api/v1/osa").json()
+    assert body["resolution_nm"] == pytest.approx(0.06)  # sim default = best
+    assert body["resolutions_nm"][0] == 0.06
+    assert body["sweep_continuous"] is True
+    body = client.put(
+        "/api/v1/osa", json={"start_nm": 1550, "stop_nm": 1570, "resolution_nm": 0.1}
+    ).json()
+    assert body["wl_start_nm"] == pytest.approx(1550.0)
+    assert body["wl_stop_nm"] == pytest.approx(1570.0)
+    assert body["resolution_nm"] == pytest.approx(0.1)
+    # partial update leaves the rest alone
+    body = client.put("/api/v1/osa", json={"sensitivity_dBm": -75}).json()
+    assert body["sensitivity_dBm"] == pytest.approx(-75.0)
+    assert body["wl_start_nm"] == pytest.approx(1550.0)
+
+
+def test_osa_sweep_endpoint(client):
+    body = client.post("/api/v1/osa/sweep", json={"mode": "stop"}).json()
+    assert body["sweep_continuous"] is False
+    body = client.post("/api/v1/osa/sweep", json={"mode": "continuous"}).json()
+    assert body["sweep_continuous"] is True
+    body = client.post("/api/v1/osa/sweep", json={"mode": "single"}).json()
+    assert body["sweep_continuous"] is False  # single sweep then hold
+    assert client.post("/api/v1/osa/sweep", json={"mode": "bogus"}).status_code == 422
+
+
 def test_bearer_token_auth(tmp_path):
     import shutil
 

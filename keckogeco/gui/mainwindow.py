@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QComboBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -49,6 +50,117 @@ _CONFIRM = {
 }
 
 
+class OsaControls(QWidget):
+    """Controls column beside the OSA spectrum plot.
+
+    Values populate from the instrument (and re-populate from the
+    read-back after every apply, so the controls show what the OSA
+    accepted); edits go through the writer thread. The defaults button
+    sets the standard mini-comb view.
+    """
+
+    DEFAULTS = {"start_nm": 1550.0, "stop_nm": 1570.0, "resolution_nm": 0.06}
+    #: fallback resolution list until the server reports the OSA's own
+    RESOLUTIONS_NM = (0.06, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)
+
+    def __init__(self, submit_settings, submit_sweep):
+        super().__init__()
+        self._submit_settings = submit_settings  # (**settings) -> queued PUT
+        self._submit_sweep = submit_sweep  # (mode) -> queued POST
+        self.setMaximumWidth(250)
+
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        def spin(field: str, spec: dict, default: float) -> KeywordSpinBox:
+            widget = KeywordSpinBox(
+                field, spec, lambda f, value: self._submit_settings(**{f: value})
+            )
+            widget.spin.setValue(default)
+            return widget
+
+        self.start = spin(
+            "start_nm",
+            {"units": "nm", "min": 600, "max": 1700, "help": "sweep start wavelength"},
+            self.DEFAULTS["start_nm"],
+        )
+        self.stop = spin(
+            "stop_nm",
+            {"units": "nm", "min": 600, "max": 1700, "help": "sweep stop wavelength"},
+            self.DEFAULTS["stop_nm"],
+        )
+        self.sensitivity = spin(
+            "sensitivity_dBm",
+            {"units": "dBm", "min": -120, "max": 30, "help": "measurement sensitivity"},
+            -60.0,
+        )
+        self.resolution = QComboBox()
+        self.resolution.setToolTip("resolution bandwidth")
+        self._set_resolutions(self.RESOLUTIONS_NM)
+        self.resolution.activated.connect(
+            lambda index: self._submit_settings(resolution_nm=self.resolution.itemData(index))
+        )
+
+        form.addRow("Start", self.start)
+        form.addRow("Stop", self.stop)
+        form.addRow("Resolution", self.resolution)
+        form.addRow("Sensitivity", self.sensitivity)
+
+        sweep = QHBoxLayout()
+        for text, mode in (("Single", "single"), ("Cont.", "continuous"), ("Stop", "stop")):
+            button = QPushButton(text)
+            button.setToolTip(f"{mode} sweep")
+            button.clicked.connect(lambda _checked, m=mode: self._submit_sweep(m))
+            sweep.addWidget(button)
+        form.addRow("Sweep", sweep)
+
+        self.sweep_label = QLabel("—")
+        defaults = QPushButton("Default view")
+        defaults.setToolTip(
+            f"{self.DEFAULTS['start_nm']:g}–{self.DEFAULTS['stop_nm']:g} nm, "
+            f"{self.DEFAULTS['resolution_nm']:g} nm resolution, continuous sweep"
+        )
+        defaults.clicked.connect(self._apply_defaults)
+        form.addRow(self.sweep_label, defaults)
+
+    def _apply_defaults(self) -> None:
+        self._submit_settings(**self.DEFAULTS)
+        self._submit_sweep("continuous")
+
+    def _set_resolutions(self, values) -> None:
+        self.resolution.blockSignals(True)
+        self.resolution.clear()
+        for value in values:
+            self.resolution.addItem(f"{value:g} nm", float(value))
+        self.resolution.setCurrentIndex(0)  # best (smallest) first
+        self.resolution.blockSignals(False)
+
+    def populate(self, settings: dict) -> None:
+        """Update the controls from a GET/PUT read-back."""
+        resolutions = settings.get("resolutions_nm")
+        if resolutions and self.resolution.count() != len(resolutions):
+            self._set_resolutions(resolutions)
+        self.start.update_value(settings.get("wl_start_nm"))
+        self.stop.update_value(settings.get("wl_stop_nm"))
+        self.sensitivity.update_value(settings.get("sensitivity_dBm"))
+        res = settings.get("resolution_nm")
+        if res is not None and not self.resolution.hasFocus():
+            index = min(
+                range(self.resolution.count()),
+                key=lambda i: abs(self.resolution.itemData(i) - float(res)),
+            )
+            self.resolution.blockSignals(True)
+            self.resolution.setCurrentIndex(index)
+            self.resolution.blockSignals(False)
+        self.set_sweep(settings.get("sweep_continuous"))
+
+    def set_sweep(self, continuous) -> None:
+        if continuous is None:
+            self.sweep_label.setText("—")
+        else:
+            self.sweep_label.setText("sweeping" if continuous else "stopped")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, client: KeckogecoClient):
         super().__init__()
@@ -61,6 +173,7 @@ class MainWindow(QMainWindow):
         self.writer = WriteThread(client)
         self.writer.write_failed.connect(self._on_write_failed)
         self.writer.write_ok.connect(self._on_write_ok)
+        self.writer.call_done.connect(self._on_call_done)
         self.writer.start()
 
         self.poller = PollThread(client)
@@ -307,15 +420,17 @@ class MainWindow(QMainWindow):
 
     def _osa_panel(self) -> QGroupBox:
         """Mini-comb spectrum from the OSA. Starts as a placeholder; the
-        plot is wired in by _on_arrays_available the moment the server
-        offers the osa_spectrum array (e.g. after the OSA comes online)."""
+        plot + controls are wired in by _on_arrays_available the moment the
+        server offers the osa_spectrum array (e.g. after the OSA comes
+        online)."""
         box = QGroupBox("Mini-comb spectrum (OSA)")
-        self._osa_layout = QVBoxLayout(box)
+        self._osa_layout = QHBoxLayout(box)
         self._osa_plot = None
+        self._osa_controls: OsaControls | None = None
         self._osa_placeholder = QLabel("(OSA not connected)")
         self._osa_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._osa_placeholder.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
-        self._osa_layout.addWidget(self._osa_placeholder)
+        self._osa_layout.addWidget(self._osa_placeholder, stretch=1)
         return box
 
     def _on_arrays_available(self, names: list) -> None:
@@ -332,8 +447,28 @@ class MainWindow(QMainWindow):
         curve = plot.plot(pen=pg.mkPen(ACCENT, width=1))
         self._osa_plot = (plot, curve)
         self._osa_placeholder.deleteLater()
-        self._osa_layout.addWidget(plot)
+        self._osa_layout.addWidget(plot, stretch=1)
+        self._osa_controls = OsaControls(self._osa_apply, self._osa_sweep)
+        self._osa_layout.addWidget(self._osa_controls)
         self.poller.array_names = ["osa_spectrum"]
+        self._osa_apply()  # no settings -> read, to populate the controls
+
+    def _osa_apply(self, **settings) -> None:
+        if settings:
+            self.writer.submit_call("OSA settings", lambda c: c.osa_apply(**settings))
+        else:
+            self.writer.submit_call("OSA settings", lambda c: c.osa_settings())
+
+    def _osa_sweep(self, mode: str) -> None:
+        self.writer.submit_call("OSA sweep", lambda c: c.osa_sweep(mode))
+
+    def _on_call_done(self, label: str, result) -> None:
+        if self._osa_controls is None or not isinstance(result, dict):
+            return
+        if label == "OSA settings":
+            self._osa_controls.populate(result)
+        elif label == "OSA sweep":
+            self._osa_controls.set_sweep(result.get("sweep_continuous"))
 
     def _waveshaper_panel(self) -> QGroupBox:
         # the whole interaction is two numbers; the spin boxes track the

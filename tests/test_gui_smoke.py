@@ -49,6 +49,16 @@ class FakeClient:
     def write(self, name, value):
         return {"name": name, "value": value}
 
+    def osa_settings(self):
+        return {
+            "wl_start_nm": 1552.0,
+            "wl_stop_nm": 1568.0,
+            "resolution_nm": 0.1,
+            "sensitivity_dBm": -70.0,
+            "sweep_continuous": True,
+            "resolutions_nm": [0.06, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0],
+        }
+
 
 def test_mainwindow_constructs_and_updates(qtbot):
     from keckogeco.gui.mainwindow import MainWindow
@@ -87,5 +97,16 @@ def test_osa_plot_wires_up_when_array_appears(qtbot):
     )
     _plot, curve = window._osa_plot
     assert list(curve.getData()[1]) == [-40.0, -20.0]
+    # the controls column exists and populates from a settings read-back
+    controls = window._osa_controls
+    assert controls is not None
+    window._on_call_done("OSA settings", FakeClient().osa_settings())
+    assert controls.start.spin.value() == 1552.0
+    assert controls.stop.spin.value() == 1568.0
+    assert controls.sensitivity.spin.value() == -70.0
+    assert controls.resolution.currentData() == 0.1
+    assert controls.sweep_label.text() == "sweeping"
+    window._on_call_done("OSA sweep", {"mode": "stop", "sweep_continuous": False})
+    assert controls.sweep_label.text() == "stopped"
     window.poller.stop()
     window.writer.stop()

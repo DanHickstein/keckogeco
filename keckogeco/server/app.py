@@ -21,6 +21,7 @@ import math
 import threading
 from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import Literal
 
 if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
     import sys
@@ -46,6 +47,19 @@ API_PREFIX = "/api/v1"
 
 class WriteRequest(BaseModel):
     value: str | float | int | bool | list[float]
+
+
+class OsaSettingsRequest(BaseModel):
+    """Partial update: only the fields present are written to the OSA."""
+
+    start_nm: float | None = None
+    stop_nm: float | None = None
+    resolution_nm: float | None = None
+    sensitivity_dBm: float | None = None
+
+
+class OsaSweepRequest(BaseModel):
+    mode: Literal["single", "continuous", "stop"]
 
 
 def _json_value(value):
@@ -236,6 +250,61 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
             raise HTTPException(status_code=404, detail=f"unknown array {name!r}")
         try:
             return {"name": name, **source()}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # --- OSA control (engineering-GUI surface, deliberately NOT KTL
+    # keywords: resolution/sensitivity/sweep are instrument-level knobs
+    # that Keck operations never touch, so they stay out of the contract).
+
+    def osa_device():
+        try:
+            return controller.device("osa")
+        except InstrumentError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    def refuse_during_action() -> None:
+        if controller.executor.running:
+            action = controller.executor.current() or {}
+            raise HTTPException(
+                status_code=409,
+                detail=f"action {action.get('name')!r} is running; writes are locked "
+                "until it finishes (reads are fine)",
+            )
+
+    @app.get(f"{API_PREFIX}/osa", dependencies=[auth])
+    def osa_settings() -> dict:
+        osa = osa_device()
+        try:
+            return {**osa.status(), "resolutions_nm": list(osa.RESOLUTIONS_NM)}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.put(f"{API_PREFIX}/osa", dependencies=[auth])
+    def osa_apply(body: OsaSettingsRequest) -> dict:
+        refuse_during_action()
+        osa = osa_device()
+        try:
+            osa.set_range(body.start_nm, body.stop_nm)
+            if body.resolution_nm is not None:
+                osa.resolution_nm = body.resolution_nm
+            if body.sensitivity_dBm is not None:
+                osa.sensitivity_dBm = body.sensitivity_dBm
+            # read back so the GUI shows what the instrument accepted
+            return {**osa.status(), "resolutions_nm": list(osa.RESOLUTIONS_NM)}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post(f"{API_PREFIX}/osa/sweep", dependencies=[auth])
+    def osa_sweep(body: OsaSweepRequest) -> dict:
+        refuse_during_action()
+        osa = osa_device()
+        try:
+            if body.mode == "single":
+                osa.trigger_single()
+            else:
+                osa.sweep_continuous = body.mode == "continuous"
+            return {"mode": body.mode, "sweep_continuous": osa.sweep_continuous}
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
