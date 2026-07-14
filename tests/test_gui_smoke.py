@@ -65,3 +65,27 @@ def test_mainwindow_constructs_and_updates(qtbot):
     assert "150" in window.widgets["LFC_EDFA27_P"].spin.text()
     window.poller.stop()
     window.writer.stop()
+
+
+def test_osa_plot_wires_up_when_array_appears(qtbot):
+    """The spectrum panel starts as a placeholder and becomes a live plot
+    the first time the server reports the osa_spectrum array."""
+    pytest.importorskip("pyqtgraph")
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    assert window._osa_plot is None
+    window._on_arrays_available(["wsp_profile"])  # OSA still offline
+    assert window._osa_plot is None
+    window._on_arrays_available(["osa_spectrum", "wsp_profile"])
+    assert window._osa_plot is not None
+    assert window.poller.array_names == ["osa_spectrum"]
+    window._on_array(
+        "osa_spectrum",
+        {"x": [1550.0, 1560.0], "y": [-40.0, -20.0], "x_label": "nm", "y_label": "dBm"},
+    )
+    _plot, curve = window._osa_plot
+    assert list(curve.getData()[1]) == [-40.0, -20.0]
+    window.poller.stop()
+    window.writer.stop()

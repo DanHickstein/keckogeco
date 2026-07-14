@@ -87,6 +87,7 @@ class PollThread(QThread):
 
     keywords_ready = pyqtSignal(dict)
     state_ready = pyqtSignal(dict)
+    arrays_available = pyqtSignal(list)
     array_ready = pyqtSignal(str, dict)
     connection_changed = pyqtSignal(bool, str)
 
@@ -109,6 +110,12 @@ class PollThread(QThread):
                 self.state_ready.emit(self.client.state())
                 self._set_connected(True, "")
                 if self._cycle % self.ARRAY_EVERY == 0:
+                    # what the server offers can change (a restart brings the
+                    # OSA online); the main window subscribes via array_names
+                    try:
+                        self.arrays_available.emit(self.client.arrays())
+                    except Exception as exc:  # noqa: BLE001 - older server
+                        log.debug("arrays list fetch failed: %s", exc)
                     for name in list(self.array_names):
                         try:
                             self.array_ready.emit(name, self.client.array(name))

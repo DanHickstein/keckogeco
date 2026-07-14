@@ -66,6 +66,8 @@ class MainWindow(QMainWindow):
         self.poller = PollThread(client)
         self.poller.keywords_ready.connect(self._on_keywords)
         self.poller.state_ready.connect(self._on_state)
+        self.poller.arrays_available.connect(self._on_arrays_available)
+        self.poller.array_ready.connect(self._on_array)
         self.poller.connection_changed.connect(self._on_connection)
         self.poller.start()
 
@@ -304,35 +306,34 @@ class MainWindow(QMainWindow):
         return box
 
     def _osa_panel(self) -> QGroupBox:
-        """Mini-comb spectrum from the OSA, or a placeholder until the
-        instrument is connected (GPIB is down on the rack)."""
+        """Mini-comb spectrum from the OSA. Starts as a placeholder; the
+        plot is wired in by _on_arrays_available the moment the server
+        offers the osa_spectrum array (e.g. after the OSA comes online)."""
         box = QGroupBox("Mini-comb spectrum (OSA)")
-        layout = QVBoxLayout(box)
+        self._osa_layout = QVBoxLayout(box)
+        self._osa_plot = None
+        self._osa_placeholder = QLabel("(OSA not connected)")
+        self._osa_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._osa_placeholder.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
+        self._osa_layout.addWidget(self._osa_placeholder)
+        return box
+
+    def _on_arrays_available(self, names: list) -> None:
+        if self._osa_plot is not None or "osa_spectrum" not in names:
+            return
         try:
-            available = self.client.arrays()
-        except Exception:  # noqa: BLE001 - older server or offline
-            available = []
-        pg = None
-        if "osa_spectrum" in available:
-            try:
-                import pyqtgraph as pg
-            except ImportError:
-                self.statusBar().showMessage("pyqtgraph not installed; spectrum hidden")
-        if pg is None:
-            placeholder = QLabel("(OSA not connected)")
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
-            layout.addWidget(placeholder)
-            return box
+            import pyqtgraph as pg
+        except ImportError:
+            self._osa_placeholder.setText("(pyqtgraph not installed; spectrum hidden)")
+            return
         plot = pg.PlotWidget()
         plot.setBackground(PLOT_BG)
         plot.showGrid(x=True, y=True, alpha=0.25)
         curve = plot.plot(pen=pg.mkPen(ACCENT, width=1))
         self._osa_plot = (plot, curve)
-        layout.addWidget(plot)
+        self._osa_placeholder.deleteLater()
+        self._osa_layout.addWidget(plot)
         self.poller.array_names = ["osa_spectrum"]
-        self.poller.array_ready.connect(self._on_array)
-        return box
 
     def _waveshaper_panel(self) -> QGroupBox:
         # the whole interaction is two numbers; the spin boxes track the
@@ -409,7 +410,7 @@ class MainWindow(QMainWindow):
             self.action_label.setText("")
 
     def _on_array(self, name: str, data: dict) -> None:
-        if name != "osa_spectrum" or not hasattr(self, "_osa_plot"):
+        if name != "osa_spectrum" or self._osa_plot is None:
             return
         plot, curve = self._osa_plot
         curve.setData(data.get("x", []), data.get("y", []))
