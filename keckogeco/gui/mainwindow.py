@@ -579,20 +579,23 @@ class MainWindow(QMainWindow):
         self._osa_controls.apply_defaults()
         self._restore_reference()
 
-    #: overlay pens (live is the accent color); reference is dashed
-    _CURVE_STYLE = {"loaded": ("#e8a33d", None), "reference": ("#b085f5", "dash")}
+    #: overlay pens (live is the accent color); reference is dashed.
+    #: z stacks the overlays behind the live trace (0): loaded behind
+    #: live, reference behind both.
+    _CURVE_STYLE = {"loaded": ("#e8a33d", None, -1), "reference": ("#b085f5", "dash", -2)}
 
     def _osa_set_curve(self, kind: str, x: list, y: list) -> None:
         curve = self._osa_curves.get(kind)
         if curve is None:
             import pyqtgraph as pg
 
-            color, dash = self._CURVE_STYLE[kind]
+            color, dash, z = self._CURVE_STYLE[kind]
             pen = pg.mkPen(
                 color, width=1, style=Qt.PenStyle.DashLine if dash else Qt.PenStyle.SolidLine
             )
             plot, _live = self._osa_plot
             curve = plot.plot(pen=pen, name=kind)
+            curve.setZValue(z)
             self._osa_curves[kind] = curve
         curve.setData(x, y)
 

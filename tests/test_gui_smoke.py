@@ -160,6 +160,18 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     )
     window._osa_load("reference")
     assert list(window._osa_curves["reference"].getData()[0]) == [1550.0, 1560.0]
+    # stacking: reference behind loaded behind the live trace
+    _plot, live_curve = window._osa_plot
+    assert window._osa_curves["reference"].zValue() < live_curve.zValue()
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(csv_path), "csv"))
+    )
+    window._osa_load("loaded")
+    assert (
+        window._osa_curves["reference"].zValue()
+        < window._osa_curves["loaded"].zValue()
+        < live_curve.zValue()
+    )
     # a fresh GUI restores the reference at wire-up
     window2 = MainWindow(FakeClient())
     qtbot.addWidget(window2)
