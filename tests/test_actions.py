@@ -81,6 +81,23 @@ def test_single_slot_execution(controller):
         del actions_mod.ACTIONS["_test_slow"]
 
 
+def test_im_bias_scan_action(controller):
+    """The scan streams points into the im_scan array and restores the
+    pre-scan bias."""
+    servo = controller._im_servo
+    servo.manual_output_V = 0.5
+    controller.executor.submit("im_bias_scan", v_start=-1.0, v_stop=0.0, v_step=0.05, settle_s=0.0)
+    result = wait_done(controller)
+    assert result["error"] is None
+    assert len(controller.im_scan_points) == 20
+    assert servo.manual_output_V == pytest.approx(0.5)  # restored
+    payload = controller.arrays["im_scan"]()
+    assert payload["x"] == [pytest.approx(p[0]) for p in controller.im_scan_points]
+    assert payload["running"] is False
+    assert payload["mode"] == "MAN"
+    assert payload["bias_V"] == pytest.approx(0.5)
+
+
 def test_unknown_action_rejected(controller):
     with pytest.raises(KeyError, match="unknown action"):
         controller.executor.submit("make_coffee")

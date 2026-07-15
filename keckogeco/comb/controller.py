@@ -57,6 +57,9 @@ class LFCController:
         self.monitors: list = []
         # in-memory backing for ICE/TEST keywords (no hardware behind them)
         self._softstore: dict[str, object] = {"ICESTA": 1, "ICETEST": False}
+        # (bias_V, input_V) points streamed by the im_bias_scan action;
+        # served as the im_scan array so the GUI can plot the sweep live
+        self.im_scan_points: list[tuple[float, float]] = []
         self._started = False
 
     # ------------------------------------------------------------ lifecycle
@@ -530,6 +533,33 @@ class LFCController:
                 }
 
             self.arrays["wsp_profile"] = wsp_profile
+        if getattr(self, "_im_servo", None) is not None:
+
+            def im_scan() -> dict:
+                # list() snapshots the append-only point list (the scan
+                # action's thread may be mid-sweep)
+                points = list(self.im_scan_points)
+                current = self.executor.current() or {}
+                running = bool(current.get("running")) and current.get("name") == "im_bias_scan"
+                payload = {
+                    "x": [bias for bias, _ in points],
+                    "y": [value for _, value in points],
+                    "x_label": "IM bias (V)",
+                    "y_label": "photodiode (V)",
+                    "running": running,
+                }
+                if not running:
+                    # live servo readouts for the GUI panel; skipped during
+                    # a scan so the poller doesn't compete for the mainframe
+                    try:
+                        payload["bias_V"] = self._im_servo.manual_output_V
+                        payload["input_V"] = self._im_servo.measure_input_V
+                        payload["mode"] = self._im_servo.output_mode
+                    except InstrumentError as exc:
+                        log.debug("im_scan live readout failed: %s", exc)
+                return payload
+
+            self.arrays["im_scan"] = im_scan
 
     # ------------------------------------------- presets and range monitors
 

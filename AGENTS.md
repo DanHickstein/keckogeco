@@ -138,6 +138,13 @@ comes with a delay.
   each board's open/reconnect break the *other* board — alternating
   "Error 1: Invalid board number" on every poll (seen live 2026-07-13).
   `mcc_inventory()` goes through the same guard.
+- **The IM bias servo is SIM900 slot 3; slot 5 is the Rb lock servo**
+  (old code `__LFC_IM_LOCK_connect`/`__LFC_RB_LOCK_connect` — an earlier
+  `im_slot = 5` default here pointed at the Rb servo). The minicomb
+  photodiode is wired straight into that SIM960's measure input (coax
+  interface panel A4, "Minicomb photodiode → SRS PID"), so bias scans read
+  power via `MMON` — **no DAQ involved**; the USB-2408s only read
+  thermocouples. Slot number lives in the `srs` block's `im_slot` option.
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.

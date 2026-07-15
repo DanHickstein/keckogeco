@@ -97,7 +97,7 @@ name = "Interlock latching relay"
 driver = "srs_sim900"
 address = "ASRL21::INSTR"
 name = "SRS SIM900 mainframe"
-im_slot = 5    # SIM960 slot used for the intensity-modulator bias lock
+im_slot = 3    # SIM960 slot of the IM bias servo (old code: slot 3 = "Minicomb Intensity Lock Servo", slot 5 = Rb lock)
 
 [devices.waveshaper1]
 driver = "waveshaper"

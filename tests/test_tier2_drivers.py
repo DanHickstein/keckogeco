@@ -184,6 +184,31 @@ def test_keysight_fg_channel_roundtrip():
         fg.set_function(1, "noise")
 
 
+def test_im_bias_scan_sim():
+    """The sweep returns the sim's sinusoidal transfer function and
+    streams every point through the callback."""
+    from keckogeco.comb.locking import im_bias_scan
+    from keckogeco.drivers.srs_sim900 import SIM900
+
+    cfg = DeviceConfig(key="srs", driver="srs_sim900", address="ASRL21::INSTR")
+    srs = SIM900.from_config(cfg, sim=True)
+    srs.connect()
+    servo = srs.sim960(3)
+    seen = []
+    voltages, inputs = im_bias_scan(
+        servo, v_start=-1.0, v_stop=1.0, v_step=0.1, sim=True, point=lambda *p: seen.append(p)
+    )
+    assert len(voltages) == len(inputs) == len(seen) == 20
+    assert servo.output_mode == "MAN"
+    # sim response 0.5*sin(2v+1) at each point
+    import math
+
+    for volt, value in zip(voltages, inputs, strict=True):
+        assert value == pytest.approx(0.5 * math.sin(2 * volt + 1), abs=1e-3)
+    with pytest.raises(ValueError, match="at least 2"):
+        im_bias_scan(servo, v_start=0.0, v_stop=0.01, v_step=0.1, sim=True)
+
+
 def test_im_auto_lock_sim():
     """The lock finds a midpoint bias on the sim's sinusoidal response."""
     from keckogeco.comb.locking import im_auto_lock

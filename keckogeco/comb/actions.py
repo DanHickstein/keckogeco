@@ -79,6 +79,16 @@ class ActionContext:
         self._status.message = message
         log.info("[%s] step %d: %s", self._status.name, self._status.step, message)
 
+    def tick(self, message: str) -> None:
+        """Per-point progress: like :meth:`step` but logs at debug level
+        (bias sweeps have hundreds of points; the log keeps stage
+        boundaries only)."""
+        if self._abort.is_set():
+            raise ActionAborted(f"aborted at: {message}")
+        self._status.step += 1
+        self._status.message = message
+        log.debug("[%s] %s", self._status.name, message)
+
     def sleep(self, seconds: float) -> None:
         """Abortable settle wait; skipped entirely in sim mode."""
         if self.sim:
@@ -105,7 +115,9 @@ class ActionExecutor:
         with self._lock:
             return self._status.as_dict() if self._status else None
 
-    def submit(self, name: str) -> dict:
+    def submit(self, name: str, **kwargs) -> dict:
+        """Start the named action; ``kwargs`` are passed to the action
+        function (e.g. the IM bias-scan range)."""
         func = ACTIONS.get(name)
         if func is None:
             raise KeyError(f"unknown action {name!r} (know {sorted(ACTIONS)})")
@@ -119,7 +131,7 @@ class ActionExecutor:
 
             def run() -> None:
                 try:
-                    func(self.controller, context)
+                    func(self.controller, context, **kwargs)
                     status.message = "done"
                 except ActionAborted as exc:
                     status.aborted = True
@@ -321,6 +333,58 @@ def im_auto_lock_action(controller, ctx: ActionContext) -> None:
     log.info("IM lock engaged: %s", result)
 
 
+def im_bias_scan_action(
+    controller,
+    ctx: ActionContext,
+    v_start: float = -2.0,
+    v_stop: float = 1.0,
+    v_step: float = 0.02,
+    settle_s: float = 0.2,
+) -> None:
+    """Sweep the IM bias and record the photodiode response — measurement
+    only, no lock. Points stream into ``controller.im_scan_points`` (served
+    as the ``im_scan`` array) and the pre-scan bias is restored at the end,
+    abort included."""
+    import numpy as np
+
+    from .locking import im_bias_scan
+
+    servo = getattr(controller, "_im_servo", None)
+    if servo is None:
+        raise RuntimeError("no SRS mainframe configured; cannot scan the IM bias")
+
+    n_points = len(np.arange(v_start, v_stop, v_step))
+    controller.im_scan_points.clear()
+    ctx.step(
+        f"IM bias scan {v_start:+.3f} .. {v_stop:+.3f} V, {n_points} points",
+        total=n_points + 2,
+    )
+    previous_V = servo.manual_output_V
+
+    def point(_index: int, bias_V: float, input_V: float) -> None:
+        ctx.tick(f"bias {bias_V:+.3f} V -> photodiode {input_V:.4f} V")
+        controller.im_scan_points.append((bias_V, input_V))
+
+    try:
+        im_bias_scan(
+            servo,
+            v_start=v_start,
+            v_stop=v_stop,
+            v_step=v_step,
+            settle_s=settle_s,
+            sim=controller.sim,
+            point=point,
+        )
+    finally:
+        servo.manual_output_V = previous_V
+        log.info(
+            "IM bias scan done (%d points); bias restored to %+.3f V",
+            len(controller.im_scan_points),
+            previous_V,
+        )
+    ctx.step(f"scan complete; bias restored to {previous_V:+.3f} V")
+
+
 ACTIONS = {
     "set_standby": set_standby,
     "set_full_comb": set_full_comb,
@@ -328,4 +392,5 @@ ACTIONS = {
     "minicomb_auto_setup": minicomb_auto_setup,
     "close_all": close_all,
     "im_auto_lock": im_auto_lock_action,
+    "im_bias_scan": im_bias_scan_action,
 }

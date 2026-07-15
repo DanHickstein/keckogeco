@@ -28,6 +28,12 @@ servo's manual output) and find a point on a reasonably linear slope of
 the transfer function where the EO comb looks flattest. Record the
 bias voltage.
 
+The GUI's **IM Bias Lock** tab automates this: it sweeps the bias and
+plots the minicomb photodiode (the servo's measure input) against it,
+restoring the pre-scan bias afterwards. The scan runs on the server's
+action executor, so Abort stops it and transitions can't run
+concurrently.
+
 ### 4. Adjust RF attenuation and bias together
 
 Iterate between the IM bias and the RF attenuation voltage

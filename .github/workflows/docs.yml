@@ -35,6 +35,8 @@ jobs:
         with:
           name: keckogeco-docs-pdf
           path: docs/_build/latex/keckogeco.pdf
+      - name: Add PDF to HTML site
+        run: cp docs/_build/latex/keckogeco.pdf docs/_build/html/keckogeco.pdf
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3

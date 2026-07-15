@@ -21,9 +21,49 @@ import time
 
 import numpy as np
 
-__all__ = ["im_auto_lock"]
+__all__ = ["im_auto_lock", "im_bias_scan"]
 
 log = logging.getLogger(__name__)
+
+
+def im_bias_scan(
+    servo,
+    v_start: float = -2.0,
+    v_stop: float = 1.0,
+    v_step: float = 0.02,
+    settle_s: float = 0.2,
+    sim: bool = False,
+    point=None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sweep the servo's manual bias output, reading the measured input
+    (the minicomb photodiode) at each step. Returns (voltages, inputs).
+
+    Puts the servo in manual mode and leaves the output at the last sweep
+    point; callers decide the operating point afterwards (the auto-lock
+    moves to mid-fringe, the GUI scan restores the pre-scan bias).
+
+    Parameters
+    ----------
+    servo : keckogeco.drivers.srs_sim900.SIM960
+    point : callable(index, bias_V, input_V) | None
+        Called after each measurement (live plotting / abort checks).
+    """
+    voltages = np.arange(v_start, v_stop, v_step)
+    if len(voltages) < 2:
+        raise ValueError(
+            f"scan range {v_start}..{v_stop} V in {v_step} V steps has "
+            f"{len(voltages)} point(s); need at least 2"
+        )
+    servo.output_mode = "MAN"
+    inputs = np.empty(len(voltages))
+    for i, volt in enumerate(voltages):
+        servo.manual_output_V = float(volt)
+        if not sim:
+            time.sleep(settle_s)
+        inputs[i] = servo.measure_input_V
+        if point is not None:
+            point(i, float(volt), float(inputs[i]))
+    return voltages, inputs
 
 
 def im_auto_lock(
@@ -59,14 +99,11 @@ def im_auto_lock(
     servo.proportional_gain = prop_gain
     servo.integral_gain = intg_gain
 
-    voltages = np.arange(v_start, v_stop, v_step)
-    report(f"sweeping bias {v_start} V .. {v_stop} V ({len(voltages)} points)")
-    inputs = np.empty(len(voltages))
-    for i, volt in enumerate(voltages):
-        servo.manual_output_V = float(volt)
-        if not sim:
-            time.sleep(settle_s)
-        inputs[i] = servo.measure_input_V
+    n_points = len(np.arange(v_start, v_stop, v_step))
+    report(f"sweeping bias {v_start} V .. {v_stop} V ({n_points} points)")
+    voltages, inputs = im_bias_scan(
+        servo, v_start=v_start, v_stop=v_stop, v_step=v_step, settle_s=settle_s, sim=sim
+    )
 
     idx_max, idx_min = int(np.argmax(inputs)), int(np.argmin(inputs))
     v_max, v_min = voltages[idx_max], voltages[idx_min]
