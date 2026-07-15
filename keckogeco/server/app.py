@@ -29,7 +29,7 @@ if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from keckogeco.comb.actions import ACTIONS, ActionBusy
 from keckogeco.comb.controller import LFCController
@@ -60,6 +60,16 @@ class OsaSettingsRequest(BaseModel):
 
 class OsaSweepRequest(BaseModel):
     mode: Literal["single", "continuous", "stop"]
+
+
+class ImScanRequest(BaseModel):
+    """IM bias scan range. Bounds match the LFC_IM_BIAS keyword (±3 V,
+    the documented sweep range of the manual locking procedure)."""
+
+    v_start: float = Field(-2.0, ge=-3.0, le=3.0)
+    v_stop: float = Field(1.0, ge=-3.0, le=3.0)
+    v_step: float = Field(0.02, ge=0.002, le=0.5)
+    settle_s: float = Field(0.2, ge=0.0, le=5.0)
 
 
 def _json_value(value):
@@ -255,6 +265,24 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
             for key, dev in controller.config.devices.items()
         }
 
+    @app.get(f"{API_PREFIX}/interlock", dependencies=[auth])
+    def interlock() -> dict:
+        """Arduino interlock relay status with the ADC counts scaled to
+        volts (10-bit over 0-5 V) — the GUI shows the trip window and
+        colors the live voltage against it."""
+        try:
+            relay = controller.device("arduino_relay").relay_status()
+        except InstrumentError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        to_volts = 5.0 / 1023.0
+        return {
+            "voltage_V": relay.voltage_now * to_volts,
+            "low_threshold_V": relay.low_threshold * to_volts,
+            "high_threshold_V": relay.high_threshold * to_volts,
+            "ok_to_amplify": relay.ok_to_amplify,
+            "resettable": relay.resettable,
+        }
+
     @app.get(f"{API_PREFIX}/arrays", dependencies=[auth])
     def list_arrays() -> dict:
         return {"arrays": sorted(getattr(controller, "arrays", {}))}
@@ -310,6 +338,32 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
             return {**osa.status(), "resolutions_nm": list(osa.RESOLUTIONS_NM)}
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # --- IM bias scan (engineering-GUI surface, like the OSA endpoints:
+    # sweep-and-plot is a commissioning tool, not part of the KTL contract).
+    # The scan runs on the single-slot action executor, so /actions/current
+    # reports progress and DELETE /actions/current aborts it.
+
+    @app.post(f"{API_PREFIX}/im/scan", dependencies=[auth])
+    def im_scan_start(body: ImScanRequest) -> dict:
+        if getattr(controller, "_im_servo", None) is None:
+            raise HTTPException(status_code=503, detail="SRS SIM900 not configured or offline")
+        if body.v_stop - body.v_start < body.v_step:
+            raise HTTPException(
+                status_code=400,
+                detail=f"empty scan: v_start {body.v_start} .. v_stop {body.v_stop} "
+                f"in {body.v_step} V steps",
+            )
+        try:
+            return controller.executor.submit(
+                "im_bias_scan",
+                v_start=body.v_start,
+                v_stop=body.v_stop,
+                v_step=body.v_step,
+                settle_s=body.settle_s,
+            )
+        except ActionBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post(f"{API_PREFIX}/osa/sweep", dependencies=[auth])
     def osa_sweep(body: OsaSweepRequest) -> dict:

@@ -78,6 +78,9 @@ class KeckogecoClient:
     def devices(self) -> dict:
         return self._get("devices")
 
+    def interlock(self) -> dict:
+        return self._get("interlock")
+
     def arrays(self) -> list[str]:
         return self._get("arrays")["arrays"]
 
@@ -92,6 +95,16 @@ class KeckogecoClient:
         sensitivity_dBm); returns the read-back settings."""
         response = self.session.put(
             f"{self.base_url}/api/v1/osa", json=settings, timeout=self.timeout
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(response.json().get("detail", response.text))
+        return response.json()
+
+    def im_scan(self, **params) -> dict:
+        """Start an IM bias scan (v_start, v_stop, v_step, settle_s);
+        progress comes back through /state and the im_scan array."""
+        response = self.session.post(
+            f"{self.base_url}/api/v1/im/scan", json=params, timeout=self.timeout
         )
         if response.status_code >= 400:
             raise RuntimeError(response.json().get("detail", response.text))

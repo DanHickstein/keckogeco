@@ -117,6 +117,48 @@ def test_new_monitor_keywords_bound(client):
     assert 0.0 <= volts["value"] <= 5.0
 
 
+def test_im_scan_endpoint(client):
+    import time
+
+    response = client.post(
+        "/api/v1/im/scan",
+        json={"v_start": -1.0, "v_stop": 0.0, "v_step": 0.05, "settle_s": 0.0},
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == "im_bias_scan"
+    # sim skips the settle waits, so the sweep finishes almost immediately
+    controller = client.app.state.controller
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        current = controller.executor.current()
+        if current and not current["running"]:
+            break
+        time.sleep(0.02)
+    assert current["error"] is None
+    body = client.get("/api/v1/arrays/im_scan").json()
+    assert len(body["x"]) == len(body["y"]) == 20
+    assert body["x_label"] == "IM bias (V)"
+    assert body["running"] is False
+
+
+def test_im_scan_validation(client):
+    # inverted range -> 400 from the handler's cross-field check
+    response = client.post("/api/v1/im/scan", json={"v_start": 1.0, "v_stop": -1.0})
+    assert response.status_code == 400
+    assert "empty scan" in response.json()["detail"]
+    # out-of-bounds bias -> 422 from pydantic (±3 V keyword limits)
+    assert client.post("/api/v1/im/scan", json={"v_start": -5.0}).status_code == 422
+
+
+def test_interlock_endpoint(client):
+    body = client.get("/api/v1/interlock").json()
+    # sim thresholds are 300/900 ADC counts, voltage 500 (10-bit over 5 V)
+    assert body["low_threshold_V"] == pytest.approx(300 * 5 / 1023)
+    assert body["high_threshold_V"] == pytest.approx(900 * 5 / 1023)
+    assert body["low_threshold_V"] < body["voltage_V"] < body["high_threshold_V"]
+    assert body["ok_to_amplify"] is True
+
+
 def test_osa_settings_endpoints(client):
     body = client.get("/api/v1/osa").json()
     assert body["resolution_nm"] == pytest.approx(0.06)  # sim default = best

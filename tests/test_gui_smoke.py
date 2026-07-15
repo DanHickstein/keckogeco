@@ -75,6 +75,15 @@ class FakeClient:
     def osa_sweep(self, mode):
         return {"mode": mode, "sweep_continuous": mode == "continuous"}
 
+    def interlock(self):
+        return {
+            "voltage_V": 2.44,
+            "low_threshold_V": 1.47,
+            "high_threshold_V": 4.4,
+            "ok_to_amplify": True,
+            "resettable": False,
+        }
+
 
 def test_mainwindow_constructs_and_updates(qtbot):
     from keckogeco.gui.mainwindow import MainWindow
@@ -180,6 +189,96 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     window2.poller.stop()
     window2.writer.stop()
 
+    window.poller.stop()
+    window.writer.stop()
+
+
+def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
+    """The IM Bias Lock tab starts as a placeholder and becomes a live
+    plot + controls when the server offers the im_scan array."""
+    pytest.importorskip("pyqtgraph")
+    from keckogeco.gui import prefs
+    from keckogeco.gui.mainwindow import MainWindow
+
+    monkeypatch.setattr(prefs, "GUI_CONFIG_PATH", tmp_path / "gui.toml")
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    assert window._im_plot is None
+    window._on_arrays_available(["im_scan"])
+    assert window._im_plot is not None
+    assert "im_scan" in window.poller.array_names
+    controls = window._im_controls
+    assert controls is not None
+    assert controls.params() == {
+        "v_start": -2.0,
+        "v_stop": 1.0,
+        "v_step": 0.02,
+        "settle_s": 0.2,
+    }
+    # the manual bias control moved here from the Other tab
+    assert window.widgets["LFC_IM_BIAS"] is not None
+
+    # mid-scan payload: curve + readouts update, buttons flip to running
+    window._on_array(
+        "im_scan",
+        {"x": [-2.0, -1.98], "y": [0.1, 0.2], "running": True},
+    )
+    _plot, curve = window._im_plot
+    assert list(curve.getData()[1]) == [0.1, 0.2]
+    assert not controls.scan_button.isEnabled()
+    assert controls.abort_button.isEnabled()
+    assert "0.2000 V" in controls.input_v.text()  # last recorded point
+
+    # idle payload carries the live servo readouts
+    window._on_array(
+        "im_scan",
+        {"x": [], "y": [], "running": False, "mode": "MAN", "input_V": 0.42, "bias_V": 0.5},
+    )
+    assert controls.scan_button.isEnabled()
+    assert controls.mode.text() == "MANUAL"
+    assert "0.4200 V" in controls.input_v.text()
+
+    # the IM tab mirrors its own actions' progress, not the transitions'
+    window._on_state(
+        {
+            "state": "STANDBY",
+            "subsystems": {},
+            "action": {"name": "im_bias_scan", "running": True, "step": 3, "message": "x"},
+        }
+    )
+    assert "im_bias_scan" in window.im_action_label.text()
+    window._on_state(
+        {
+            "state": "STANDBY",
+            "subsystems": {},
+            "action": {"name": "set_standby", "running": True, "step": 1, "message": "y"},
+        }
+    )
+    assert window.im_action_label.text() == ""
+
+    window.poller.stop()
+    window.writer.stop()
+
+
+def test_interlock_voltage_coloring(qtbot):
+    """The trip window populates from /interlock and the live voltage
+    turns green inside the window, red outside."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    window._on_call_done("interlock", FakeClient().interlock())
+    assert "1.47" in window._interlock_threshold.text()
+    assert "4.40" in window._interlock_threshold.text()
+
+    def volts(value):
+        window._on_keywords({"LFC_PTAMP_INTERLOCK_V": {"value": value}})
+        return window.widgets["LFC_PTAMP_INTERLOCK_V"].styleSheet()
+
+    assert "#35d07f" in volts(2.44)  # in window -> green
+    assert "#e05252" in volts(0.3)  # below -> red
+    assert "#e05252" in volts(4.9)  # above -> red
+    assert volts(None) == ""  # unknown -> plain
     window.poller.stop()
     window.writer.stop()
 
