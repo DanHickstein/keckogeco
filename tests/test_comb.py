@@ -14,12 +14,12 @@ EXAMPLE = pathlib.Path(__file__).parent.parent / "config" / "instruments.example
 # ------------------------------------------------------------------ schema
 
 
-def test_schema_loads_84_keywords():
+def test_schema_loads_85_keywords():
     # 77 baseline keywords + additions listed in ktl/keyword-changes.md
-    # (LFC_WSP_TOD, EDFA output monitors x3, EDFA13 input monitor,
-    # LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V)
+    # (LFC_WSP_TOD, LFC_WSP_CENTER, EDFA output monitors x3, EDFA13 input
+    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V)
     schema = load_schema()
-    assert len(schema) == 84
+    assert len(schema) == 85
     assert schema["LFC_EDFA27_P"].writable
     assert schema["LFC_EDFA27_P"].units == "mW"
     assert schema["LFC_EDFA27_P"].max == 630

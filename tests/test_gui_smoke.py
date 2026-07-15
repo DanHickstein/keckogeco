@@ -215,10 +215,12 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
         "v_step": 0.02,
         "settle_s": 0.2,
     }
-    # the manual bias control moved here from the Other tab
+    # the manual bias + RF attenuator keyword controls live in the column
     assert window.widgets["LFC_IM_BIAS"] is not None
+    assert window.widgets["LFC_IM_RF_ATT"] is not None
 
-    # mid-scan payload: curve + readouts update, buttons flip to running
+    # mid-scan payload: curve + readouts update, buttons flip to running,
+    # and the array poll drops to every cycle for a live plot
     window._on_array(
         "im_scan",
         {"x": [-2.0, -1.98], "y": [0.1, 0.2], "running": True},
@@ -228,8 +230,9 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert not controls.scan_button.isEnabled()
     assert controls.abort_button.isEnabled()
     assert "0.2000 V" in controls.input_v.text()  # last recorded point
+    assert window.poller.array_every["im_scan"] == 1
 
-    # idle payload carries the live servo readouts
+    # idle payload carries the live servo readouts; poll cadence relaxes
     window._on_array(
         "im_scan",
         {"x": [], "y": [], "running": False, "mode": "MAN", "input_V": 0.42, "bias_V": 0.5},
@@ -237,6 +240,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert controls.scan_button.isEnabled()
     assert controls.mode.text() == "MANUAL"
     assert "0.4200 V" in controls.input_v.text()
+    assert window.poller.array_every["im_scan"] == 3
 
     # the IM tab mirrors its own actions' progress, not the transitions'
     window._on_state(
@@ -260,6 +264,36 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     window.writer.stop()
 
 
+def test_keyword_spinbox_typed_value_survives_polls(qtbot):
+    """A submitted value is not snapped back by the next poll refresh
+    while the write is in flight; a rejected write releases the hold so
+    the instrument's value returns. (Focus can't be exercised offscreen,
+    so the edit state is driven directly.)"""
+    from keckogeco.gui.widgets import KeywordSpinBox
+
+    submitted = []
+    spec = {"units": "V", "min": -3.0, "max": 3.0, "help": "test"}
+    widget = KeywordSpinBox("LFC_IM_BIAS", spec, lambda k, v: submitted.append((k, v)))
+    qtbot.addWidget(widget)
+    widget.spin.setValue(1.25)
+    widget._editing = True  # what _on_user_change sets on a focused keystroke
+    widget._apply()  # what editingFinished (Enter / focus-out) triggers
+    assert submitted == [("LFC_IM_BIAS", 1.25)]
+
+    widget.update_value(0.0)  # stale poll value: held off during the grace
+    assert widget.spin.value() == 1.25
+    widget.update_value(1.25)  # the write landed in the cache: accepted
+    assert widget.spin.value() == 1.25
+
+    # a refused write (e.g. during a running action) releases the hold
+    widget.spin.setValue(2.5)
+    widget._editing = True
+    widget._apply()
+    widget.write_rejected()
+    widget.update_value(1.25)
+    assert widget.spin.value() == 1.25
+
+
 def test_interlock_voltage_coloring(qtbot):
     """The trip window populates from /interlock and the live voltage
     turns green inside the window, red outside."""
@@ -281,6 +315,30 @@ def test_interlock_voltage_coloring(qtbot):
     assert volts(None) == ""  # unknown -> plain
     window.poller.stop()
     window.writer.stop()
+
+
+def test_wsp_panel_remembers_values(qtbot, tmp_path, monkeypatch):
+    """The WaveShaper boxes start at the commissioned 2.14 / 0 / 1559.8,
+    and an edit persists into the prefs so a fresh GUI restores it."""
+    from keckogeco.gui import prefs
+    from keckogeco.gui.mainwindow import MainWindow
+
+    monkeypatch.setattr(prefs, "GUI_CONFIG_PATH", tmp_path / "gui.toml")
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    assert window._wsp_spins["LFC_WSP_PHASE"].spin.value() == 2.14
+    assert window._wsp_spins["LFC_WSP_TOD"].spin.value() == 0.0
+    assert window._wsp_spins["LFC_WSP_CENTER"].spin.value() == 1559.8
+    # user edits GDD -> saved; a fresh GUI comes up with the edited trio
+    window._wsp_spins["LFC_WSP_PHASE"].spin.setValue(3.1)
+    window._wsp_submit("LFC_WSP_PHASE", 3.1)
+    window2 = MainWindow(FakeClient())
+    qtbot.addWidget(window2)
+    assert window2._wsp_spins["LFC_WSP_PHASE"].spin.value() == 3.1
+    assert window2._wsp_spins["LFC_WSP_CENTER"].spin.value() == 1559.8
+    for w in (window, window2):
+        w.poller.stop()
+        w.writer.stop()
 
 
 def test_self_destruct_countdown(qtbot):

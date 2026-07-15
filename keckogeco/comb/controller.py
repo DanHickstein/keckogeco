@@ -363,6 +363,11 @@ class LFCController:
                 setter=lambda v: self._set_wsp_dispersion(d3_ps_nm2=v),
             )
             bind(
+                "LFC_WSP_CENTER",
+                getter=lambda: self._softstore.get("LFC_WSP_CENTER", 1559.8),
+                setter=lambda v: self._set_wsp_dispersion(center_nm=v),
+            )
+            bind(
                 "LFC_WSP_ATTEN",
                 getter=lambda: self._softstore.get("LFC_WSP_ATTEN", 0.0),
                 setter=self._set_wsp_atten,
@@ -701,22 +706,26 @@ class LFCController:
             self.heartbeat.enabled = bool(on)
 
     def _set_wsp_dispersion(
-        self, d2_ps_nm: float | None = None, d3_ps_nm2: float | None = None
+        self,
+        d2_ps_nm: float | None = None,
+        d3_ps_nm2: float | None = None,
+        center_nm: float | None = None,
     ) -> None:
-        """Program GDD + TOD as one phase profile; either argument updates
-        its stored value and the other keeps the last applied one."""
+        """Program GDD + TOD around the center wavelength as one phase
+        profile; each argument updates its stored value and the others
+        keep their last applied one. The center defaults to the
+        commissioned 1559.8 nm (old orchestration: d2=2.14, d3=0)."""
         if d2_ps_nm is not None:
             self._softstore["LFC_WSP_PHASE"] = float(d2_ps_nm)
         if d3_ps_nm2 is not None:
             self._softstore["LFC_WSP_TOD"] = float(d3_ps_nm2)
+        if center_nm is not None:
+            self._softstore["LFC_WSP_CENTER"] = float(center_nm)
         ws = self.device("waveshaper1")
         ws.set_dispersion(
             d2_ps_nm=self._softstore.get("LFC_WSP_PHASE", 0.0),
             d3_ps_nm2=self._softstore.get("LFC_WSP_TOD", 0.0),
-            # commissioned profile center (old orchestration used
-            # d2=2.14 ps/nm, d3=0 ps/nm^2 at 1559.8 nm), not the driver's
-            # generic 1560.0 default
-            center_nm=1559.8,
+            center_nm=self._softstore.get("LFC_WSP_CENTER", 1559.8),
         )
         ws.write_profile()
 

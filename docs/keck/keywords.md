@@ -136,8 +136,9 @@ into the rewrite.
 
 | Keyword | Type | Access | Description |
 |---|---|---|---|
-| `LFC_WSP_PHASE` | double, ps/nm | RW 🔒 | Second-order dispersion (GDD, d₂) programmed onto WaveShaper 1. Applied together with `LFC_WSP_TOD` as one phase profile centered at the commissioned 1559.8 nm; reads report the value currently applied. Commissioned value: 2.14 ps/nm (d₃ = 0). |
+| `LFC_WSP_PHASE` | double, ps/nm | RW 🔒 | Second-order dispersion (GDD, d₂) programmed onto WaveShaper 1. Applied together with `LFC_WSP_TOD` around `LFC_WSP_CENTER` as one phase profile; reads report the value currently applied. Commissioned value: 2.14 ps/nm (d₃ = 0, center 1559.8 nm). |
 | `LFC_WSP_TOD` | double, ps/nm² | RW 🔒 | Third-order dispersion (TOD, d₃) companion to `LFC_WSP_PHASE`. **New in the rewrite** (see `ktl/keyword-changes.md`). |
+| `LFC_WSP_CENTER` | double, nm, 1500–1600 | RW 🔒 | Center wavelength of the dispersion phase profile (default: the commissioned 1559.8 nm). **New in the rewrite.** |
 | `LFC_WSP_ATTEN` | double | RW 🔒 | Flat attenuation level (dB) applied across the WaveShaper profile. |
 
 ## TECs and temperatures

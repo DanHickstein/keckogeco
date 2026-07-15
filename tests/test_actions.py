@@ -139,8 +139,12 @@ def test_wsp_keywords_program_waveshaper(controller):
     controller.write("LFC_WSP_TOD", "0.5")
     assert "d2=-5.7" in controller.device("waveshaper1").phase_description
     assert "d3=0.5" in controller.device("waveshaper1").phase_description
+    # the center is its own keyword; changing it re-applies the profile
+    controller.write("LFC_WSP_CENTER", "1560.5")
+    assert "center 1560.5 nm" in controller.device("waveshaper1").phase_description
+    assert "d2=-5.7" in controller.device("waveshaper1").phase_description
     controller.write("LFC_WSP_ATTEN", "3.0")
-    assert len(profiles) == 3
+    assert len(profiles) == 4
     assert controller.device("waveshaper1").atten(193.0) == pytest.approx(3.0)
 
 

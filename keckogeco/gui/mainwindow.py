@@ -41,7 +41,7 @@ from PyQt6.QtWidgets import (
 from . import prefs, spectra
 from .client import KeckogecoClient, PollThread, WriteThread
 from .theme import ACCENT, PLOT_BG, STATE_COLORS
-from .widgets import KeywordDisplay, KeywordSpinBox, OnOffButton, StatusLamp
+from .widgets import KeywordDisplay, KeywordSpinBox, OnOffButton, SelectAllSpinBox, StatusLamp
 
 __all__ = ["MainWindow"]
 
@@ -284,10 +284,13 @@ class ImScanControls(QWidget):
     Scan defaults are the auto-lock's commissioned sweep (−2 .. +1 V in
     20 mV steps, 0.2 s settle). The scan runs on the server's action
     executor, so it excludes the comb transitions and the shared Abort
-    stops it; the pre-scan bias is restored when the sweep ends.
+    stops it; the pre-scan bias is restored when the sweep ends. The
+    manual bias and RF-attenuator (LFC_IM_RF_ATT) keyword controls sit
+    below the scan buttons: the locking procedure iterates the two while
+    watching the mini-comb on the OSA.
     """
 
-    def __init__(self, start_scan, abort_scan, save_scan, bias_widget=None):
+    def __init__(self, start_scan, abort_scan, save_scan, bias_widget=None, rf_att_widget=None):
         super().__init__()
         self._start_scan = start_scan
         self.setMaximumWidth(250)
@@ -296,7 +299,7 @@ class ImScanControls(QWidget):
         form.setContentsMargins(0, 0, 0, 0)
 
         def spin(value, low, high, step, decimals, units, tip) -> QDoubleSpinBox:
-            box = QDoubleSpinBox()
+            box = SelectAllSpinBox()
             box.setRange(low, high)
             box.setDecimals(decimals)
             box.setSingleStep(step)
@@ -340,6 +343,16 @@ class ImScanControls(QWidget):
 
         if bias_widget is not None:
             form.addRow("Bias", bias_widget)
+        if rf_att_widget is not None:
+            # LFC_IM_RF_ATT: the VCA drive on RF oscillator supply ch 3.
+            # Iterate it against the bias while flattening the mini-comb.
+            form.addRow("RF atten", rf_att_widget)
+            hint = QLabel("recommended 0.80–0.85 V")
+            hint.setStyleSheet("color: #5a6472;")
+            hint.setToolTip(
+                "normal operating range of the RF attenuator drive (docs: locking procedure step 4)"
+            )
+            form.addRow("", hint)
         self.mode = QLabel("—")
         self.mode.setToolTip("SIM960 output mode (manual bias vs engaged PID)")
         form.addRow("Servo mode", self.mode)
@@ -753,18 +766,29 @@ class MainWindow(QMainWindow):
         self._im_plot = (plot, curve)
         self._im_placeholder.deleteLater()
         self._im_layout.addWidget(plot, stretch=1)
-        bias = None
-        if "LFC_IM_BIAS" in self.schema:
-            bias = KeywordSpinBox("LFC_IM_BIAS", self._spec("LFC_IM_BIAS"), self._submit)
-            self.widgets["LFC_IM_BIAS"] = bias
+
+        def keyword_spin(keyword: str) -> KeywordSpinBox | None:
+            if keyword not in self.schema:
+                return None
+            widget = KeywordSpinBox(keyword, self._spec(keyword), self._submit)
+            self.widgets[keyword] = widget
+            return widget
+
         self._im_controls = ImScanControls(
-            self._im_scan_start, self._abort_action, self._im_save, bias_widget=bias
+            self._im_scan_start,
+            self._abort_action,
+            self._im_save,
+            bias_widget=keyword_spin("LFC_IM_BIAS"),
+            rf_att_widget=keyword_spin("LFC_IM_RF_ATT"),
         )
         self._im_layout.addWidget(self._im_controls)
         self._subscribe_array("im_scan")
 
     def _im_scan_start(self) -> None:
         params = self._im_controls.params()
+        # poll the scan array every cycle from the start, so the plot
+        # builds up live; _on_array relaxes it again when the scan ends
+        self.poller.array_every["im_scan"] = 1
         self.writer.submit_call("IM scan", lambda c: c.im_scan(**params))
 
     def _im_save(self) -> None:
@@ -893,29 +917,82 @@ class MainWindow(QMainWindow):
         elif label == "OSA sweep":
             self._osa_controls.set_sweep(result.get("sweep_continuous"))
 
-    #: commissioned dispersion, from the old orchestration:
-    #: d2 = 2.14 ps/nm, d3 = 0 ps/nm^2, profile centered at 1559.8 nm
-    #: (the center is applied server-side, comb/controller.py)
-    _WSP_RECOMMENDED = {"LFC_WSP_PHASE": 2.14, "LFC_WSP_TOD": 0.0}
+    #: commissioned dispersion, from the old orchestration; also the
+    #: initial [wsp] values shipped in config/gui.toml
+    _WSP_RECOMMENDED = {
+        "LFC_WSP_PHASE": 2.14,
+        "LFC_WSP_TOD": 0.0,
+        "LFC_WSP_CENTER": 1559.8,
+    }
+    _WSP_PREF_KEYS = {
+        "LFC_WSP_PHASE": "gdd_ps_nm",
+        "LFC_WSP_TOD": "tod_ps_nm2",
+        "LFC_WSP_CENTER": "center_nm",
+    }
 
     def _waveshaper_panel(self) -> QGroupBox:
-        # the whole interaction is two numbers; the spin boxes track the
-        # value currently applied (server reads back its softstore)
+        """GDD / TOD / center boxes. The values persist in the GUI prefs
+        ([wsp] in config/gui.toml) and are re-applied to the instrument
+        when the GUI starts, since the server's softstore forgets them on
+        a restart."""
         box = QGroupBox("WaveShaper dispersion")
         form = QFormLayout(box)
-        self._add_spin(form, "GDD (d2)", "LFC_WSP_PHASE")
-        self._add_spin(form, "TOD (d3)", "LFC_WSP_TOD")
-        if all(keyword in self.schema for keyword in self._WSP_RECOMMENDED):
-            recommended = QPushButton("2.14 / 0.00")
+        saved = prefs.load_section("wsp")
+        remembered = {
+            kw: float(saved.get(pref_key, self._WSP_RECOMMENDED[kw]))
+            for kw, pref_key in self._WSP_PREF_KEYS.items()
+        }
+        self._wsp_spins: dict[str, KeywordSpinBox] = {}
+        for label, keyword in (
+            ("GDD (d2)", "LFC_WSP_PHASE"),
+            ("TOD (d3)", "LFC_WSP_TOD"),
+            ("Center", "LFC_WSP_CENTER"),
+        ):
+            if keyword not in self.schema:
+                continue
+            widget = KeywordSpinBox(keyword, self._spec(keyword), self._wsp_submit)
+            widget.spin.setValue(remembered[keyword])
+            self._wsp_spins[keyword] = widget
+            self.widgets[keyword] = widget
+            form.addRow(label, widget)
+        if self._wsp_spins:
+            recommended = QPushButton("2.14 / 0.00 / 1559.8")
             recommended.setToolTip(
                 "apply the commissioned dispersion: d2 = 2.14 ps/nm, "
-                "d3 = 0 ps/nm² (profile centered at 1559.8 nm)"
+                "d3 = 0 ps/nm², centered at 1559.8 nm"
             )
-            recommended.clicked.connect(
-                lambda: [self._submit(k, v) for k, v in self._WSP_RECOMMENDED.items()]
-            )
+            recommended.clicked.connect(lambda: self._apply_wsp(self._WSP_RECOMMENDED))
             form.addRow("Recommended", recommended)
+        # restore the remembered profile onto the instrument (skipped when
+        # the WaveShaper is offline: the keywords report as unbound)
+        if self._wsp_spins and all(self.schema.get(kw, {}).get("bound") for kw in self._wsp_spins):
+            self._apply_wsp(remembered)
         return box
+
+    def _apply_wsp(self, values: dict) -> None:
+        for keyword, value in values.items():
+            widget = self._wsp_spins.get(keyword)
+            if widget is None:
+                continue
+            widget.spin.blockSignals(True)
+            widget.spin.setValue(value)
+            widget.spin.blockSignals(False)
+            self._submit(keyword, value)
+        self._save_wsp_prefs()
+
+    def _wsp_submit(self, keyword: str, value) -> None:
+        """Spin-box edits: write the keyword and remember the trio."""
+        self._submit(keyword, value)
+        self._save_wsp_prefs()
+
+    def _save_wsp_prefs(self) -> None:
+        prefs.save_section(
+            "wsp",
+            {
+                self._WSP_PREF_KEYS[keyword]: widget.spin.value()
+                for keyword, widget in self._wsp_spins.items()
+            },
+        )
 
     def _tec_panel(self) -> QGroupBox:
         # the IM bias control moved to the IM Bias Lock tab (one widget per
@@ -1016,6 +1093,10 @@ class MainWindow(QMainWindow):
             curve.setData(data.get("x", []), data.get("y", []))
             if self._im_controls is not None:
                 self._im_controls.update_status(data)
+            # fetch every cycle while a scan runs (the payload is cached
+            # data, no extra hardware I/O); idle readouts stay at the slow
+            # cadence to keep GPIB traffic down
+            self.poller.array_every["im_scan"] = 1 if data.get("running") else 3
 
     def _on_connection(self, ok: bool, detail: str) -> None:
         if ok:
@@ -1028,6 +1109,10 @@ class MainWindow(QMainWindow):
 
     def _on_write_failed(self, keyword: str, error: str) -> None:
         self.statusBar().showMessage(f"WRITE FAILED {keyword}: {error}", 10000)
+        # let the next poll snap the box back to the instrument's value
+        widget = self.widgets.get(keyword)
+        if hasattr(widget, "write_rejected"):
+            widget.write_rejected()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.poller.stop()

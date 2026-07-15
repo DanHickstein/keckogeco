@@ -17,6 +17,7 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 | Keyword | Type | Why |
 |---|---|---|
 | `LFC_WSP_TOD` | double, writable, ps/nm² | 3rd-order dispersion companion to `LFC_WSP_PHASE`. The engineering GUI drives the WaveShaper as two numbers (GDD + TOD) instead of a full profile; the driver's `set_dispersion` always supported d3 but no keyword exposed it. `LFC_WSP_PHASE` gains units `ps/nm` and a help string naming it GDD (semantics unchanged: it was always d2). Both keywords read back the value currently applied. |
+| `LFC_WSP_CENTER` | double, writable, nm (1500–1600) | Center wavelength of the GDD/TOD phase profile (defaults to the commissioned 1559.8 nm; the old orchestration hardcoded it). Applied together with `LFC_WSP_PHASE`/`LFC_WSP_TOD`. |
 | `LFC_EDFA27/23/13_OUTPUT_POWER_MONITOR` | double, RO, mW | Amonics `:SENS:POW:OUT` was always readable but had no keyword; the engineering GUI displays it per EDFA. |
 | `LFC_EDFA13_INPUT_POWER_MONITOR` | double, RO, mW | The 27/23 input monitors existed in the baseline; the 13 dBm unit was simply missing. |
 | `LFC_PTAMP_IN` | double, RO, mW | Pritel seed input power (`FA INPUT?`), the natural companion to `LFC_PTAMP_OUT`. |
