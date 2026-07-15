@@ -134,8 +134,13 @@ def test_wsp_keywords_program_waveshaper(controller):
     assert controller.read("LFC_WSP_PHASE").value == pytest.approx(-5.7)
     profiles = controller.device("waveshaper1").transport.loaded_profiles
     assert len(profiles) == 1
+    # GDD + TOD are applied together, centered at the commissioned 1559.8 nm
+    assert "center 1559.8 nm" in controller.device("waveshaper1").phase_description
+    controller.write("LFC_WSP_TOD", "0.5")
+    assert "d2=-5.7" in controller.device("waveshaper1").phase_description
+    assert "d3=0.5" in controller.device("waveshaper1").phase_description
     controller.write("LFC_WSP_ATTEN", "3.0")
-    assert len(profiles) == 2
+    assert len(profiles) == 3
     assert controller.device("waveshaper1").atten(193.0) == pytest.approx(3.0)
 
 

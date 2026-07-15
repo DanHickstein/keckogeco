@@ -713,6 +713,10 @@ class LFCController:
         ws.set_dispersion(
             d2_ps_nm=self._softstore.get("LFC_WSP_PHASE", 0.0),
             d3_ps_nm2=self._softstore.get("LFC_WSP_TOD", 0.0),
+            # commissioned profile center (old orchestration used
+            # d2=2.14 ps/nm, d3=0 ps/nm^2 at 1559.8 nm), not the driver's
+            # generic 1560.0 default
+            center_nm=1559.8,
         )
         ws.write_profile()
 

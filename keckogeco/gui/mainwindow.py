@@ -462,6 +462,7 @@ class MainWindow(QMainWindow):
 
         row3 = QHBoxLayout()
         row3.addWidget(self._rf_panel())
+        row3.addWidget(self._waveshaper_panel())
         row3.addWidget(self._temperature_panel(), stretch=1)
         outer.addLayout(row3)
 
@@ -496,7 +497,6 @@ class MainWindow(QMainWindow):
 
         row1 = QHBoxLayout()
         row1.addWidget(self._edfa_panel("Amonics EDFA 13 dBm (not in use)", "LFC_EDFA13", "edfa13"))
-        row1.addWidget(self._waveshaper_panel())
         row1.addWidget(self._tec_panel())
         outer.addLayout(row1)
 
@@ -893,13 +893,28 @@ class MainWindow(QMainWindow):
         elif label == "OSA sweep":
             self._osa_controls.set_sweep(result.get("sweep_continuous"))
 
+    #: commissioned dispersion, from the old orchestration:
+    #: d2 = 2.14 ps/nm, d3 = 0 ps/nm^2, profile centered at 1559.8 nm
+    #: (the center is applied server-side, comb/controller.py)
+    _WSP_RECOMMENDED = {"LFC_WSP_PHASE": 2.14, "LFC_WSP_TOD": 0.0}
+
     def _waveshaper_panel(self) -> QGroupBox:
         # the whole interaction is two numbers; the spin boxes track the
         # value currently applied (server reads back its softstore)
         box = QGroupBox("WaveShaper dispersion")
         form = QFormLayout(box)
-        self._add_spin(form, "GDD", "LFC_WSP_PHASE")
-        self._add_spin(form, "TOD", "LFC_WSP_TOD")
+        self._add_spin(form, "GDD (d2)", "LFC_WSP_PHASE")
+        self._add_spin(form, "TOD (d3)", "LFC_WSP_TOD")
+        if all(keyword in self.schema for keyword in self._WSP_RECOMMENDED):
+            recommended = QPushButton("2.14 / 0.00")
+            recommended.setToolTip(
+                "apply the commissioned dispersion: d2 = 2.14 ps/nm, "
+                "d3 = 0 ps/nm² (profile centered at 1559.8 nm)"
+            )
+            recommended.clicked.connect(
+                lambda: [self._submit(k, v) for k, v in self._WSP_RECOMMENDED.items()]
+            )
+            form.addRow("Recommended", recommended)
         return box
 
     def _tec_panel(self) -> QGroupBox:
