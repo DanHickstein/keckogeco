@@ -128,7 +128,9 @@ class PollThread(QThread):
     array_ready = pyqtSignal(str, dict)
     connection_changed = pyqtSignal(bool, str)
 
-    #: arrays are fetched every Nth poll cycle (spectra sweeps are slow)
+    #: arrays are fetched every Nth poll cycle (spectra sweeps are slow);
+    #: per-array overrides go in ``array_every`` (e.g. the IM scan drops to
+    #: every cycle while a sweep is running so the plot builds up live)
     ARRAY_EVERY = 3
 
     def __init__(self, client: KeckogecoClient, period_ms: int = 1000):
@@ -136,6 +138,7 @@ class PollThread(QThread):
         self.client = client
         self.period_ms = period_ms
         self.array_names: list[str] = []  # set by the main window
+        self.array_every: dict[str, int] = {}  # name -> cadence override
         self._running = True
         self._connected = None
         self._cycle = 0
@@ -153,11 +156,13 @@ class PollThread(QThread):
                         self.arrays_available.emit(self.client.arrays())
                     except Exception as exc:  # noqa: BLE001 - older server
                         log.debug("arrays list fetch failed: %s", exc)
-                    for name in list(self.array_names):
-                        try:
-                            self.array_ready.emit(name, self.client.array(name))
-                        except Exception as exc:  # noqa: BLE001 - one bad array is fine
-                            log.debug("array %s fetch failed: %s", name, exc)
+                for name in list(self.array_names):
+                    if self._cycle % self.array_every.get(name, self.ARRAY_EVERY):
+                        continue
+                    try:
+                        self.array_ready.emit(name, self.client.array(name))
+                    except Exception as exc:  # noqa: BLE001 - one bad array is fine
+                        log.debug("array %s fetch failed: %s", name, exc)
             except Exception as exc:  # noqa: BLE001 - report and keep polling
                 self._set_connected(False, str(exc))
             self._cycle += 1

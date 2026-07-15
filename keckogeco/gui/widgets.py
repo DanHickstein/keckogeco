@@ -7,9 +7,10 @@ range that the schema (and therefore Keck) doesn't agree with.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QHBoxLayout,
@@ -19,7 +20,25 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-__all__ = ["KeywordDisplay", "KeywordSpinBox", "OnOffButton", "StatusLamp"]
+__all__ = [
+    "KeywordDisplay",
+    "KeywordSpinBox",
+    "OnOffButton",
+    "SelectAllSpinBox",
+    "StatusLamp",
+]
+
+
+class SelectAllSpinBox(QDoubleSpinBox):
+    """QDoubleSpinBox that selects its value on focus, so clicking into
+    the box and typing replaces the number immediately."""
+
+    def focusInEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().focusInEvent(event)
+        # deferred: Qt would otherwise clear the selection right after
+        # this handler when the mouse press places the cursor
+        QTimer.singleShot(0, self.selectAll)
+
 
 _LAMP_COLORS = {
     True: "#35d07f",  # green
@@ -73,17 +92,24 @@ class KeywordDisplay(QLabel):
 class KeywordSpinBox(QWidget):
     """Spin box + apply button for a writable numeric keyword.
 
-    The spin box shows the live value until the user edits it; Apply (or
-    Enter) submits the write through the submit callback.
+    The spin box shows the live value until the user edits it; Enter (or
+    focus-out) submits the write through the submit callback. A just-typed
+    value is held for a grace period instead of being snapped back by the
+    next poll, so a slow (or refused) write doesn't look like the box ate
+    the input — after the grace the poll value wins again.
     """
+
+    #: seconds a submitted value is protected from poll snap-back
+    PENDING_GRACE_S = 10.0
 
     def __init__(self, keyword: str, spec: dict, submit: Callable[[str, object], None]):
         super().__init__()
         self.keyword = keyword
         self._submit = submit
         self._editing = False
+        self._pending_until = 0.0
 
-        self.spin = QDoubleSpinBox()
+        self.spin = SelectAllSpinBox()
         self.spin.setDecimals(3)
         self.spin.setRange(
             spec.get("min") if spec.get("min") is not None else -1e9,
@@ -107,15 +133,25 @@ class KeywordSpinBox(QWidget):
     def _apply(self) -> None:
         if self._editing:
             self._editing = False
+            self._pending_until = time.monotonic() + self.PENDING_GRACE_S
             self._submit(self.keyword, self.spin.value())
+
+    def write_rejected(self) -> None:
+        """The submitted write failed: stop protecting it so the next
+        poll restores the instrument's real value."""
+        self._pending_until = 0.0
 
     def update_value(self, value) -> None:
         if value is None:  # unknown (e.g. VOA not homed): keep what's shown
             return
-        if not self._editing and not self.spin.hasFocus():
-            self.spin.blockSignals(True)
-            self.spin.setValue(float(value))
-            self.spin.blockSignals(False)
+        if self._editing or self.spin.hasFocus():
+            return
+        value = float(value)
+        if value != self.spin.value() and time.monotonic() < self._pending_until:
+            return  # a submitted write hasn't reached the poll cache yet
+        self.spin.blockSignals(True)
+        self.spin.setValue(value)
+        self.spin.blockSignals(False)
 
 
 class OnOffButton(QWidget):

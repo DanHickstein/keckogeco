@@ -197,6 +197,24 @@ or `keckogeco/gui/app.py` in VSCode and press Run.
 - **An instrument is missing from discovery** — check NI-MAX (VISA
   devices) or Device Manager (plain COM ports) first; if the OS can't see
   it, no Python will.
+- **A COM port vanished from Windows entirely** (VISA `RSRC_NFOUND`, the
+  adapter gone from Device Manager) — don't reach for the instrument's
+  power switch: the FT232 USB-serial interfaces draw power from the USB
+  hub, not the instrument, so power-cycling the instrument cannot bring
+  its port back. Suspect the rack USB hub instead, especially if two or
+  more devices dropped at the same time: the 15-port hubs are internally
+  chains of 4-port VIA VL813 chips, and a single chip can wedge (e.g.
+  after USB driver installs/reboots) while the rest of the hub keeps
+  working. **Power-cycle the hub at its ePDU outlet** — hub A is strip A
+  outlet 15, hub B is strip B outlet 23 (see the
+  [power distribution table](../hardware/components.md#power-distribution))
+  — then restart the server:
+  devices that were offline when the server started are not retried until
+  a restart. Laptop reboots do *not* fix this, because a self-powered hub
+  keeps its 5 V rail up through a reboot. Seen live 2026-07-14, when an
+  NI-488.2 reinstall plus reboots wedged one hub-A chip and took out
+  `edfa23` and `rb_clock` together
+  ([#36](https://github.com/DanHickstein/keckogeco/issues/36)).
 - **GPIB scan fails with a driver-stack error** — NI-488.2 version problem;
   see the downgrade warning in step 3.
 - **`wsapi` imports but opening `SN<serial>` fails** even though the USB

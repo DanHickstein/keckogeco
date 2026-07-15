@@ -141,6 +141,20 @@ them. Discovery anchors each instrument to its USB adapter serial
 number, so devices keep working when re-plugged into different ports.
 ```
 
+```{warning}
+Internally each 15-port hub is a chain of 4-port VIA VL813 chips, and a
+single chip can wedge — its devices vanish from Windows while the rest
+of the hub keeps working (2026-07-14: Rb clock + Amonics 23 dBm, on
+adjacent ports of one hub-A chip, dropped together after USB driver
+installs and reboots —
+[#36](https://github.com/DanHickstein/keckogeco/issues/36)). The fix is
+power-cycling the hub at its ePDU outlet (hub A: strip A outlet 15;
+hub B: strip B outlet 23), **not** the instrument (the FT232 interfaces
+are hub-powered) and not a laptop reboot (a self-powered hub keeps its
+5 V rail up through one). Afterwards restart the server — devices that
+were offline at server startup are not retried until a restart.
+```
+
 (power-distribution)=
 ## Power distribution (ePDU outlets)
 
