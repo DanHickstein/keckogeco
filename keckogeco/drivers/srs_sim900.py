@@ -86,9 +86,7 @@ class SIM900(Instrument):
     def sim928(self, slot: int, name: str = "") -> SIM928:
         return SIM928(self, slot, name)
 
-    def module_inventory(
-        self, slots=None, probe_timeout_ms: int = 1500
-    ) -> dict[int, str | None]:
+    def module_inventory(self, slots=None, probe_timeout_ms: int = 1500) -> dict[int, str | None]:
         """``*IDN?`` every slot: {slot: idn string, or None if empty}.
 
         An empty slot never replies, so the VISA timeout is temporarily

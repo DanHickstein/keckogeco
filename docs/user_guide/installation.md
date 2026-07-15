@@ -207,7 +207,7 @@ or `keckogeco/gui/app.py` in VSCode and press Run.
   after USB driver installs/reboots) while the rest of the hub keeps
   working. **Power-cycle the hub at its ePDU outlet** — hub A is strip A
   outlet 15, hub B is strip B outlet 23 (see the
-  [power distribution table](../hardware/components.md#power-distribution))
+  {ref}`power distribution table <power-distribution>`)
   — then restart the server:
   devices that were offline when the server started are not retried until
   a restart. Laptop reboots do *not* fix this, because a self-powered hub

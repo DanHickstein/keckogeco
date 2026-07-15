@@ -123,8 +123,7 @@ class ThermoArray(QWidget):
             row, pair = divmod(index, columns)
             name = QLabel(label)
             name.setToolTip(
-                f"{tooltip} — {keyword}[{channel}], "
-                f"normally {baseline_C:.1f} ±{tolerance_C:.0f} °C"
+                f"{tooltip} — {keyword}[{channel}], normally {baseline_C:.1f} ±{tolerance_C:.0f} °C"
             )
             value = QLabel("—")
             value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
