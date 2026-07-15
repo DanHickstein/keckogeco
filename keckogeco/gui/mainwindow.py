@@ -431,10 +431,10 @@ class MainWindow(QMainWindow):
     def _spec(self, keyword: str) -> dict:
         return self.schema.get(keyword, {})
 
-    def _add_spin(self, form: QFormLayout, label: str, keyword: str) -> None:
+    def _add_spin(self, form: QFormLayout, label: str, keyword: str, submit=None) -> None:
         if keyword not in self.schema:
             return
-        widget = KeywordSpinBox(keyword, self._spec(keyword), self._submit)
+        widget = KeywordSpinBox(keyword, self._spec(keyword), submit or self._submit)
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
@@ -613,14 +613,40 @@ class MainWindow(QMainWindow):
         address = self.devices.get(device_key, {}).get("address")
         return f"{title} ({address})" if address else title
 
+    #: commissioned EDFA23 ACC pump current, shown as the recommended value
+    _EDFA23_RECOMMENDED_MA = 80.0
+
     def _edfa_panel(self, title: str, prefix: str, device_key: str = "") -> QGroupBox:
         box = QGroupBox(self._title_with_port(title, device_key))
         form = QFormLayout(box)
         self._add_onoff(form, "Emission", f"{prefix}_ONOFF")
-        self._add_spin(form, "Setpoint", f"{prefix}_P")
+        if prefix == "LFC_EDFA23":
+            # runs in ACC: the setpoint is a pump current in mA. The last
+            # value entered persists in [edfa23] in config/gui.toml and
+            # pre-fills the box until the live poll takes over (display
+            # only — a current is never auto-applied to an amplifier).
+            self._add_spin(form, "Current", f"{prefix}_P", submit=self._edfa23_submit)
+            widget = self.widgets.get(f"{prefix}_P")
+            if widget is not None:
+                saved = prefs.load_section("edfa23").get("setpoint_mA")
+                if saved is not None:
+                    widget.spin.blockSignals(True)
+                    widget.spin.setValue(float(saved))
+                    widget.spin.blockSignals(False)
+                hint = QLabel(f"{self._EDFA23_RECOMMENDED_MA:g} mA")
+                hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                hint.setToolTip("the commissioned ACC pump current")
+                form.addRow("Recommended", hint)
+        else:
+            self._add_spin(form, "Setpoint", f"{prefix}_P")
         self._add_display(form, "Input power", f"{prefix}_INPUT_POWER_MONITOR")
         self._add_display(form, "Output power", f"{prefix}_OUTPUT_POWER_MONITOR")
         return box
+
+    def _edfa23_submit(self, keyword: str, value) -> None:
+        """EDFA23 current edits: write the keyword and remember the value."""
+        self._submit(keyword, value)
+        prefs.save_section("edfa23", {"setpoint_mA": float(value)})
 
     def _interlock_panel(self) -> QGroupBox:
         box = QGroupBox(self._title_with_port("Interlock", "arduino_relay"))

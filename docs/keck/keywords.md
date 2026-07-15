@@ -62,7 +62,7 @@ logs an error instead (see the change list).
 | `LFC_EDFA27_AUTO_ON` | boolean | RW 🔒 | Write 1: APC 450 mW *and* enable emission. |
 | `LFC_EDFA13_P` | double, mW, 0–20 | RW 🔒 | Small (20 mW) EDFA output power setpoint. |
 | `LFC_EDFA13_ONOFF` | boolean | RW 🔒 | Small EDFA emission on/off. |
-| `LFC_EDFA23_P` | double, mW, 0–20 | RW 🔒 | 23 dBm EDFA output power setpoint / monitor. |
+| `LFC_EDFA23_P` | double, mA, 0–1500 | RW 🔒 | 23 dBm EDFA pump current setpoint (the unit runs in ACC; commissioned operating point 80 mA). Retyped from the baseline's "mW, 0–20" — see keyword-changes.md. |
 | `LFC_EDFA23_ONOFF` | boolean | RW 🔒 | 23 dBm EDFA emission on/off. |
 | `LFC_EDFA23_P_DEFAULT` | boolean | RW 🔒 | Write 1: apply the EDFA23 default. Commissioned value was ACC 80 mA; **currently parks at 0 mA** while the unit is out of service. |
 | `LFC_EDFA23_AUTO_ON` | boolean | RW 🔒 | Write 1: apply the EDFA23 default and enable emission (dark at the current 0 mA park value). |

@@ -11,6 +11,7 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 | `LFC_PTAMP_PRE_P` | "pre-amp output power", mW, 50–140 | preamp **current**, mA, 0–600 | The deployed implementation always read/wrote the Pritel preamp current in mA (`KeckLFC.py` wrote `preAmp = '{value}mA'`; standby/full-comb sequences use 0 and 600). The CSV metadata never matched. |
 | `LFC_RFOSCI_I` | units mA, min 0.35, max 0.7 | units **A** (limits unchanged) | Implementation returned the GPD supply current in amps; the 0.35–0.7 limits only make sense in A. |
 | `LFC_EDFA27_INPUT_POWER_MONITOR`, `LFC_EDFA23_INPUT_POWER_MONITOR` | type boolean | type **double**, mW | The deployed handlers always returned the Amonics seed input power in mW; "boolean" in the CSV was never true. |
+| `LFC_EDFA23_P` | "output power", mW, 0–20 | pump **current**, mA, 0–1500 | The 23 dBm unit runs in ACC, so the value written to the Amonics `:DRIV:ACC:CUR` register is a current in mA (commissioned operating point 80 mA — impossible to express under the old 0–20 bound). The driver additionally clamps to the unit's own reported maximum. `LFC_EDFA13_P` almost certainly has the same problem (that unit is also configured ACC) but is left untouched until the out-of-use 13 dBm EDFA is confirmed on the rack. |
 
 ## Additions (new keywords, not in the 77-keyword baseline)
 

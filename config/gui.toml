@@ -8,6 +8,12 @@ stop_nm = 1570.0
 resolution_nm = 0.06
 sensitivity_dBm = -60.0
 
+# EDFA23 pump current (the unit runs in ACC, so mA): the last value entered
+# in the GUI, shown until the live value arrives — never auto-applied.
+# Shipped at the commissioned/recommended 80 mA.
+[edfa23]
+setpoint_mA = 80.0
+
 # WaveShaper dispersion, re-applied when the GUI starts; the GUI rewrites
 # this on every edit. Shipped at the commissioned values.
 [wsp]

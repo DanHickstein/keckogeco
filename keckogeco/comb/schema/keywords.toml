@@ -195,10 +195,13 @@ help = "Small EDFA (20 mW) 2 emission on/off"
 [LFC_EDFA23_P]
 type = "double"
 writable = true
-help = "Small EDFA (200 mW) 3 output power"
-units = "mW"
+# the rack unit runs in ACC, so the setpoint is a pump current (the old
+# schema's "output power, mW, 0-20" never matched; commissioned 80 mA).
+# The driver additionally clamps to the unit's own reported maximum.
+help = "Small EDFA (200 mW) 3 pump current (ACC)"
+units = "mA"
 min = 0.0
-max = 20.0
+max = 1500.0
 format = "%.1f"
 
 [LFC_EDFA23_ONOFF]

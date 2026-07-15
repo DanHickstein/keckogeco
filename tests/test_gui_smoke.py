@@ -341,6 +341,34 @@ def test_wsp_panel_remembers_values(qtbot, tmp_path, monkeypatch):
         w.writer.stop()
 
 
+def test_edfa23_current_in_mA_and_remembered(qtbot, tmp_path, monkeypatch):
+    """The EDFA23 box is a pump current in mA (the unit runs in ACC) with
+    room for the commissioned 80; an edit persists into the prefs so a
+    fresh GUI pre-fills it. A live poll value still wins over the memory."""
+    from keckogeco.gui import prefs
+    from keckogeco.gui.mainwindow import MainWindow
+
+    monkeypatch.setattr(prefs, "GUI_CONFIG_PATH", tmp_path / "gui.toml")
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    box = window.widgets["LFC_EDFA23_P"]
+    assert box.spin.suffix() == " mA"
+    assert box.spin.maximum() == 1500.0
+    # user sets the recommended 80 mA -> saved; a fresh GUI pre-fills it
+    box.spin.setValue(80.0)
+    window._edfa23_submit("LFC_EDFA23_P", 80.0)
+    window2 = MainWindow(FakeClient())
+    qtbot.addWidget(window2)
+    box2 = window2.widgets["LFC_EDFA23_P"]
+    assert box2.spin.value() == 80.0
+    # the memory is display-only: the instrument's live value overwrites it
+    window2._on_keywords({"LFC_EDFA23_P": {"value": 0.0}})
+    assert box2.spin.value() == 0.0
+    for w in (window, window2):
+        w.poller.stop()
+        w.writer.stop()
+
+
 def test_self_destruct_countdown(qtbot):
     """Fully armed and completely harmless."""
     from keckogeco.gui.mainwindow import SelfDestructDialog
