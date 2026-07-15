@@ -1,15 +1,30 @@
 """Engineering GUI main window.
 
-Hand-built panels assembled from schema-driven widgets. The Comb State
-panel mirrors the OFF / STANDBY / FULL COMB + status-lamp layout of the
-old tkinter GUI (``KTL server/server_with_gui.py``) that Keck operators
-already know; the rest is the full-control surface for the LFC engineers.
+Three tabs of schema-driven panels. **Overview** mirrors the OFF /
+STANDBY / FULL COMB + status-lamp layout of the old tkinter GUI
+(``KTL server/server_with_gui.py``) that Keck operators already know,
+plus the day-to-day controls (EDFAs, Pritel, interlock, RF chain,
+temperatures, mini-comb spectrum). **IM Bias Lock** is the servo
+workbench: lock controls (bias, RF attenuation, setpoint, lock/unlock)
+with photodiode + bias strip charts on top, the bias-scan panel in the
+middle (transfer function; only while unlocked), and a mirror of the
+OSA spectrum at the bottom so the comb is visible while adjusting.
+**Other** holds the rarely-touched hardware: EDFA13 (out of the light
+path), WaveShaper dispersion, TECs, YJ shutter, VOAs.
 """
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+import time
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -19,23 +34,71 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from . import prefs, spectra
 from .client import KeckogecoClient, PollThread, WriteThread
-from .widgets import KeywordDisplay, KeywordSpinBox, OnOffButton, StatusLamp
+from .theme import ACCENT, PLOT_BG, STATE_COLORS
+from .widgets import (
+    KeywordDisplay,
+    KeywordSpinBox,
+    OnOffButton,
+    SelectAllSpinBox,
+    StatusLamp,
+    ThermoArray,
+)
 
 __all__ = ["MainWindow"]
 
-_STATE_COLORS = {
-    "FULL COMB": "#2e7d32",
-    "STANDBY": "#f9a825",
-    "OFF": "#616161",
-    "FAULT": "#c62828",
-    "UNKNOWN": "#9e9e9e",
-    "TRANSITIONING": "#1565c0",
-}
+# a subsystem mix that matches no canonical state is normal during manual
+# work — present it as engineering mode, not a fault
+_STATE_DISPLAY = {"FAULT": "ENGINEERING MODE"}
+
+# Thermocouple channel labels mirror drivers/usb2408.DEFAULT_POSITIONS
+# (documented at commissioning, Jun 2023); full position text goes in the
+# tooltip. The rack board's ch7 is permanently unconnected and left out.
+# Values arrive as the LFC_TEMP_TEST1/2 array keywords, so every channel
+# is shown — not just the seven with individual LFC_T_* keywords.
+# Each channel's last value is its normal-operation baseline, recorded on
+# the live rack 2026-07-14 (system in its normal state; five /keywords
+# snapshots averaged). Readings more than ±_TEMP_TOLERANCE_C from the
+# baseline are colored bold red (hot) / bold blue (cold) — a per-channel
+# band, because "normal" spans 14 °C glycol to a 48 °C RF amplifier.
+_THERMO_PANELS = (
+    (
+        "LFC_TEMP_TEST1",
+        "Rack",
+        [
+            (0, "Side baffle", "Rack side baffle (middle side rack)", 28.7),
+            (1, "WaveShaper", "Waveshaper (upper rack)", 26.4),
+            (2, "Rb clock", "Rb clock (middle rack)", 27.0),
+            (3, "Pritel", "Pritel (middle upper rack)", 26.0),
+            (4, "Glycol out", "Rack glycol out", 19.6),
+            (5, "Glycol in", "Rack glycol in", 14.1),
+            (6, "PSU shelf", "Power supply shelf (bottom rack)", 26.0),
+        ],
+    ),
+    (
+        "LFC_TEMP_TEST2",
+        "Optical table (EOCB)",
+        [
+            (0, "RF oscillator", "RF oscillator", 40.3),
+            (1, "RF amplifier", "RF amplifier", 48.0),
+            (2, "Phase mods", "Main phase modulators", 32.7),
+            (3, "Filter cavity", "Filter cavity", 28.0),
+            (4, "Glycol out", "Board glycol out", 15.6),
+            (5, "Glycol in", "Board glycol in", 34.9),
+            (6, "Compression", "Compression stage", 23.1),
+            (7, "Rb cell", "Rubidium (Rb) cell D2-210", 24.2),
+        ],
+    ),
+)
+
+#: deviation from a channel's baseline that turns its readout red/blue
+_TEMP_TOLERANCE_C = 3.0
 
 # keywords whose writes toggle real optical/RF power -> confirm dialog
 _CONFIRM = {
@@ -48,23 +111,420 @@ _CONFIRM = {
 }
 
 
+class SelfDestructDialog(QDialog):
+    """Requested by Steph Leifer. Fully armed and completely harmless:
+    OK and Cancel both just dismiss it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("keckogeco")
+        self._remaining = 5
+        layout = QVBoxLayout(self)
+        self.label = QLabel(self._message())
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setStyleSheet("font-size: 14px; padding: 12px;")
+        layout.addWidget(self.label)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(1000)
+
+    def _message(self) -> str:
+        return f"The system will self-destruct in {self._remaining} seconds."
+
+    def _tick(self) -> None:
+        self._remaining -= 1
+        if self._remaining > 0:
+            self.label.setText(self._message())
+        else:
+            self._timer.stop()
+            self.label.setText("💥  ...just kidding. Hi Steph!")
+
+
+class OsaControls(QWidget):
+    """Controls column beside the OSA spectrum plot.
+
+    The default view (factory values below, overridden by the user's
+    saved ``[osa_defaults]`` in the GUI prefs file) is pushed to the OSA
+    plus continuous sweep when the panel first connects, and again on
+    the Default button; "Save as default" persists the current settings.
+    Controls re-populate from the read-back after every apply, so they
+    always show what the instrument accepted; edits go through the
+    writer thread.
+    """
+
+    FACTORY_DEFAULTS = {
+        "start_nm": 1550.0,
+        "stop_nm": 1570.0,
+        "resolution_nm": 0.06,  # the 86142B's best
+        "sensitivity_dBm": -60.0,
+    }
+    #: fallback resolution list until the server reports the OSA's own
+    RESOLUTIONS_NM = (0.06, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)
+
+    def __init__(self, submit_settings, submit_sweep, save_spectrum=None, load_spectrum=None):
+        super().__init__()
+        self._submit_settings = submit_settings  # (**settings) -> queued PUT
+        self._submit_sweep = submit_sweep  # (mode) -> queued POST
+        self._save_spectrum = save_spectrum  # () -> save-file dialog
+        self._load_spectrum = load_spectrum  # ("loaded"|"reference") -> open-file dialog
+        saved = prefs.load_section("osa_defaults")
+        self.defaults = {
+            key: float(saved.get(key, fallback)) for key, fallback in self.FACTORY_DEFAULTS.items()
+        }
+        self.setMaximumWidth(250)
+
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        def spin(field: str, spec: dict, default: float) -> KeywordSpinBox:
+            widget = KeywordSpinBox(
+                field, spec, lambda f, value: self._submit_settings(**{f: value})
+            )
+            widget.spin.setValue(default)
+            return widget
+
+        self.start = spin(
+            "start_nm",
+            {"units": "nm", "min": 600, "max": 1700, "help": "sweep start wavelength"},
+            self.defaults["start_nm"],
+        )
+        self.stop = spin(
+            "stop_nm",
+            {"units": "nm", "min": 600, "max": 1700, "help": "sweep stop wavelength"},
+            self.defaults["stop_nm"],
+        )
+        self.sensitivity = spin(
+            "sensitivity_dBm",
+            # floor at the 86142B's -90 dBm spec: the instrument accepts
+            # lower values but only gets slower, never more sensitive
+            {"units": "dBm", "min": -90, "max": 30, "help": "measurement sensitivity"},
+            self.defaults["sensitivity_dBm"],
+        )
+        self.resolution = QComboBox()
+        self.resolution.setToolTip("resolution bandwidth")
+        self._set_resolutions(self.RESOLUTIONS_NM)
+        self.resolution.activated.connect(
+            lambda index: self._submit_settings(resolution_nm=self.resolution.itemData(index))
+        )
+
+        form.addRow("Start", self.start)
+        form.addRow("Stop", self.stop)
+        form.addRow("Resolution", self.resolution)
+        form.addRow("Sensitivity", self.sensitivity)
+
+        sweep = QHBoxLayout()
+        self._sweep_buttons: dict[str, QPushButton] = {}
+        for text, mode in (("Single", "single"), ("Cont.", "continuous"), ("Stop", "stop")):
+            button = QPushButton(text)
+            button.setToolTip(f"{mode} sweep")
+            button.clicked.connect(lambda _checked, m=mode: self._submit_sweep(m))
+            self._sweep_buttons[mode] = button
+            sweep.addWidget(button)
+        form.addRow("Sweep", sweep)
+
+        config = QHBoxLayout()
+        self._default_button = QPushButton("Default")
+        self._default_button.clicked.connect(self.apply_defaults)
+        save = QPushButton("Save as default")
+        save.setToolTip("store the current settings as the default OSA configuration")
+        save.clicked.connect(self._save_as_default)
+        config.addWidget(self._default_button)
+        config.addWidget(save)
+        form.addRow("Config", config)
+        self._refresh_default_tooltip()
+
+        files = QHBoxLayout()
+        for text, tooltip, action in (
+            ("Save", "save the live spectrum to a CSV file", lambda: self._save_spectrum()),
+            ("Load", "display a saved spectrum", lambda: self._load_spectrum("loaded")),
+            (
+                "Load ref",
+                "display a reference spectrum (remembered across GUI restarts)",
+                lambda: self._load_spectrum("reference"),
+            ),
+        ):
+            button = QPushButton(text)
+            button.setToolTip(tooltip)
+            button.clicked.connect(lambda _checked, a=action: a())
+            files.addWidget(button)
+        form.addRow("Spectra", files)
+
+    def _refresh_default_tooltip(self) -> None:
+        self._default_button.setToolTip(
+            f"{self.defaults['start_nm']:g}–{self.defaults['stop_nm']:g} nm, "
+            f"{self.defaults['resolution_nm']:g} nm resolution, "
+            f"{self.defaults['sensitivity_dBm']:g} dBm sensitivity, continuous sweep"
+        )
+
+    def apply_defaults(self) -> None:
+        """Push the default mini-comb view to the OSA."""
+        self._submit_settings(**self.defaults)
+        self._submit_sweep("continuous")
+
+    def current_settings(self) -> dict:
+        return {
+            "start_nm": self.start.spin.value(),
+            "stop_nm": self.stop.spin.value(),
+            "resolution_nm": float(self.resolution.currentData()),
+            "sensitivity_dBm": self.sensitivity.spin.value(),
+        }
+
+    def _save_as_default(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Confirm",
+            "Are you sure you want to change the default OSA configuration?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.defaults = self.current_settings()
+        prefs.save_section("osa_defaults", self.defaults)
+        self._refresh_default_tooltip()
+
+    def _set_resolutions(self, values) -> None:
+        self.resolution.blockSignals(True)
+        self.resolution.clear()
+        for value in values:
+            self.resolution.addItem(f"{value:g} nm", float(value))
+        self.resolution.setCurrentIndex(0)  # best (smallest) first
+        self.resolution.blockSignals(False)
+
+    def populate(self, settings: dict) -> None:
+        """Update the controls from a GET/PUT read-back."""
+        resolutions = settings.get("resolutions_nm")
+        if resolutions and self.resolution.count() != len(resolutions):
+            self._set_resolutions(resolutions)
+        self.start.update_value(settings.get("wl_start_nm"))
+        self.stop.update_value(settings.get("wl_stop_nm"))
+        self.sensitivity.update_value(settings.get("sensitivity_dBm"))
+        res = settings.get("resolution_nm")
+        if res is not None and not self.resolution.hasFocus():
+            index = min(
+                range(self.resolution.count()),
+                key=lambda i: abs(self.resolution.itemData(i) - float(res)),
+            )
+            self.resolution.blockSignals(True)
+            self.resolution.setCurrentIndex(index)
+            self.resolution.blockSignals(False)
+        self.set_sweep(settings.get("sweep_continuous"))
+
+    def set_sweep(self, continuous) -> None:
+        """Highlight the sweep button matching the instrument state.
+
+        ``continuous`` False lights Stop (a single sweep also ends there:
+        Single is a momentary trigger, not a state); None clears both.
+        """
+        for mode, button in self._sweep_buttons.items():
+            if mode == "single":
+                continue
+            active = continuous is not None and (mode == "continuous") == bool(continuous)
+            button.setStyleSheet(f"color: {ACCENT}; font-weight: bold;" if active else "")
+
+
+class ImServoPanel(QWidget):
+    """Lock controls for the IM bias servo (top of the IM Bias Lock tab).
+
+    Manual bias (LFC_IM_BIAS), the RF attenuator drive (LFC_IM_RF_ATT),
+    the PID setpoint (the photodiode voltage the lock holds), and
+    Lock / Unlock buttons (LFC_IM_LOCK_MODE). Live readouts come from
+    the im_scan array payload; the strip charts beside this column are
+    owned by the main window.
+    """
+
+    def __init__(self, set_lock, bias_widget=None, rf_att_widget=None, setpoint_widget=None):
+        super().__init__()
+        self.setMaximumWidth(250)
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        if bias_widget is not None:
+            bias_widget.setToolTip("manual bias output (drives the IM while unlocked)")
+            form.addRow("Bias", bias_widget)
+        if rf_att_widget is not None:
+            # LFC_IM_RF_ATT: the VCA drive on RF oscillator supply ch 3.
+            # Iterate it against the bias while flattening the mini-comb.
+            form.addRow("RF atten", rf_att_widget)
+            hint = QLabel("recommended 0.80–0.85 V")
+            hint.setStyleSheet("color: #5a6472;")
+            hint.setToolTip(
+                "normal operating range of the RF attenuator drive (docs: locking procedure step 4)"
+            )
+            form.addRow("", hint)
+        self.setpoint = setpoint_widget
+        if setpoint_widget is not None:
+            form.addRow("Setpoint", setpoint_widget)
+
+        buttons = QHBoxLayout()
+        self.lock_button = QPushButton("Lock")
+        self.lock_button.setToolTip("engage the PID at the setpoint (LFC_IM_LOCK_MODE = 1)")
+        self.lock_button.clicked.connect(lambda: set_lock(True))
+        self.unlock_button = QPushButton("Unlock")
+        self.unlock_button.setToolTip("back to manual bias output (LFC_IM_LOCK_MODE = 0)")
+        self.unlock_button.clicked.connect(lambda: set_lock(False))
+        buttons.addWidget(self.lock_button)
+        buttons.addWidget(self.unlock_button)
+        form.addRow("Servo", buttons)
+
+        mode_row = QHBoxLayout()
+        self.lamp = StatusLamp("IM lock")
+        self.mode = QLabel("—")
+        self.mode.setToolTip("SIM960 output mode (manual bias vs engaged PID)")
+        mode_row.addWidget(self.lamp)
+        mode_row.addWidget(self.mode, stretch=1)
+        form.addRow("Mode", mode_row)
+        self.input_v = QLabel("—")
+        self.input_v.setToolTip("servo measure input — the minicomb photodiode voltage")
+        form.addRow("Photodiode", self.input_v)
+        self.output_v = QLabel("—")
+        self.output_v.setToolTip("servo output — the bias voltage actually applied to the IM")
+        form.addRow("Bias out", self.output_v)
+
+    def update_status(self, payload: dict) -> None:
+        """Refresh mode + readouts from the im_scan array (or a PUT /im
+        read-back — same keys)."""
+        if payload.get("running"):
+            self.mode.setText("scanning …")
+            self.lamp.set_state(None)
+        else:
+            mode = payload.get("mode")
+            if mode is not None:
+                locked = mode == "PID"
+                self.mode.setText("LOCKED (PID)" if locked else "MANUAL")
+                self.lamp.set_state(locked)
+        if self.setpoint is not None and payload.get("setpoint_V") is not None:
+            self.setpoint.update_value(payload["setpoint_V"])
+        # while scanning the live input is the last recorded sweep point
+        value = payload["y"][-1] if payload.get("running") and payload.get("y") else None
+        if value is None:
+            value = payload.get("input_V")
+        if value is not None:
+            self.input_v.setText(f"{value:.4f} V")
+        if payload.get("bias_V") is not None:
+            self.output_v.setText(f"{payload['bias_V']:.3f} V")
+
+
+class ImScanControls(QWidget):
+    """Controls column beside the IM bias-scan plot (middle of the tab).
+
+    Scan defaults are the auto-lock's commissioned sweep (−2 .. +1 V in
+    20 mV steps, 0.2 s settle). The scan runs on the server's action
+    executor, so it excludes the comb transitions and the shared Abort
+    stops it; the pre-scan bias is restored when the sweep ends. A scan
+    can only start while the lock is off (the server refuses otherwise).
+    """
+
+    def __init__(self, start_scan, abort_scan, save_scan):
+        super().__init__()
+        self._start_scan = start_scan
+        self.setMaximumWidth(250)
+
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        def spin(value, low, high, step, decimals, units, tip) -> QDoubleSpinBox:
+            box = SelectAllSpinBox()
+            box.setRange(low, high)
+            box.setDecimals(decimals)
+            box.setSingleStep(step)
+            box.setValue(value)
+            box.setSuffix(f" {units}")
+            box.setToolTip(tip)
+            box.valueChanged.connect(self._refresh_estimate)
+            return box
+
+        # bounds mirror the server's ImScanRequest (±3 V, the LFC_IM_BIAS range)
+        self.v_start = spin(-2.0, -3, 3, 0.1, 3, "V", "scan start bias")
+        self.v_stop = spin(1.0, -3, 3, 0.1, 3, "V", "scan stop bias")
+        self.v_step = spin(0.02, 0.002, 0.5, 0.005, 3, "V", "bias step between points")
+        self.settle_s = spin(0.2, 0.0, 5.0, 0.1, 2, "s", "settle time before each reading")
+        form.addRow("Start", self.v_start)
+        form.addRow("Stop", self.v_stop)
+        form.addRow("Step", self.v_step)
+        form.addRow("Settle", self.settle_s)
+
+        self.estimate = QLabel("")
+        self.estimate.setStyleSheet("color: #5a6472;")
+        form.addRow("", self.estimate)
+        self._refresh_estimate()
+
+        buttons = QHBoxLayout()
+        self.scan_button = QPushButton("Scan")
+        self.scan_button.setToolTip("sweep the bias and plot the photodiode response")
+        self.scan_button.clicked.connect(lambda: self._start_scan())
+        self.abort_button = QPushButton("Abort")
+        self.abort_button.setToolTip("stop the running scan (the bias is restored)")
+        self.abort_button.setEnabled(False)
+        self.abort_button.clicked.connect(lambda: abort_scan())
+        buttons.addWidget(self.scan_button)
+        buttons.addWidget(self.abort_button)
+        form.addRow("Scan", buttons)
+
+        save = QPushButton("Save")
+        save.setToolTip("save the scan to a CSV file")
+        save.clicked.connect(lambda: save_scan())
+        form.addRow("Data", save)
+
+    def params(self) -> dict:
+        return {
+            "v_start": self.v_start.value(),
+            "v_stop": self.v_stop.value(),
+            "v_step": self.v_step.value(),
+            "settle_s": self.settle_s.value(),
+        }
+
+    def _refresh_estimate(self) -> None:
+        span = self.v_stop.value() - self.v_start.value()
+        n = max(int(span / self.v_step.value()), 0) if self.v_step.value() > 0 else 0
+        # ~0.15 s/point of GPIB overhead on top of the settle time
+        seconds = n * (self.settle_s.value() + 0.15)
+        self.estimate.setText(f"{n} points, ~{seconds:.0f} s" if n else "empty range")
+
+    def update_status(self, payload: dict) -> None:
+        """Gate the Scan button on the run/lock state from the im_scan array."""
+        running = bool(payload.get("running"))
+        locked = payload.get("mode") == "PID"
+        self.scan_button.setEnabled(not running and not locked)
+        self.scan_button.setToolTip(
+            "unlock the servo before scanning (the sweep would fight the PID)"
+            if locked
+            else "sweep the bias and plot the photodiode response"
+        )
+        self.abort_button.setEnabled(running)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, client: KeckogecoClient):
         super().__init__()
         self.client = client
         self.setWindowTitle("keckogeco — LFC engineering GUI")
         self.widgets: dict[str, object] = {}  # keyword -> widget
+        self._im_status_shown = ""  # last IM action message sent to the status bar
 
         self.schema = client.schema()
+        try:
+            self.devices = client.devices()  # key -> {address, name, online, ...}
+        except Exception:  # noqa: BLE001 - older server: titles just lose the port
+            self.devices = {}
 
         self.writer = WriteThread(client)
         self.writer.write_failed.connect(self._on_write_failed)
         self.writer.write_ok.connect(self._on_write_ok)
+        self.writer.call_done.connect(self._on_call_done)
         self.writer.start()
 
         self.poller = PollThread(client)
         self.poller.keywords_ready.connect(self._on_keywords)
         self.poller.state_ready.connect(self._on_state)
+        self.poller.arrays_available.connect(self._on_arrays_available)
+        self.poller.array_ready.connect(self._on_array)
         self.poller.connection_changed.connect(self._on_connection)
         self.poller.start()
 
@@ -81,10 +541,10 @@ class MainWindow(QMainWindow):
     def _spec(self, keyword: str) -> dict:
         return self.schema.get(keyword, {})
 
-    def _add_spin(self, form: QFormLayout, label: str, keyword: str) -> None:
+    def _add_spin(self, form: QFormLayout, label: str, keyword: str, submit=None) -> None:
         if keyword not in self.schema:
             return
-        widget = KeywordSpinBox(keyword, self._spec(keyword), self._submit)
+        widget = KeywordSpinBox(keyword, self._spec(keyword), submit or self._submit)
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
@@ -105,121 +565,162 @@ class MainWindow(QMainWindow):
         form.addRow(label, widget)
 
     def _build_layout(self) -> None:
-        central = QWidget()
-        outer = QVBoxLayout(central)
+        tabs = QTabWidget()
+        tabs.addTab(self._overview_tab(), "Overview")
+        tabs.addTab(self._im_lock_tab(), "IM Bias Lock")
+        tabs.addTab(self._other_tab(), "Other")
+        self.setCentralWidget(tabs)
+
+    def _overview_tab(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
         outer.addWidget(self._comb_state_panel())
 
-        grid = QGridLayout()
-        grid.addWidget(self._edfa_panel("EDFA 27 dBm", "LFC_EDFA27"), 0, 0)
-        grid.addWidget(self._edfa_panel("EDFA 13 dBm", "LFC_EDFA13"), 0, 1)
-        grid.addWidget(self._edfa_panel("EDFA 23 dBm", "LFC_EDFA23"), 0, 2)
-        grid.addWidget(self._pritel_panel(), 1, 0)
-        grid.addWidget(self._rf_panel(), 1, 1)
-        grid.addWidget(self._seed_tec_panel(), 1, 2)
-        grid.addWidget(self._temperature_panel(), 2, 0, 1, 3)
-        grid.addWidget(self._voa_panel(), 3, 0, 1, 3)
-        outer.addLayout(grid)
+        row2 = QHBoxLayout()
+        row2.addWidget(self._edfa_panel("Amonics EDFA 27 dBm", "LFC_EDFA27", "edfa27"), stretch=3)
+        row2.addWidget(self._edfa_panel("Amonics EDFA 23 dBm", "LFC_EDFA23", "edfa23"), stretch=3)
+        row2.addWidget(self._interlock_panel(), stretch=2)
+        row2.addWidget(self._pritel_panel(), stretch=4)
+        outer.addLayout(row2)
 
-        spectra = self._spectra_panel()
-        if spectra is not None:
-            outer.addWidget(spectra, stretch=1)
+        row3 = QHBoxLayout()
+        row3.addWidget(self._rf_panel())
+        row3.addWidget(self._waveshaper_panel())
+        row3.addWidget(self._temperature_panel(), stretch=1)
+        outer.addLayout(row3)
 
-        self.setCentralWidget(central)
+        outer.addWidget(self._osa_panel(), stretch=1)
+        return page
 
-    def _spectra_panel(self) -> QGroupBox | None:
-        """OSA spectrum + WaveShaper profile plots (pyqtgraph), if the
-        server exposes those arrays."""
-        try:
-            available = self.client.arrays()
-        except Exception:  # noqa: BLE001 - older server or offline
-            available = []
-        wanted = [name for name in ("osa_spectrum", "wsp_profile") if name in available]
-        if not wanted:
-            return None
-        try:
-            import pyqtgraph as pg
-        except ImportError:
-            self.statusBar().showMessage("pyqtgraph not installed; spectra hidden")
-            return None
+    def _im_lock_tab(self) -> QWidget:
+        """Three sections, top to bottom: servo/lock controls with live
+        strip charts, the bias scan, and a mirror of the OSA spectrum
+        (users watch the comb while adjusting bias + RF attenuation).
+        All start as placeholders; _on_arrays_available wires them when
+        the server offers the im_scan / osa_spectrum arrays."""
 
-        box = QGroupBox("Spectra")
-        layout = QHBoxLayout(box)
-        self._plots: dict[str, object] = {}
-        titles = {"osa_spectrum": "OSA", "wsp_profile": "WaveShaper profile"}
-        for name in wanted:
-            plot = pg.PlotWidget(title=titles[name])
-            plot.showGrid(x=True, y=True, alpha=0.3)
-            curve = plot.plot(pen=pg.mkPen("#1565c0", width=1))
-            self._plots[name] = (plot, curve)
-            layout.addWidget(plot)
-        self.poller.array_names = wanted
-        self.poller.array_ready.connect(self._on_array)
-        return box
+        def placeholder(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
+            return label
 
-    def _on_array(self, name: str, data: dict) -> None:
-        entry = getattr(self, "_plots", {}).get(name)
-        if entry is None:
-            return
-        plot, curve = entry
-        curve.setData(data.get("x", []), data.get("y", []))
-        plot.setLabel("bottom", data.get("x_label", ""))
-        plot.setLabel("left", data.get("y_label", ""))
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        servo_box = QGroupBox(self._title_with_port("IM bias servo (SIM960)", "srs"))
+        self._im_servo_layout = QHBoxLayout(servo_box)
+        self._im_servo_panel: ImServoPanel | None = None
+        self._im_servo_placeholder = placeholder("(SRS SIM900 not connected)")
+        self._im_servo_layout.addWidget(self._im_servo_placeholder, stretch=1)
+        layout.addWidget(servo_box, stretch=2)
+
+        scan_box = QGroupBox("Bias scan — photodiode vs bias (unlock first)")
+        self._im_layout = QHBoxLayout(scan_box)
+        self._im_plot = None
+        self._im_controls: ImScanControls | None = None
+        self._im_placeholder = placeholder("(SRS SIM900 not connected)")
+        self._im_layout.addWidget(self._im_placeholder, stretch=1)
+        layout.addWidget(scan_box, stretch=3)
+
+        osa_box = QGroupBox("Mini-comb spectrum (OSA) — controls on the Overview tab")
+        self._im_osa_layout = QHBoxLayout(osa_box)
+        self._im_osa_plot = None
+        self._im_osa_placeholder = placeholder("(OSA not connected)")
+        self._im_osa_layout.addWidget(self._im_osa_placeholder, stretch=1)
+        layout.addWidget(osa_box, stretch=2)
+
+        self.im_action_label = QLabel("")
+        self.im_action_label.setWordWrap(True)
+        layout.addWidget(self.im_action_label)
+        return page
+
+    def _other_tab(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(self._edfa_panel("Amonics EDFA 13 dBm (not in use)", "LFC_EDFA13", "edfa13"))
+        row1.addWidget(self._tec_panel())
+        outer.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(self._shutter_panel())
+        row2.addWidget(self._voa_panel(), stretch=1)
+        outer.addLayout(row2)
+
+        outer.addStretch(1)
+        return page
 
     def _comb_state_panel(self) -> QGroupBox:
         box = QGroupBox("Comb State")
-        layout = QHBoxLayout(box)
+        outer = QHBoxLayout(box)
 
         self.state_banner = QLabel("UNKNOWN")
         self.state_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.state_banner.setMinimumWidth(180)
-        self.state_banner.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: white; "
-            "background-color: #9e9e9e; padding: 8px; border-radius: 4px;"
-        )
-        layout.addWidget(self.state_banner)
+        self.state_banner.setMinimumWidth(140)
+        self._set_banner("UNKNOWN")
+        outer.addWidget(self.state_banner)
 
+        # lamp order per operations: RF chain first, then amplification
         self.subsystem_lamps: dict[str, StatusLamp] = {}
         lamps = QGridLayout()
+        lamps.setHorizontalSpacing(10)
         for column, (key, label) in enumerate(
             [
-                ("rf_oscillator", "RF osc"),
-                ("rf_amplifier", "RF amp"),
-                ("edfa23", "EDFA23"),
+                ("rf_oscillator", "RF Osc"),
+                ("im_lock", "IM Lock"),  # from LFC_IM_LOCK_MODE, not /state
+                ("rf_amplifier", "RF Amp"),
                 ("edfa27", "EDFA27"),
+                ("edfa23", "EDFA23"),
                 ("ptamp", "Pritel"),
-                ("rep_rate", "Rep rate"),
             ]
         ):
             lamp = StatusLamp(label)
             self.subsystem_lamps[key] = lamp
             lamps.addWidget(lamp, 0, column, alignment=Qt.AlignmentFlag.AlignCenter)
             lamps.addWidget(QLabel(label), 1, column, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addLayout(lamps)
+        outer.addLayout(lamps)
 
         self.action_label = QLabel("")
         self.action_label.setWordWrap(True)
-        layout.addWidget(self.action_label, stretch=1)
+        outer.addWidget(self.action_label, stretch=1)
 
-        buttons = QVBoxLayout()
+        buttons = QHBoxLayout()
         for text, action in (
-            ("Go to STANDBY", "set_standby"),
-            ("Go to FULL COMB", "set_full_comb"),
-            ("Turn OFF", "set_off"),
+            ("STANDBY", "set_standby"),
+            ("FULL COMB", "set_full_comb"),
+            ("OFF", "set_off"),
         ):
             button = QPushButton(text)
+            button.setToolTip(f"Run the {text} transition sequence")
             button.clicked.connect(lambda _checked, a=action, t=text: self._start_action(a, t))
             buttons.addWidget(button)
-        abort = QPushButton("Abort action")
+        abort = QPushButton("Abort")
+        abort.setToolTip("Abort the running transition")
         abort.clicked.connect(self._abort_action)
         buttons.addWidget(abort)
-        layout.addLayout(buttons)
+        boom = QPushButton("Self-destruct")
+        boom.setToolTip("for Steph")
+        boom.setStyleSheet("color: #e05252;")
+        boom.clicked.connect(lambda: SelfDestructDialog(self).exec())
+        buttons.addWidget(boom)
+        outer.addLayout(buttons)
         return box
+
+    def _set_banner(self, state_name: str) -> None:
+        color = STATE_COLORS.get(state_name, STATE_COLORS["UNKNOWN"])
+        self.state_banner.setText(_STATE_DISPLAY.get(state_name, state_name))
+        self.state_banner.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: white; "
+            f"background-color: {color}; padding: 5px 10px; border-radius: 4px;"
+        )
 
     def _start_action(self, action: str, label: str) -> None:
         answer = QMessageBox.question(
             self,
             "Confirm",
-            f"Really {label}? This runs a multi-step power sequence.",
+            f"Really go to {label}? This runs a multi-step power sequence.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -238,26 +739,74 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             self.statusBar().showMessage(f"abort failed: {exc}", 10000)
 
-    def _edfa_panel(self, title: str, prefix: str) -> QGroupBox:
-        box = QGroupBox(title)
+    def _title_with_port(self, title: str, device_key: str) -> str:
+        """Append the device's address, e.g. 'Interlock (COM4)'."""
+        address = self.devices.get(device_key, {}).get("address")
+        return f"{title} ({address})" if address else title
+
+    #: commissioned EDFA23 ACC pump current, shown as the recommended value
+    _EDFA23_RECOMMENDED_MA = 80.0
+
+    def _edfa_panel(self, title: str, prefix: str, device_key: str = "") -> QGroupBox:
+        box = QGroupBox(self._title_with_port(title, device_key))
         form = QFormLayout(box)
         self._add_onoff(form, "Emission", f"{prefix}_ONOFF")
-        self._add_spin(form, "Setpoint", f"{prefix}_P")
+        if prefix == "LFC_EDFA23":
+            # runs in ACC: the setpoint is a pump current in mA. The last
+            # value entered persists in [edfa23] in config/gui.toml and
+            # pre-fills the box until the live poll takes over (display
+            # only — a current is never auto-applied to an amplifier).
+            self._add_spin(form, "Current", f"{prefix}_P", submit=self._edfa23_submit)
+            widget = self.widgets.get(f"{prefix}_P")
+            if widget is not None:
+                saved = prefs.load_section("edfa23").get("setpoint_mA")
+                if saved is not None:
+                    widget.spin.blockSignals(True)
+                    widget.spin.setValue(float(saved))
+                    widget.spin.blockSignals(False)
+                hint = QLabel(f"{self._EDFA23_RECOMMENDED_MA:g} mA")
+                hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                hint.setToolTip("the commissioned ACC pump current")
+                form.addRow("Recommended", hint)
+        else:
+            self._add_spin(form, "Setpoint", f"{prefix}_P")
         self._add_display(form, "Input power", f"{prefix}_INPUT_POWER_MONITOR")
+        self._add_display(form, "Output power", f"{prefix}_OUTPUT_POWER_MONITOR")
+        return box
+
+    def _edfa23_submit(self, keyword: str, value) -> None:
+        """EDFA23 current edits: write the keyword and remember the value."""
+        self._submit(keyword, value)
+        prefs.save_section("edfa23", {"setpoint_mA": float(value)})
+
+    def _interlock_panel(self) -> QGroupBox:
+        box = QGroupBox(self._title_with_port("Interlock", "arduino_relay"))
+        form = QFormLayout(box)
+        self._add_display(form, "Latch", "LFC_PTAMP_LATCH")
+        self._add_display(form, "Voltage", "LFC_PTAMP_INTERLOCK_V")
+        # trip window fetched once at startup (thresholds are quasi-static);
+        # the live voltage is colored green/red against it in _on_keywords
+        self._interlock_window: tuple[float, float] | None = None
+        self._interlock_threshold = QLabel("—")
+        self._interlock_threshold.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._interlock_threshold.setToolTip("the latch trips outside this photodiode window")
+        form.addRow("Window", self._interlock_threshold)
+        reset = QPushButton("Reset latch")
+        reset.clicked.connect(lambda: self._submit("LFC_PTAMP_LATCH", "1"))
+        form.addRow("", reset)
+        self.writer.submit_call("interlock", lambda c: c.interlock())
         return box
 
     def _pritel_panel(self) -> QGroupBox:
-        box = QGroupBox("Pritel amplifier")
+        box = QGroupBox(self._title_with_port("Pritel amplifier", "ptamp"))
         form = QFormLayout(box)
         self._add_onoff(form, "Pump", "LFC_PTAMP_ONOFF")
+        self._add_display(form, "Input power", "LFC_PTAMP_IN")
         self._add_spin(form, "Preamp", "LFC_PTAMP_PRE_P")
         self._add_spin(form, "Power amp", "LFC_PTAMP_I")
         self._add_display(form, "Output", "LFC_PTAMP_OUT")
-        self._add_display(form, "Interlock", "LFC_PTAMP_LATCH")
-        reset = QPushButton("Reset interlock latch")
-        reset.clicked.connect(lambda: self._submit("LFC_PTAMP_LATCH", "1"))
-        form.addRow("", reset)
-        self._add_onoff(form, "YJ shutter", "LFC_YJ_SHUTTER")
         return box
 
     def _rf_panel(self) -> QGroupBox:
@@ -271,14 +820,416 @@ class MainWindow(QMainWindow):
         self._add_display(form, "Amp voltage", "LFC_RFAMP_V")
         return box
 
-    def _seed_tec_panel(self) -> QGroupBox:
-        box = QGroupBox("Seed laser + TECs")
+    def _temperature_panel(self) -> QGroupBox:
+        """All thermocouple channels of both USB-2408 DAQ boards, fed by
+        the LFC_TEMP_TEST1/2 array keywords (the seven LFC_T_* keywords
+        stay bound server-side for KTL; here the full arrays cover them)."""
+        box = QGroupBox("Temperatures")
+        row = QHBoxLayout(box)
+        for keyword, title, channels in _THERMO_PANELS:
+            if keyword not in self.schema:
+                continue
+            column = QVBoxLayout()
+            header = QLabel(title)
+            header.setStyleSheet("font-weight: bold;")
+            column.addWidget(header)
+            array = ThermoArray(keyword, channels, _TEMP_TOLERANCE_C)
+            self.widgets[keyword] = array
+            column.addWidget(array)
+            column.addStretch(1)
+            row.addLayout(column, stretch=1)
+        return box
+
+    def _osa_panel(self) -> QGroupBox:
+        """Mini-comb spectrum from the OSA. Starts as a placeholder; the
+        plot + controls are wired in by _on_arrays_available the moment the
+        server offers the osa_spectrum array (e.g. after the OSA comes
+        online)."""
+        box = QGroupBox("Mini-comb spectrum (OSA)")
+        self._osa_layout = QHBoxLayout(box)
+        self._osa_plot = None
+        self._osa_controls: OsaControls | None = None
+        self._osa_placeholder = QLabel("(OSA not connected)")
+        self._osa_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._osa_placeholder.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
+        self._osa_layout.addWidget(self._osa_placeholder, stretch=1)
+        return box
+
+    def _on_arrays_available(self, names: list) -> None:
+        if "osa_spectrum" in names and self._osa_plot is None:
+            self._wire_osa_panel()
+        if "osa_spectrum" in names and self._im_osa_plot is None:
+            self._wire_im_osa_panel()
+        if "im_scan" in names and self._im_plot is None:
+            self._wire_im_panel()
+
+    def _subscribe_array(self, name: str) -> None:
+        if name not in self.poller.array_names:
+            self.poller.array_names.append(name)
+
+    def _plot_widget(self):
+        """A themed pyqtgraph PlotWidget, or None if pyqtgraph is missing."""
+        try:
+            import pyqtgraph as pg
+        except ImportError:
+            return None
+        plot = pg.PlotWidget()
+        plot.setBackground(PLOT_BG)
+        plot.showGrid(x=True, y=True, alpha=0.25)
+        return plot
+
+    def _wire_osa_panel(self) -> None:
+        plot = self._plot_widget()
+        if plot is None:
+            self._osa_placeholder.setText("(pyqtgraph not installed; spectrum hidden)")
+            return
+        import pyqtgraph as pg
+
+        plot.addLegend(offset=(-10, 10), labelTextColor="#8b96a5")
+        curve = plot.plot(pen=pg.mkPen(ACCENT, width=1), name="live")
+        self._osa_plot = (plot, curve)
+        self._osa_curves: dict[str, object] = {}  # "loaded"/"reference" overlays
+        self._osa_placeholder.deleteLater()
+        self._osa_layout.addWidget(plot, stretch=1)
+        self._osa_controls = OsaControls(
+            self._osa_apply, self._osa_sweep, self._osa_save, self._osa_load
+        )
+        self._osa_layout.addWidget(self._osa_controls)
+        self._subscribe_array("osa_spectrum")
+        # per Dan: connecting means "show me the standard mini-comb view",
+        # so the defaults are applied to the OSA, not just displayed
+        self._osa_controls.apply_defaults()
+        self._restore_reference()
+
+    def _wire_im_osa_panel(self) -> None:
+        """Spectrum-only mirror of the OSA on the IM tab: same array, its
+        own plot; view + sweep settings stay on the Overview tab."""
+        plot = self._plot_widget()
+        if plot is None:
+            self._im_osa_placeholder.setText("(pyqtgraph not installed; spectrum hidden)")
+            return
+        import pyqtgraph as pg
+
+        curve = plot.plot(pen=pg.mkPen(ACCENT, width=1))
+        self._im_osa_plot = (plot, curve)
+        self._im_osa_placeholder.deleteLater()
+        self._im_osa_layout.addWidget(plot, stretch=1)
+        self._subscribe_array("osa_spectrum")
+
+    def _wire_im_panel(self) -> None:
+        plot = self._plot_widget()
+        if plot is None:
+            self._im_placeholder.setText("(pyqtgraph not installed; scan plot hidden)")
+            self._im_servo_placeholder.setText("(pyqtgraph not installed)")
+            return
+        import pyqtgraph as pg
+
+        # --- middle: the scan plot + controls
+        plot.setLabel("bottom", "IM bias (V)")
+        plot.setLabel("left", "photodiode (V)")
+        curve = plot.plot(
+            pen=pg.mkPen(ACCENT, width=1),
+            symbol="o",
+            symbolSize=4,
+            symbolBrush=ACCENT,
+            symbolPen=None,
+        )
+        self._im_plot = (plot, curve)
+        self._im_placeholder.deleteLater()
+        self._im_layout.addWidget(plot, stretch=1)
+        self._im_controls = ImScanControls(self._im_scan_start, self._abort_action, self._im_save)
+        self._im_layout.addWidget(self._im_controls)
+
+        # --- top: lock controls + photodiode / bias strip charts
+        def keyword_spin(keyword: str) -> KeywordSpinBox | None:
+            if keyword not in self.schema:
+                return None
+            widget = KeywordSpinBox(keyword, self._spec(keyword), self._submit)
+            self.widgets[keyword] = widget
+            return widget
+
+        setpoint = KeywordSpinBox(
+            "setpoint_V",
+            {
+                "units": "V",
+                "min": -10,
+                "max": 10,
+                "help": "lock setpoint — the photodiode voltage the PID holds",
+            },
+            lambda _f, value: self._im_apply(setpoint_V=value),
+        )
+        self._im_servo_panel = ImServoPanel(
+            self._im_set_lock,
+            bias_widget=keyword_spin("LFC_IM_BIAS"),
+            rf_att_widget=keyword_spin("LFC_IM_RF_ATT"),
+            setpoint_widget=setpoint,
+        )
+        self._im_servo_placeholder.deleteLater()
+        self._im_servo_layout.addWidget(self._im_servo_panel)
+
+        self._im_history: dict[str, list] = {"t": [], "pd": [], "bias": []}
+        self._im_charts = []
+        for label, key in (("photodiode (V)", "pd"), ("bias out (V)", "bias")):
+            chart = self._plot_widget()
+            chart.setLabel("left", label)
+            chart.setLabel("bottom", "time (s ago)")
+            chart_curve = chart.plot(pen=pg.mkPen(ACCENT, width=1))
+            self._im_charts.append((key, chart, chart_curve))
+            self._im_servo_layout.addWidget(chart, stretch=1)
+
+        # every poll cycle: the strip charts sample at ~1 Hz and scans
+        # build up live (the payload is cached data during a sweep)
+        self.poller.array_every["im_scan"] = 1
+        self._subscribe_array("im_scan")
+
+    #: strip-chart history length, seconds (at the ~1 s poll cadence)
+    IM_HISTORY_S = 600
+
+    def _im_record_history(self, payload: dict) -> None:
+        if payload.get("input_V") is None or payload.get("bias_V") is None:
+            return  # mid-scan or readout failed: leave a gap
+        history = self._im_history
+        now = time.time()
+        history["t"].append(now)
+        history["pd"].append(payload["input_V"])
+        history["bias"].append(payload["bias_V"])
+        while history["t"] and history["t"][0] < now - self.IM_HISTORY_S:
+            for series in history.values():
+                series.pop(0)
+        ages = [t - now for t in history["t"]]
+        for key, _chart, curve in self._im_charts:
+            curve.setData(ages, history[key])
+
+    def _im_set_lock(self, engage: bool) -> None:
+        self._submit("LFC_IM_LOCK_MODE", "1" if engage else "0")
+
+    def _im_apply(self, **settings) -> None:
+        self.writer.submit_call("IM settings", lambda c: c.im_apply(**settings))
+
+    def _im_scan_start(self) -> None:
+        params = self._im_controls.params()
+        self.writer.submit_call("IM scan", lambda c: c.im_scan(**params))
+
+    def _im_save(self) -> None:
+        data = getattr(self, "_im_data", None)
+        if not data or not data.get("x"):
+            self.statusBar().showMessage("no scan data to save yet", 5000)
+            return
+        default = self._spectra_dir() / time.strftime("im_scan_%Y-%m-%d_%H%M%S.csv")
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save IM bias scan", str(default), "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        metadata = dict(self._im_controls.params())
+        metadata["x_label"] = data.get("x_label", "")
+        metadata["y_label"] = data.get("y_label", "")
+        metadata["points"] = len(data["x"])
+        try:
+            spectra.save_spectrum_csv(path, data["x"], data["y"], metadata)
+        except OSError as exc:
+            self.statusBar().showMessage(f"SAVE FAILED: {exc}", 10000)
+            return
+        self.statusBar().showMessage(f"saved {path}", 8000)
+
+    #: overlay pens (live is the accent color); reference is dashed.
+    #: z stacks the overlays behind the live trace (0): loaded behind
+    #: live, reference behind both.
+    _CURVE_STYLE = {"loaded": ("#e8a33d", None, -1), "reference": ("#b085f5", "dash", -2)}
+
+    def _osa_set_curve(self, kind: str, x: list, y: list) -> None:
+        curve = self._osa_curves.get(kind)
+        if curve is None:
+            import pyqtgraph as pg
+
+            color, dash, z = self._CURVE_STYLE[kind]
+            pen = pg.mkPen(
+                color, width=1, style=Qt.PenStyle.DashLine if dash else Qt.PenStyle.SolidLine
+            )
+            plot, _live = self._osa_plot
+            curve = plot.plot(pen=pen, name=kind)
+            curve.setZValue(z)
+            self._osa_curves[kind] = curve
+        curve.setData(x, y)
+
+    def _spectra_dir(self) -> Path:
+        directory = prefs.GUI_CONFIG_PATH.parent.parent / "spectra"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def _osa_save(self) -> None:
+        data = getattr(self, "_osa_data", None)
+        if not data or not data.get("x"):
+            self.statusBar().showMessage("no live spectrum to save yet", 5000)
+            return
+        default = self._spectra_dir() / time.strftime("osa_%Y-%m-%d_%H%M%S.csv")
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save spectrum", str(default), "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        metadata = dict(self._osa_controls.current_settings())
+        metadata["x_label"] = data.get("x_label", "")
+        metadata["y_label"] = data.get("y_label", "")
+        metadata["points"] = len(data["x"])
+        try:
+            spectra.save_spectrum_csv(path, data["x"], data["y"], metadata)
+        except OSError as exc:
+            self.statusBar().showMessage(f"SAVE FAILED: {exc}", 10000)
+            return
+        self.statusBar().showMessage(f"saved {path}", 8000)
+
+    def _osa_load(self, kind: str) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self, f"Load {kind} spectrum", str(self._spectra_dir()), "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            x, y, _metadata = spectra.load_spectrum_csv(path)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"LOAD FAILED: {exc}", 10000)
+            return
+        self._osa_set_curve(kind, x, y)
+        if kind == "reference":
+            prefs.save_section("osa_reference", {"csv": Path(path).as_posix()})
+        self.statusBar().showMessage(f"{kind} spectrum: {path}", 8000)
+
+    def _restore_reference(self) -> None:
+        """Re-display the saved reference spectrum, if one was ever loaded."""
+        saved = prefs.load_section("osa_reference").get("csv")
+        if not saved:
+            return
+        try:
+            x, y, _metadata = spectra.load_spectrum_csv(saved)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"reference spectrum not restored: {exc}", 10000)
+            return
+        self._osa_set_curve("reference", x, y)
+
+    def _osa_apply(self, **settings) -> None:
+        if settings:
+            self.writer.submit_call("OSA settings", lambda c: c.osa_apply(**settings))
+        else:
+            self.writer.submit_call("OSA settings", lambda c: c.osa_settings())
+
+    def _osa_sweep(self, mode: str) -> None:
+        self.writer.submit_call("OSA sweep", lambda c: c.osa_sweep(mode))
+
+    def _on_call_done(self, label: str, result) -> None:
+        if label == "IM scan":
+            self.statusBar().showMessage("IM bias scan started", 5000)
+            return
+        if label == "IM settings":
+            if self._im_servo_panel is not None and isinstance(result, dict):
+                self._im_servo_panel.update_status(result)  # PUT read-back
+            return
+        if not isinstance(result, dict):
+            return
+        if label == "interlock":
+            low = result.get("low_threshold_V")
+            high = result.get("high_threshold_V")
+            if low is not None and high is not None:
+                self._interlock_window = (float(low), float(high))
+                self._interlock_threshold.setText(f"{low:.2f} – {high:.2f} V")
+            return
+        if self._osa_controls is None:
+            return
+        if label == "OSA settings":
+            self._osa_controls.populate(result)
+        elif label == "OSA sweep":
+            self._osa_controls.set_sweep(result.get("sweep_continuous"))
+
+    #: commissioned dispersion, from the old orchestration; also the
+    #: initial [wsp] values shipped in config/gui.toml
+    _WSP_RECOMMENDED = {
+        "LFC_WSP_PHASE": 2.14,
+        "LFC_WSP_TOD": 0.0,
+        "LFC_WSP_CENTER": 1559.8,
+    }
+    _WSP_PREF_KEYS = {
+        "LFC_WSP_PHASE": "gdd_ps_nm",
+        "LFC_WSP_TOD": "tod_ps_nm2",
+        "LFC_WSP_CENTER": "center_nm",
+    }
+
+    def _waveshaper_panel(self) -> QGroupBox:
+        """GDD / TOD / center boxes. The values persist in the GUI prefs
+        ([wsp] in config/gui.toml) and are re-applied to the instrument
+        when the GUI starts, since the server's softstore forgets them on
+        a restart."""
+        box = QGroupBox("WaveShaper dispersion")
         form = QFormLayout(box)
-        self._add_spin(form, "RIO temp", "LFC_RIO_T")
-        self._add_spin(form, "RIO current", "LFC_RIO_I")
-        self._add_spin(form, "IM bias", "LFC_IM_BIAS")
+        saved = prefs.load_section("wsp")
+        remembered = {
+            kw: float(saved.get(pref_key, self._WSP_RECOMMENDED[kw]))
+            for kw, pref_key in self._WSP_PREF_KEYS.items()
+        }
+        self._wsp_spins: dict[str, KeywordSpinBox] = {}
+        for label, keyword in (
+            ("GDD (d2)", "LFC_WSP_PHASE"),
+            ("TOD (d3)", "LFC_WSP_TOD"),
+            ("Center", "LFC_WSP_CENTER"),
+        ):
+            if keyword not in self.schema:
+                continue
+            widget = KeywordSpinBox(keyword, self._spec(keyword), self._wsp_submit)
+            widget.spin.setValue(remembered[keyword])
+            self._wsp_spins[keyword] = widget
+            self.widgets[keyword] = widget
+            form.addRow(label, widget)
+        if self._wsp_spins:
+            recommended = QPushButton("2.14 / 0.00 / 1559.8")
+            recommended.setToolTip(
+                "apply the commissioned dispersion: d2 = 2.14 ps/nm, "
+                "d3 = 0 ps/nm², centered at 1559.8 nm"
+            )
+            recommended.clicked.connect(lambda: self._apply_wsp(self._WSP_RECOMMENDED))
+            form.addRow("Recommended", recommended)
+        # restore the remembered profile onto the instrument (skipped when
+        # the WaveShaper is offline: the keywords report as unbound)
+        if self._wsp_spins and all(self.schema.get(kw, {}).get("bound") for kw in self._wsp_spins):
+            self._apply_wsp(remembered)
+        return box
+
+    def _apply_wsp(self, values: dict) -> None:
+        for keyword, value in values.items():
+            widget = self._wsp_spins.get(keyword)
+            if widget is None:
+                continue
+            widget.spin.blockSignals(True)
+            widget.spin.setValue(value)
+            widget.spin.blockSignals(False)
+            self._submit(keyword, value)
+        self._save_wsp_prefs()
+
+    def _wsp_submit(self, keyword: str, value) -> None:
+        """Spin-box edits: write the keyword and remember the trio."""
+        self._submit(keyword, value)
+        self._save_wsp_prefs()
+
+    def _save_wsp_prefs(self) -> None:
+        prefs.save_section(
+            "wsp",
+            {
+                self._WSP_PREF_KEYS[keyword]: widget.spin.value()
+                for keyword, widget in self._wsp_spins.items()
+            },
+        )
+
+    def _tec_panel(self) -> QGroupBox:
+        # the IM bias control moved to the IM Bias Lock tab (one widget per
+        # keyword: a duplicate spin box here would stop getting updates)
+        box = QGroupBox("TECs")
+        form = QFormLayout(box)
         self._add_spin(form, "PPLN temp", "LFC_PPLN_T")
         self._add_spin(form, "Waveguide temp", "LFC_WGD_T")
+        return box
+
+    def _shutter_panel(self) -> QGroupBox:
+        box = QGroupBox("Shutters")
+        form = QFormLayout(box)
+        self._add_onoff(form, "YJ shutter", "LFC_YJ_SHUTTER")
         return box
 
     def _voa_panel(self) -> QGroupBox:
@@ -299,28 +1250,6 @@ class MainWindow(QMainWindow):
             layout.addLayout(form)
         return box
 
-    def _temperature_panel(self) -> QGroupBox:
-        box = QGroupBox("Rack temperatures")
-        layout = QHBoxLayout(box)
-        for keyword, label in [
-            ("LFC_T_RACK_TOP", "Rack top"),
-            ("LFC_T_RACK_MID", "Rack mid"),
-            ("LFC_T_RACK_BOT", "Rack bottom"),
-            ("LFC_T_GLY_RACK_IN", "Glycol in"),
-            ("LFC_T_GLY_RACK_OUT", "Glycol out"),
-            ("LFC_T_EOCB_IN", "EOCB in"),
-            ("LFC_T_EOCB_OUT", "EOCB out"),
-        ]:
-            if keyword not in self.schema:
-                continue
-            column = QVBoxLayout()
-            column.addWidget(QLabel(label), alignment=Qt.AlignmentFlag.AlignCenter)
-            display = KeywordDisplay(keyword, self._spec(keyword))
-            self.widgets[keyword] = display
-            column.addWidget(display, alignment=Qt.AlignmentFlag.AlignCenter)
-            layout.addLayout(column)
-        return box
-
     # --------------------------------------------------------------- slots
 
     def _on_keywords(self, snapshot: dict) -> None:
@@ -328,30 +1257,79 @@ class MainWindow(QMainWindow):
             widget = self.widgets.get(keyword)
             if widget is not None and hasattr(widget, "update_value"):
                 widget.update_value(payload["value"])
+        # the IM lock lamp is keyword-driven (servo PID mode), not in /state
+        im_lock = snapshot.get("LFC_IM_LOCK_MODE")
+        if im_lock is not None:
+            value = im_lock.get("value")
+            self.subsystem_lamps["im_lock"].set_state(None if value is None else bool(value))
+        volts = snapshot.get("LFC_PTAMP_INTERLOCK_V")
+        if volts is not None:
+            self._color_interlock_voltage(volts.get("value"))
+
+    def _color_interlock_voltage(self, value) -> None:
+        """Green when the photodiode voltage is inside the trip window,
+        red outside; plain while the window (or value) is unknown."""
+        widget = self.widgets.get("LFC_PTAMP_INTERLOCK_V")
+        if widget is None:
+            return
+        if value is None or self._interlock_window is None:
+            widget.setStyleSheet("")
+            return
+        low, high = self._interlock_window
+        ok = low < float(value) < high
+        widget.setStyleSheet(f"color: {'#35d07f' if ok else '#e05252'}; font-weight: bold;")
 
     def _on_state(self, state: dict) -> None:
-        name = state.get("state", "UNKNOWN")
-        color = _STATE_COLORS.get(name, "#9e9e9e")
-        self.state_banner.setText(name)
-        self.state_banner.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: white; "
-            f"background-color: {color}; padding: 8px; border-radius: 4px;"
-        )
+        self._set_banner(state.get("state", "UNKNOWN"))
         for key, lamp in self.subsystem_lamps.items():
+            if key == "im_lock":
+                continue  # driven from the keyword snapshot instead
             lamp.set_state(state.get("subsystems", {}).get(key))
         action = state.get("action")
         if action and action.get("running"):
-            self.action_label.setText(
+            text = (
                 f"⏳ {action['name']} — step {action['step']}"
                 + (f"/{action['total_steps']}" if action.get("total_steps") else "")
                 + f": {action['message']}"
             )
         elif action and action.get("error"):
-            self.action_label.setText(f"❌ {action['name']}: {action['error']}")
+            text = f"❌ {action['name']}: {action['error']}"
         elif action:
-            self.action_label.setText(f"✓ last action {action['name']}: {action['message']}")
+            text = f"✓ last action {action['name']}: {action['message']}"
         else:
-            self.action_label.setText("")
+            text = ""
+        # IM scan/lock progress stays off the comb-state row: the per-point
+        # messages are long and squish the top of the Overview tab. It goes
+        # to the status bar (like other info messages) + the IM tab's label.
+        is_im = bool(action) and str(action.get("name", "")).startswith("im_")
+        self.action_label.setText("" if is_im else text)
+        self.im_action_label.setText(text if is_im else "")
+        if is_im and text != self._im_status_shown:
+            self._im_status_shown = text
+            # persists while running (refreshed as the message advances);
+            # the final ✓/❌ shows once, then times out
+            self.statusBar().showMessage(text, 0 if action.get("running") else 8000)
+
+    def _on_array(self, name: str, data: dict) -> None:
+        if name == "osa_spectrum":
+            if self._osa_plot is not None:
+                self._osa_data = data  # kept for "Save"
+                plot, curve = self._osa_plot
+                curve.setData(data.get("x", []), data.get("y", []))
+                plot.setLabel("bottom", data.get("x_label", ""))
+                plot.setLabel("left", data.get("y_label", ""))
+            if self._im_osa_plot is not None:
+                _plot, curve = self._im_osa_plot
+                curve.setData(data.get("x", []), data.get("y", []))
+        elif name == "im_scan" and self._im_plot is not None:
+            self._im_data = data  # kept for "Save"
+            _plot, curve = self._im_plot
+            curve.setData(data.get("x", []), data.get("y", []))
+            if self._im_controls is not None:
+                self._im_controls.update_status(data)
+            if self._im_servo_panel is not None:
+                self._im_servo_panel.update_status(data)
+                self._im_record_history(data)
 
     def _on_connection(self, ok: bool, detail: str) -> None:
         if ok:
@@ -364,6 +1342,10 @@ class MainWindow(QMainWindow):
 
     def _on_write_failed(self, keyword: str, error: str) -> None:
         self.statusBar().showMessage(f"WRITE FAILED {keyword}: {error}", 10000)
+        # let the next poll snap the box back to the instrument's value
+        widget = self.widgets.get(keyword)
+        if hasattr(widget, "write_rejected"):
+            widget.write_rejected()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.poller.stop()

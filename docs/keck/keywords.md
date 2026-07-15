@@ -47,8 +47,10 @@ logs an error instead (see the change list).
 | `LFC_RFOSCI_MONITOR` | boolean | RO | RF oscillator supply within its envelope (15 V; ~0.41 A steady-state, transiently up to ~0.62 A while warming). Old polling ~20 s. |
 | `LFC_RFAMP_MONITOR` | boolean | RO | RF amplifier supply within its envelope (30 V; ~4.2 A driven, ~0.7 A idling). Old polling ~20 s. |
 | `LFC_PENDULEM_FREQ_MONITOR` | boolean | RO | Rep-rate within 16 GHz ± 1 kHz on the Pendulum counter (only meaningful with the RF chain up). |
-| `LFC_EDFA27_INPUT_POWER_MONITOR` | boolean | RO | EDFA27 seed input power in range. Old polling ~120 s. |
-| `LFC_EDFA23_INPUT_POWER_MONITOR` | boolean | RO | EDFA23 seed input power in range. Old polling ~120 s. |
+| `LFC_EDFA27_INPUT_POWER_MONITOR` | double, mW | RO | EDFA27 seed input power (retyped from the baseline's "boolean": the deployed handler always returned mW). Old polling ~120 s. |
+| `LFC_EDFA23_INPUT_POWER_MONITOR` | double, mW | RO | EDFA23 seed input power (retyped, as above). Old polling ~120 s. |
+| `LFC_EDFA13_INPUT_POWER_MONITOR` | double, mW | RO | EDFA13 seed input power. **New in the rewrite.** |
+| `LFC_EDFA27/23/13_OUTPUT_POWER_MONITOR` | double, mW | RO | Amonics output power monitors (`:SENS:POW:OUT`). **New in the rewrite.** |
 
 ## Amonics EDFAs
 
@@ -60,7 +62,7 @@ logs an error instead (see the change list).
 | `LFC_EDFA27_AUTO_ON` | boolean | RW 🔒 | Write 1: APC 450 mW *and* enable emission. |
 | `LFC_EDFA13_P` | double, mW, 0–20 | RW 🔒 | Small (20 mW) EDFA output power setpoint. |
 | `LFC_EDFA13_ONOFF` | boolean | RW 🔒 | Small EDFA emission on/off. |
-| `LFC_EDFA23_P` | double, mW, 0–20 | RW 🔒 | 23 dBm EDFA output power setpoint / monitor. |
+| `LFC_EDFA23_P` | double, mA, 0–1500 | RW 🔒 | 23 dBm EDFA pump current setpoint (the unit runs in ACC; commissioned operating point 80 mA). Retyped from the baseline's "mW, 0–20" — see keyword-changes.md. |
 | `LFC_EDFA23_ONOFF` | boolean | RW 🔒 | 23 dBm EDFA emission on/off. |
 | `LFC_EDFA23_P_DEFAULT` | boolean | RW 🔒 | Write 1: apply the EDFA23 default. Commissioned value was ACC 80 mA; **currently parks at 0 mA** while the unit is out of service. |
 | `LFC_EDFA23_AUTO_ON` | boolean | RW 🔒 | Write 1: apply the EDFA23 default and enable emission (dark at the current 0 mA park value). |
@@ -91,8 +93,10 @@ against seed loss.
 | `LFC_PTAMP_I` | double, A, 0–4.2 | RW 🔒 | Power-amp pump current. Normal operation 3.8–4.2 A; the driver ramps all changes. Hardware limit is 5 A but >4.2 A risks the optics. |
 | `LFC_PTAMP_I_DEFAULT` | boolean | RW 🔒 | Write 1: power amp to the commissioned current (ramped). |
 | `LFC_PTAMP_OUT` | double, W, 0–4 | RO | Power-amp optical output power. |
+| `LFC_PTAMP_IN` | double, mW | RO | Seed input power (`FA INPUT?`). **New in the rewrite.** |
 | `LFC_PTAMP_ONOFF` | boolean | RW 🔒 | Pritel pump emission on/off. |
 | `LFC_PTAMP_LATCH` | enumerated | RW 🔒 | Arduino interlock latch: 1 = ready, 0 = tripped-but-resettable, 3 = input too high, 5 = input too low, 4 = unknown. Write 1 to reset after a trip. |
+| `LFC_PTAMP_INTERLOCK_V` | double, V, 0–5 | RO | Interlock photodiode voltage (Arduino 10-bit ADC scaled to volts) — the value the latch judges against its thresholds. **New in the rewrite.** |
 
 ## Intensity-modulator lock
 
@@ -132,7 +136,9 @@ into the rewrite.
 
 | Keyword | Type | Access | Description |
 |---|---|---|---|
-| `LFC_WSP_PHASE` | double | RW 🔒 | Second-order dispersion compensation d₂ in ps/nm, programmed onto WaveShaper 1. |
+| `LFC_WSP_PHASE` | double, ps/nm | RW 🔒 | Second-order dispersion (GDD, d₂) programmed onto WaveShaper 1. Applied together with `LFC_WSP_TOD` around `LFC_WSP_CENTER` as one phase profile; reads report the value currently applied. Commissioned value: 2.14 ps/nm (d₃ = 0, center 1559.8 nm). |
+| `LFC_WSP_TOD` | double, ps/nm² | RW 🔒 | Third-order dispersion (TOD, d₃) companion to `LFC_WSP_PHASE`. **New in the rewrite** (see `ktl/keyword-changes.md`). |
+| `LFC_WSP_CENTER` | double, nm, 1500–1600 | RW 🔒 | Center wavelength of the dispersion phase profile (default: the commissioned 1559.8 nm). **New in the rewrite.** |
 | `LFC_WSP_ATTEN` | double | RW 🔒 | Flat attenuation level (dB) applied across the WaveShaper profile. |
 
 ## TECs and temperatures

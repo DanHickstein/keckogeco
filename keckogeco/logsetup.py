@@ -38,6 +38,7 @@ def setup_logging(cfg: LoggingConfig | None = None, *, console: bool = True) -> 
         return log_dir / "keckogeco.log"
 
     formatter = logging.Formatter(_FORMAT)
+    formatter.default_msec_format = "%s.%03d"
 
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "keckogeco.log"

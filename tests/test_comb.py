@@ -14,9 +14,12 @@ EXAMPLE = pathlib.Path(__file__).parent.parent / "config" / "instruments.example
 # ------------------------------------------------------------------ schema
 
 
-def test_schema_loads_77_keywords():
+def test_schema_loads_85_keywords():
+    # 77 baseline keywords + additions listed in ktl/keyword-changes.md
+    # (LFC_WSP_TOD, LFC_WSP_CENTER, EDFA output monitors x3, EDFA13 input
+    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V)
     schema = load_schema()
-    assert len(schema) == 77
+    assert len(schema) == 85
     assert schema["LFC_EDFA27_P"].writable
     assert schema["LFC_EDFA27_P"].units == "mW"
     assert schema["LFC_EDFA27_P"].max == 630
@@ -213,7 +216,11 @@ def test_all_keywords_bound_with_full_config(controller):
         "LFC_TEMP_TEST2",  # daq_eocb (EO comb board DAQ) not in example config
         "LFC_T_EOCB_IN",
         "LFC_T_EOCB_OUT",
-        "LFC_VOA1310_ATTEN",  # example config ships them disabled
+        # VOA keys stay unit-serial-based until each unit's wavelength is
+        # identified on-site; the wavelength keywords bind only after a
+        # config block is renamed to voa1310/voa1550/voa2000
+        "LFC_VOA1310_ATTEN",
+        "LFC_VOA1550_ATTEN",
         "LFC_VOA2000_ATTEN",
     }
     unbound = {n for n in controller.registry.schema if n not in controller.registry.bound}

@@ -21,6 +21,7 @@ import math
 import threading
 from importlib.metadata import version as pkg_version
 from pathlib import Path
+from typing import Literal
 
 if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
     import sys
@@ -28,7 +29,7 @@ if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from keckogeco.comb.actions import ACTIONS, ActionBusy
 from keckogeco.comb.controller import LFCController
@@ -48,12 +49,47 @@ class WriteRequest(BaseModel):
     value: str | float | int | bool | list[float]
 
 
+class OsaSettingsRequest(BaseModel):
+    """Partial update: only the fields present are written to the OSA."""
+
+    start_nm: float | None = None
+    stop_nm: float | None = None
+    resolution_nm: float | None = None
+    sensitivity_dBm: float | None = None
+
+
+class OsaSweepRequest(BaseModel):
+    mode: Literal["single", "continuous", "stop"]
+
+
+class ImScanRequest(BaseModel):
+    """IM bias scan range. Bounds match the LFC_IM_BIAS keyword (±3 V,
+    the documented sweep range of the manual locking procedure)."""
+
+    v_start: float = Field(-2.0, ge=-3.0, le=3.0)
+    v_stop: float = Field(1.0, ge=-3.0, le=3.0)
+    v_step: float = Field(0.02, ge=0.002, le=0.5)
+    settle_s: float = Field(0.2, ge=0.0, le=5.0)
+
+
+class ImSettingsRequest(BaseModel):
+    """Partial update of the IM servo: only the fields present are written.
+    The setpoint is the photodiode voltage the PID holds when locked."""
+
+    setpoint_V: float | None = Field(None, ge=-10.0, le=10.0)
+
+
 def _json_value(value):
-    """NaN/Inf are not valid JSON (the response encoder rejects them, which
-    would 500 the whole bulk read); report them as null. Real case: an OZ
-    VOA reads NaN attenuation until it has homed."""
+    """NaN/Inf are not valid JSON: convert them (also inside arrays) to
+    None explicitly, so clients see null regardless of how the installed
+    FastAPI/Starlette version encodes non-finite floats (probed 2026-07-14:
+    the current stack nulls them, a plain ``json.dumps`` rejects them).
+    Real cases: an OZ VOA reads NaN attenuation until it has homed, and
+    LFC_TEMP_TEST1 carries NaN for the rack DAQ's open-ch7 thermocouple."""
     if isinstance(value, float) and not math.isfinite(value):
         return None
+    if isinstance(value, list):
+        return [_json_value(v) for v in value]
     return value
 
 
@@ -225,6 +261,40 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
     def state() -> dict:
         return controller.state_summary()
 
+    @app.get(f"{API_PREFIX}/devices", dependencies=[auth])
+    def devices() -> dict:
+        """Configured devices with their addresses (GUIs show e.g. the COM
+        port in panel titles); no hardware I/O."""
+        return {
+            key: {
+                "name": dev.name,
+                "driver": dev.driver,
+                "address": dev.address,
+                "enabled": dev.enabled,
+                "online": key in controller.devices,
+                "offline_reason": controller.offline.get(key),
+            }
+            for key, dev in controller.config.devices.items()
+        }
+
+    @app.get(f"{API_PREFIX}/interlock", dependencies=[auth])
+    def interlock() -> dict:
+        """Arduino interlock relay status with the ADC counts scaled to
+        volts (10-bit over 0-5 V) — the GUI shows the trip window and
+        colors the live voltage against it."""
+        try:
+            relay = controller.device("arduino_relay").relay_status()
+        except InstrumentError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        to_volts = 5.0 / 1023.0
+        return {
+            "voltage_V": relay.voltage_now * to_volts,
+            "low_threshold_V": relay.low_threshold * to_volts,
+            "high_threshold_V": relay.high_threshold * to_volts,
+            "ok_to_amplify": relay.ok_to_amplify,
+            "resettable": relay.resettable,
+        }
+
     @app.get(f"{API_PREFIX}/arrays", dependencies=[auth])
     def list_arrays() -> dict:
         return {"arrays": sorted(getattr(controller, "arrays", {}))}
@@ -236,6 +306,158 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
             raise HTTPException(status_code=404, detail=f"unknown array {name!r}")
         try:
             return {"name": name, **source()}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # --- OSA control (engineering-GUI surface, deliberately NOT KTL
+    # keywords: resolution/sensitivity/sweep are instrument-level knobs
+    # that Keck operations never touch, so they stay out of the contract).
+
+    def osa_device():
+        try:
+            return controller.device("osa")
+        except InstrumentError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    def refuse_during_action() -> None:
+        if controller.executor.running:
+            action = controller.executor.current() or {}
+            raise HTTPException(
+                status_code=409,
+                detail=f"action {action.get('name')!r} is running; writes are locked "
+                "until it finishes (reads are fine)",
+            )
+
+    @app.get(f"{API_PREFIX}/osa", dependencies=[auth])
+    def osa_settings() -> dict:
+        osa = osa_device()
+        try:
+            return {**osa.status(), "resolutions_nm": list(osa.RESOLUTIONS_NM)}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.put(f"{API_PREFIX}/osa", dependencies=[auth])
+    def osa_apply(body: OsaSettingsRequest) -> dict:
+        refuse_during_action()
+        osa = osa_device()
+        try:
+            osa.set_range(body.start_nm, body.stop_nm)
+            if body.resolution_nm is not None:
+                osa.resolution_nm = body.resolution_nm
+            if body.sensitivity_dBm is not None:
+                osa.sensitivity_dBm = body.sensitivity_dBm
+            # read back so the GUI shows what the instrument accepted
+            return {**osa.status(), "resolutions_nm": list(osa.RESOLUTIONS_NM)}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # --- IM bias scan (engineering-GUI surface, like the OSA endpoints:
+    # sweep-and-plot is a commissioning tool, not part of the KTL contract).
+    # The scan runs on the single-slot action executor, so /actions/current
+    # reports progress and DELETE /actions/current aborts it.
+
+    def im_servo():
+        servo = getattr(controller, "_im_servo", None)
+        if servo is None:
+            raise HTTPException(status_code=503, detail="SRS SIM900 not configured or offline")
+        return servo
+
+    def im_live(servo) -> dict:
+        """Servo readouts with the same keys as the im_scan array payload,
+        so the GUI panel can populate from either."""
+        return {
+            "mode": servo.output_mode,
+            "setpoint_V": servo.setpoint_V,
+            "bias_V": servo.output_V,
+            "input_V": servo.measure_input_V,
+        }
+
+    @app.get(f"{API_PREFIX}/im", dependencies=[auth])
+    def im_status() -> dict:
+        try:
+            return im_live(im_servo())
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.put(f"{API_PREFIX}/im", dependencies=[auth])
+    def im_apply(body: ImSettingsRequest) -> dict:
+        refuse_during_action()
+        servo = im_servo()
+        try:
+            if body.setpoint_V is not None:
+                servo.setpoint_V = body.setpoint_V
+            return im_live(servo)
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post(f"{API_PREFIX}/im/scan", dependencies=[auth])
+    def im_scan_start(body: ImScanRequest) -> dict:
+        servo = im_servo()
+        if body.v_stop - body.v_start < body.v_step:
+            raise HTTPException(
+                status_code=400,
+                detail=f"empty scan: v_start {body.v_start} .. v_stop {body.v_stop} "
+                f"in {body.v_step} V steps",
+            )
+        try:
+            if servo.output_mode == "PID":
+                raise HTTPException(
+                    status_code=409,
+                    detail="IM lock is engaged (PID mode); unlock before scanning",
+                )
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        try:
+            return controller.executor.submit(
+                "im_bias_scan",
+                v_start=body.v_start,
+                v_stop=body.v_stop,
+                v_step=body.v_step,
+                settle_s=body.settle_s,
+            )
+        except ActionBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def srs_device():
+        try:
+            return controller.device("srs")
+        except InstrumentError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get(f"{API_PREFIX}/im/modules", dependencies=[auth])
+    def im_modules() -> dict:
+        """SIM900 slot inventory (*IDN? per slot; null = empty slot).
+        Diagnostic: identifies which slots hold the SIM960 servos when
+        the commissioned slot map is in doubt."""
+        try:
+            inventory = srs_device().module_inventory()
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"modules": {str(slot): idn for slot, idn in inventory.items()}}
+
+    @app.get(f"{API_PREFIX}/im/servo/{{slot}}", dependencies=[auth])
+    def im_servo_status(slot: int) -> dict:
+        """Read-only status of the SIM960 in the given slot (mode, gains,
+        setpoint, output, measure input). Diagnostic — reads any slot, not
+        just the configured im_slot; writes still go through im_slot only."""
+        if not 1 <= slot <= 8:
+            raise HTTPException(status_code=400, detail="slot must be 1..8")
+        servo = srs_device().sim960(slot, f"SIM960@{slot}")
+        try:
+            return {"slot": slot, **servo.status()}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post(f"{API_PREFIX}/osa/sweep", dependencies=[auth])
+    def osa_sweep(body: OsaSweepRequest) -> dict:
+        refuse_during_action()
+        osa = osa_device()
+        try:
+            if body.mode == "single":
+                osa.trigger_single()
+            else:
+                osa.sweep_continuous = body.mode == "continuous"
+            return {"mode": body.mode, "sweep_continuous": osa.sweep_continuous}
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -281,11 +503,14 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     app = create_app(config, sim=args.sim, poll_s=args.poll)
+    # access_log=False: the GUIs poll every few seconds, so per-request
+    # lines drown out the interesting events. Errors still log.
     uvicorn.run(
         app,
         host=args.host or config.server.host,
         port=args.port or config.server.port,
         log_level="info",
+        access_log=False,
     )
     return 0
 

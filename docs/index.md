@@ -30,3 +30,6 @@ python -m keckogeco.gui.app               # engineering GUI
 
 See {doc}`user_guide/index` for operating procedures and
 {doc}`development` for contributor setup.
+
+The full documentation is also available as a
+[single PDF](https://danhickstein.github.io/keckogeco/keckogeco.pdf).

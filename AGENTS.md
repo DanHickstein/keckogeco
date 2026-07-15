@@ -1,24 +1,25 @@
 # AGENTS.md — context for AI assistants and new contributors
 
 This file captures the decisions and hard-won hardware knowledge behind this
-codebase — the things you cannot re-derive by reading the code. Read it before
+codebase. Read it before
 making changes. Task list lives in the
 [GitHub issues](https://github.com/danhickstein/keckogeco/issues).
 
 ## What this project is
 
-Control system for the laser frequency comb (LFC) at W. M. Keck Observatory,
-maintained by Dan Hickstein. It is a ground-up rewrite of
-the original Caltech [KeckLFC](https://github.com/kester2015/KeckLFC) code;
+Control system for the laser frequency comb (LFC) at W. M. Keck Observatory.
+It is a ground-up rewrite of the original Caltech 
+[KeckLFC](https://github.com/kester2015/KeckLFC) code;
 that old repo is a **read-only reference** — port logic from it, never its
 style (no hardcoded addresses, no prints, no connect/act/disconnect churn).
 
 Deployment target: the comb's Windows laptop (**LAPTOP-LFC2**) physically
-connected to ~20 rack instruments. Dan is on-site at Keck around
-**2026-07-18**; until then, work is tested on the real rack via remote
-sessions with Dan pasting output back.
+connected to ~20 rack instruments. We have remote acccess to the laptop
+and can power cycle insruments using the eaton PDUs. Physical access is 
+rare. Admin access to the computer required Keck IT admin staff, which 
+comes with a delay.
 
-## Settled architecture — do not relitigate
+## Architecture
 
 - **One process owns the hardware**: the FastAPI server
   (`keckogeco/server/app.py`) on the laptop. Everything else (PyQt GUI, web
@@ -33,9 +34,8 @@ sessions with Dan pasting output back.
 - **ICE → HTTP**: the Keck Linux side keeps its DFW `combd` dispatcher but the
   ICE transport is replaced by HTTP calls to this server, using **stdlib
   `urllib` only** (kroot Python may lack `requests`). Phase 3, not yet built.
-- **stdlib `logging`**, not loguru. **Simulation is deliberately minimal**
-  (`SimTransport` canned responses) — do not build a physics model.
-- **No console-script exes.** Everything runs via `python -m keckogeco.<...>`,
+- **stdlib `logging`**, not loguru.
+- Everything runs via `python -m keckogeco.<...>`,
   and the four entry scripts (`discovery.py`, `check.py`, `server/app.py`,
   `gui/app.py`) also run as bare files via the `if __package__ in (None, "")`
   bootstrap header at their top — keep those headers and their absolute
@@ -50,11 +50,9 @@ sessions with Dan pasting output back.
 - **No email/SMTP alert notifications.** Alerts go to the log only.
 - **Do NOT implement the Rb lock** (`rb_lock`) — undecided whether it will
   ever be used. The Pendulum counter IS wanted and is ported.
-- **Secrets**: `config/keckogeco.toml` and `config/secrets.toml` are
-  git-ignored and must never be committed. Eaton PDU credentials go through
-  Windows Credential Manager (`keyring`); the old public repo leaked them
-  (user `lfc` / password `lfc@keck`), and they will be changed on-device
-  on-site — never write credentials into the tree, docs, or examples.
+- **Secrets**: `config/keckogeco.toml`, and
+  `config/site-info.txt` are git-ignored and must never be committed. 
+  sensitive info goes here.
 
 ## Environments
 
@@ -95,12 +93,58 @@ sessions with Dan pasting output back.
   raise. Only a set can home the unit, so the driver pins the not-homed
   state (no repeated hardware reads, one debug-level hint) until an
   attenuation is set — the VOAs are unused on the rack; NaN in status
-  output is the signal, the log stays quiet.
+  output is the signal, the log stays quiet. **Which VOA is which wavelength
+  is unknown**, so config keys are unit-serial-based (`voa_303699`, ...);
+  renaming a block to `voa1310`/`voa1550`/`voa2000` once a unit is identified
+  on-site is what binds its `LFC_VOAxxxx_ATTEN` keyword (`comb/controller.py`).
 - **`python -m keckogeco.discovery` rewrites `[devices.*]` blocks**; it must
-  pass through curated option keys (`mode`, `channel`, `baud_rate`, ...) and
-  `enabled = false` from the existing config — a 2026-07-12 run silently
-  dropped the EDFA `mode` and the RF oscillator PSU's `channel = 2` before
-  `save_config()` learned to preserve them.
+  pass through curated option keys (`mode`, `channel`, `baud_rate`, `note`,
+  ...) and `enabled = false` from the existing config — a 2026-07-12 run
+  silently dropped the EDFA `mode` and the RF oscillator PSU's `channel = 2`
+  before `save_config()` learned to preserve them. Since 2026-07-13 it is
+  also **non-destructive**: silent devices are kept and tagged
+  `missing_since` (removal is explicit via `--prune`), `enabled = false`
+  blocks are adapter-checked but never probed and never removed, and the
+  pre-run file is saved as `keckogeco.toml.bak`. Deliberately ONE config
+  file — a split "curated vs discovered" file pair was considered
+  (2026-07-13) and rejected: a device's identity would straddle both files
+  and the merge rules cost more than they protect.
+- **TC-720 TECs sit on COM13 (sn AG0JO6EHA) and COM16 (sn AQ00VDL3A),
+  deliberately powered off** until on-site; their blocks are
+  `enabled = false`. Which is PPLN vs waveguide is unknown — renaming to
+  `tec_ppln`/`tec_wvg` binds the keywords (same pattern as the VOAs).
+  **COM5 (Prolific, no USB serial) is suspected to be the Rio ORION's
+  adapter** — the laser itself is at OctaveHQ for Rb-cell testing; the
+  `rio` block is `enabled = false` until it returns and is confirmed.
+- **The USB-2408 DAQs are bound by USB serial, never via InstaCal.** The
+  laptop has no InstaCal CB.CFG (probed 2026-07-13) and never needs one:
+  `drivers/usb2408.py` uses `ul.ignore_instacal()` +
+  `ul.create_daq_device()`. Serial **205F843 is the rack board** (`daq`;
+  its ch7 reads "open connection", matching the documented Unconnected
+  position) and **205F82F is the optical-table board** (`daq_eocb`).
+  Discovery enumerates MCC boards passively (`mcc_inventory()`) and
+  creates/verifies the `[devices.daq*]` blocks via `MCC_SERIAL_KEYS`; a
+  missing board is reported but its block is never dropped. (A 2026-07-13
+  run deleted the blocks because `load_existing()` gave the bare-serial
+  address a synthetic `"port"` and the COM verify path discarded it —
+  only COM/ASRL addresses get a `"port"` now.)
+  An open/unconnected thermocouple (UL Error 145) is a real state, not a
+  link fault: the driver returns NaN without tripping reconnect-once
+  (rack ch7 is permanently unconnected; reconnecting on it every poll
+  would be the Amonics storm all over again).
+  **`ul.ignore_instacal()` may only run once per process**
+  (`usb2408.ignore_instacal_once()`): a second call resets the UL device
+  table and unbinds every created board, so the old per-open call made
+  each board's open/reconnect break the *other* board — alternating
+  "Error 1: Invalid board number" on every poll (seen live 2026-07-13).
+  `mcc_inventory()` goes through the same guard.
+- **The IM bias servo is SIM900 slot 3; slot 5 is the Rb lock servo**
+  (old code `__LFC_IM_LOCK_connect`/`__LFC_RB_LOCK_connect` — an earlier
+  `im_slot = 5` default here pointed at the Rb servo). The minicomb
+  photodiode is wired straight into that SIM960's measure input (coax
+  interface panel A4, "Minicomb photodiode → SRS PID"), so bias scans read
+  power via `MMON` — **no DAQ involved**; the USB-2408s only read
+  thermocouples. Slot number lives in the `srs` block's `im_slot` option.
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.

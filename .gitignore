@@ -1,12 +1,17 @@
 # Local configuration — real instrument addresses, credentials, network details.
 # Only instruments.example.toml is committed.
 config/keckogeco.toml
+config/*.bak
 config/secrets.toml
+config/site-info.txt
 *.local.toml
 
 # Logs and telemetry
 logs/
 ws.log
+
+# Saved OSA spectra (GUI "Save" button)
+spectra/
 
 # Python
 __pycache__/
@@ -34,3 +39,6 @@ Thumbs.db
 
 # Sphinx autosummary output
 docs/api/generated/
+
+# Claude Code local permission grants (machine-specific)
+.claude/settings.local.json

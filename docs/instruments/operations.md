@@ -224,7 +224,7 @@ fg1.set_output(1, True)
 
 ## Thermocouples and DAQ boards (USB-2408 ×2)
 
-| Channel | Board 0 — electronics rack (`daq`) | Board 1 — optical table (`daq_eocb`) |
+| Channel | Serial 205F843 — electronics rack (`daq`) | Serial 205F82F — optical table (`daq_eocb`) |
 |---|---|---|
 | 0 | Rack side baffle (mid rack) | RF oscillator |
 | 1 | WaveShaper (upper rack) | RF amplifier |
@@ -235,6 +235,8 @@ fg1.set_output(1, True)
 | 6 | Power-supply shelf (bottom) | Compression stage |
 | 7 | Unused | Rb cell (D2-210) |
 
-`LFC_TEMP_TEST1` / `LFC_TEMP_TEST2` dump all eight channels of board
-0 / board 1 respectively; the named `LFC_T_*` keywords map to the
-individual channels shown above.
+`LFC_TEMP_TEST1` / `LFC_TEMP_TEST2` dump all eight channels of the rack
+board / table board respectively; the named `LFC_T_*` keywords map to the
+individual channels shown above. Boards are addressed by USB serial
+number in the config and bound directly through `mcculw` — InstaCal
+never needs to be run.

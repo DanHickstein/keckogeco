@@ -97,7 +97,7 @@ name = "Interlock latching relay"
 driver = "srs_sim900"
 address = "ASRL21::INSTR"
 name = "SRS SIM900 mainframe"
-im_slot = 5    # SIM960 slot used for the intensity-modulator bias lock
+im_slot = 3    # SIM960 slot of the IM bias servo (old code: slot 3 = "Minicomb Intensity Lock Servo", slot 5 = Rb lock)
 
 [devices.waveshaper1]
 driver = "waveshaper"
@@ -119,10 +119,17 @@ driver = "tec_tc720"
 address = "COM22"
 name = "TC-720 TEC (octave waveguide)"
 
+# USB-2408 boards are addressed by USB serial number (shown in the mcculw
+# inventory / on the unit label); InstaCal configuration is not needed.
 [devices.daq]
 driver = "usb2408"
-address = "0"
-name = "USB-2408 thermocouple DAQ"
+address = "205F843"
+name = "USB-2408 thermocouple DAQ (rack)"
+
+[devices.daq_eocb]
+driver = "usb2408"
+address = "205F82F"
+name = "USB-2408 thermocouple DAQ (optical table)"
 
 [devices.pendulum]
 driver = "pendulum_cnt90"
@@ -134,21 +141,25 @@ driver = "agilent_86142b"
 address = "GPIB0::30::INSTR"
 name = "Agilent 86142B OSA"
 
-[devices.voa1550]
+# Three OZ Optics VOAs (1310 / 1550 / 2000 nm units). Which port is which
+# wavelength is not yet known, so keep neutral (e.g. unit-serial-based) keys.
+# Once a unit is identified, rename its block to voa1310/voa1550/voa2000 --
+# that key is what binds the LFC_VOAxxxx_ATTEN keyword (comb/controller.py).
+[devices.voa_a]
 driver = "oz_voa"
 address = "ASRL7::INSTR"
-name = "OZ Optics VOA 1550 nm"
+name = "OZ Optics VOA (wavelength not yet identified)"
 
-[devices.voa1310]
+[devices.voa_b]
 driver = "oz_voa"
 address = "ASRL11::INSTR"
-name = "OZ Optics VOA 1310 nm"
+name = "OZ Optics VOA (wavelength not yet identified)"
 enabled = false    # enable once python -m keckogeco.discovery confirms the port
 
-[devices.voa2000]
+[devices.voa_c]
 driver = "oz_voa"
 address = "ASRL15::INSTR"
-name = "OZ Optics VOA 2000 nm"
+name = "OZ Optics VOA (wavelength not yet identified)"
 enabled = false    # enable once python -m keckogeco.discovery confirms the port
 
 [devices.hk_shutter]

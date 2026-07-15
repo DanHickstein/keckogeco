@@ -99,15 +99,22 @@ class PritelAmp(Instrument):
 
     def _ask(self, cmd: str) -> str:
         """Send a command and return its (cleaned) response line."""
+        # A timeout on the echo read means the unit never replied (dropped
+        # command); on the response read it means the two-line accounting
+        # went wrong (merged/extra line). Report which, to tell them apart.
+        stage = "echo read"
 
         def op() -> str:
+            nonlocal stage
+            stage = "echo read"
             reply = self.transport.query(cmd)
             if self._discard_echo:
                 time.sleep(0.1)
+                stage = "response read"
                 reply = self.transport.read()
             return reply.lstrip("\r\x00\x11\x13 ").strip()
 
-        return self._io(op)
+        return self._io(op, what=lambda: f"{cmd!r} ({stage})")
 
     @staticmethod
     def _value_after_equals(response: str, what: str) -> float:

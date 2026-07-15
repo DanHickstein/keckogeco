@@ -9,13 +9,19 @@ How it works:
 
 1. Loads the existing config (if any) and *verifies* each previously-found
    serial device on its recorded USB adapter (fast path, resolved by USB
-   adapter serial number, so it survives COM-port renumbering).
+   adapter serial number, so it survives COM-port renumbering). Devices
+   with ``enabled = false`` are checked for adapter presence only, never
+   probed - that is how a known-but-powered-off device (the TC-720s) or a
+   suspected identity (the Rio ORION's bare adapter) stays remembered.
 2. Runs discovery probes only on ports not claimed by a verified device.
 3. Scans the VISA side (GPIB adapter, USB-TMC instruments) and reports
    clearly if the GPIB driver stack looks broken.
 4. Prints a FOUND / NOT FOUND / NOT CHECKED report and rewrites the
    ``[devices.*]`` blocks (discovery bookkeeping keys like ``usb_serial``
-   are stored in the block and ignored by the drivers).
+   are stored in the block and ignored by the drivers). The previous file
+   is kept next to it as ``.bak``. A silent device's block is never
+   deleted - it is tagged ``missing_since`` and reported; pass ``--prune``
+   to remove such blocks explicitly.
 
 All serial probing is read-only. Devices with unsafe binary protocols
 (ORION laser, LFC-3751) are never probed.
@@ -38,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import importlib.util
 import logging
 import re
@@ -411,6 +418,7 @@ EXPECTED_SERIAL = [
     ("rb_clock", "SRS FS725 Rb frequency standard"),
     ("oz_voa", "OZ Optics VOA (x3: 1310/1550/2000 nm)"),
     ("tec_tc720", "TE Tech TC-720 TEC controller(s)"),
+    ("orion_laser", "Rio ORION pump laser (never probed; suspected port)"),
     ("eaton_pdu", "Eaton PDU serial console"),
     ("hk_shutter", "Shutter controller (SC10 style)"),
     ("arduino_relay", "Arduino relay circuit"),
@@ -430,8 +438,18 @@ NOT_CHECKED = [
     ("orion_laser", "binary protocol, no safe ID-only query"),
     ("tec_lfc3751", "checksum packet protocol, no safe generic probe"),
     ("red_pitaya", "Ethernet device, out of scope for this scan"),
-    ("usb2408", "MCC DAQ, managed through InstaCal, not a COM port"),
 ]
+
+EXPECTED_MCC = [
+    ("usb2408", "MCC USB-2408 thermocouple DAQ (x2: rack + optical table)"),
+]
+
+# Known USB-2408 serials -> the config keys the controller binds keywords to
+# (see DEFAULT_POSITIONS in drivers/usb2408.py for the channel labels).
+MCC_SERIAL_KEYS = {
+    "205F843": "daq",  # rack thermocouples
+    "205F82F": "daq_eocb",  # optical-table thermocouples
+}
 
 GPIB_SIGNATURES = [
     ("SIM900", "SRS SIM900 mainframe", "srs_sim900"),
@@ -616,16 +634,22 @@ def passive_match(port_info):
     return None
 
 
-def verify_entry(entry: dict, ports_by_serial: dict, ports_by_name: dict) -> str | None:
-    """Confirm a configured device is still reachable. Resolves the port by
-    USB adapter serial number first (robust against COM renumbering), then
-    by the stored port name. Returns the resolved COM port, or None."""
-    port = None
+def resolve_port(entry: dict, ports_by_serial: dict, ports_by_name: dict) -> str | None:
+    """The COM port a configured device's adapter is on right now, resolved
+    by USB adapter serial number first (robust against COM renumbering),
+    then by the stored port name. None if the adapter is not present."""
     usb_serial = entry.get("usb_serial")
     if usb_serial and usb_serial in ports_by_serial:
-        port = ports_by_serial[usb_serial].device
-    elif entry.get("port") in ports_by_name:
-        port = entry["port"]
+        return ports_by_serial[usb_serial].device
+    if entry.get("port") in ports_by_name:
+        return entry["port"]
+    return None
+
+
+def verify_entry(entry: dict, ports_by_serial: dict, ports_by_name: dict) -> str | None:
+    """Confirm a configured device is still reachable: adapter present AND
+    the device answers its probe. Returns the resolved COM port, or None."""
+    port = resolve_port(entry, ports_by_serial, ports_by_name)
     if port is None:
         return None
 
@@ -700,6 +724,30 @@ def classify_usbtmc_addr(addr: str):
     if vid in USB_VENDORS:
         return f"{USB_VENDORS[vid]} instrument (VID:PID {m.group(1)}:{m.group(2)})", "?"
     return None, "?"
+
+
+@functools.cache
+def mcc_inventory() -> dict[str, str] | None:
+    """``{usb serial: product name}`` for MCC DAQ boards, or None if the
+    mcculw / Universal Library stack is unavailable. Passive: reads the
+    USB inventory only, nothing is sent to the boards and no InstaCal
+    configuration is consulted (``ignore_instacal``). Cached: one scan
+    per discovery run."""
+    try:
+        from mcculw import ul
+        from mcculw.enums import InterfaceType
+
+        from keckogeco.drivers.usb2408 import ignore_instacal_once
+    except ImportError:
+        return None
+    try:
+        # once-per-process guard: a second cbIgnoreInstaCal() call resets
+        # the UL device table, unbinding any already-open boards
+        ignore_instacal_once()
+        devices = ul.get_daq_device_inventory(InterfaceType.ANY)
+    except Exception:  # noqa: BLE001 - UL errors mean "cannot enumerate"
+        return None
+    return {d.unique_id.strip().upper(): d.product_name for d in devices}
 
 
 def scan_gpib(verbose=False):
@@ -795,15 +843,15 @@ def load_existing(config_path: Path) -> dict:
         entry.update(dev.options)
         if not dev.enabled:
             entry["enabled"] = False
-        if not str(dev.address).upper().startswith(("GPIB", "USB", "SN")):
-            entry.setdefault(
-                "port",
-                dev.address
-                if dev.address.upper().startswith("COM")
-                else f"COM{dev.address.upper().removeprefix('ASRL').split(':')[0]}"
-                if dev.address.upper().startswith("ASRL")
-                else dev.address,
-            )
+        # "port" marks an entry as a COM-port device for the verify loop;
+        # only serial-shaped addresses get one (a bare MCC serial like
+        # "205F843" must not, or verify treats it as a lost COM device
+        # and drops the block - that happened 2026-07-13)
+        addr = str(dev.address).upper()
+        if addr.startswith("COM"):
+            entry.setdefault("port", dev.address)
+        elif addr.startswith("ASRL"):
+            entry.setdefault("port", f"COM{addr.removeprefix('ASRL').split(':')[0]}")
         entries[key] = entry
     return entries
 
@@ -818,8 +866,10 @@ _BOOKKEEPING_FIELDS = (
     "match_token",
     "confidence",
     "passive",
+    "note",
     "found_on",
     "verified_on",
+    "missing_since",
 )
 # entry keys that are internal to a discovery run and never belong in the file
 _INTERNAL_FIELDS = ("device", "port", "response")
@@ -832,9 +882,13 @@ def save_config(instruments: dict, config_path: Path) -> None:
     ...) that a human added: rediscovery must never clobber them (it did,
     2026-07-12, silently dropping the EDFA ``mode`` and the RF oscillator
     PSU's ``channel = 2``)."""
+    import shutil
+
     import tomlkit
 
     if config_path.exists():
+        # one rolling backup: the pre-run config is always one copy away
+        shutil.copy2(config_path, config_path.with_name(config_path.name + ".bak"))
         doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
     else:
         doc = tomlkit.document()
@@ -891,6 +945,8 @@ def quick_verify(config_path: str | Path | None = None) -> dict[str, str]:
     for key, entry in existing.items():
         if "port" not in entry:
             continue  # GPIB / USB-TMC / wsapi devices
+        if entry.get("enabled") is False:
+            continue  # disabled devices are never probed
         port = verify_entry(entry, ports_by_serial, ports_by_name)
         if port:
             resolved[key] = port
@@ -914,19 +970,28 @@ def report(instruments: dict, gpib_notes: list, unidentified_ports: list) -> Non
         by_driver.setdefault(entry.get("driver"), []).append((key, entry))
 
     def print_status(driver: str, friendly: str) -> None:
+        """One line per driver, one short indented line per unit found."""
         hits = by_driver.get(driver, [])
-        if hits:
-            for _key, entry in hits:
-                where = entry.get("address", "?")
-                if entry.get("usb_serial"):
-                    where += f" (usb serial {entry['usb_serial']})"
-                flag = "" if entry.get("verified_on") else " [newly discovered]"
-                p(f"  FOUND      {friendly:45s} -> {where}{flag}")
-                token = entry.get("match_token")
-                if token and "\\" not in str(token):
-                    p(f"             id: {token}")
-        else:
+        if not hits:
             p(f"  NOT FOUND  {friendly}")
+            return
+        p(f"  FOUND      {friendly}")
+        for _key, entry in sorted(hits):
+            parts = [str(entry.get("address", "?"))]
+            if entry.get("usb_serial"):
+                parts.append(f"sn:{entry['usb_serial']}")
+            token = entry.get("match_token")
+            if token and "\\" not in str(token):
+                parts.append(f"id:{token}")
+            if not entry.get("verified_on"):
+                parts.append("[new]")
+            if entry.get("enabled") is False:
+                parts.append("[disabled]")
+            if entry.get("missing_since"):
+                parts.append(f"[missing since {str(entry['missing_since'])[:10]}]")
+            p("               " + "  ".join(parts))
+            if entry.get("note"):
+                p(f"               note: {entry['note']}")
 
     p("\n--- Serial (COM port) instruments ---")
     for driver, friendly in EXPECTED_SERIAL:
@@ -937,6 +1002,10 @@ def report(instruments: dict, gpib_notes: list, unidentified_ports: list) -> Non
         print_status(driver, friendly)
     for note in gpib_notes:
         p(f"  [gpib] {note}")
+
+    p("\n--- MCC DAQ boards (USB, via mcculw) ---")
+    for driver, friendly in EXPECTED_MCC:
+        print_status(driver, friendly)
 
     unknown = [(k, e) for k, e in instruments.items() if e.get("driver") in (None, "?")]
     if unknown:
@@ -954,12 +1023,25 @@ def report(instruments: dict, gpib_notes: list, unidentified_ports: list) -> Non
         for port_info in unidentified_ports:
             sn = f", usb serial {port_info.serial_number}" if port_info.serial_number else ""
             p(f"  {port_info.device}: {port_info.description}{sn}")
+        candidates = [f for d, f in EXPECTED_SERIAL if d not in by_driver]
+        candidates += [f"{d} ({reason})" for d, reason in NOT_CHECKED if d != "red_pitaya"]
+        if candidates:
+            p("    candidates for these ports:")
+            for friendly in candidates:
+                p(f"      - {friendly}")
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Find and verify all rack instruments.")
     parser.add_argument(
         "--rescan", action="store_true", help="ignore saved config, run full discovery"
+    )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="remove config blocks whose device did not answer (missing "
+        "devices are otherwise kept and marked missing_since; blocks with "
+        "enabled = false are never removed)",
     )
     parser.add_argument("--no-gpib", action="store_true", help="skip the VISA/GPIB scan")
     parser.add_argument(
@@ -1000,6 +1082,64 @@ def main(argv=None) -> int:
     if existing:
         print("Verifying devices from saved configuration ...")  # noqa: T201
         for key, entry in existing.items():
+            if entry.get("driver") == "usb2408":
+                # MCC boards: verify against the USB inventory; the blocks
+                # are always kept (an unplugged board is not a reason to
+                # forget which serial is the rack vs the table)
+                mcc_inv = mcc_inventory()
+                serial = str(entry.get("address", "")).strip().upper()
+                if mcc_inv is None:
+                    print(f"  KEEP {key} (mcculw unavailable; kept unverified)")  # noqa: T201
+                elif serial in mcc_inv:
+                    entry.pop("missing_since", None)
+                    entry["verified_on"] = now
+                    print(f"  OK   {key} -> MCC {mcc_inv[serial]} {serial}")  # noqa: T201
+                else:
+                    entry.setdefault("missing_since", now)
+                    print(  # noqa: T201
+                        f"  MISS {key} (MCC serial {serial} not present; kept - check USB)"
+                    )
+                instruments[key] = entry
+                continue
+            if entry.get("enabled") is False and (entry.get("usb_serial") or "port" in entry):
+                # disabled device: deliberately not talked to (powered off,
+                # driver not ported, unit away for service). Check only that
+                # its adapter is present, claim the port so the scan below
+                # leaves it alone, and always keep the block.
+                port = resolve_port(entry, ports_by_serial, ports_by_name)
+                if port:
+                    entry.pop("missing_since", None)
+                    entry["port"] = port
+                    entry["address"] = address_for(entry, port, entry.get("usb_serial"))
+                    entry["verified_on"] = now
+                    assigned_ports.add(port)
+                    print(f"  OFF  {key} -> {port} (disabled; adapter present, not probed)")  # noqa: T201
+                else:
+                    entry.setdefault("missing_since", now)
+                    print(f"  OFF  {key} (disabled; adapter not seen, kept)")  # noqa: T201
+                instruments[key] = entry
+                continue
+            if entry.get("passive") and entry.get("usb_serial"):
+                # passive devices (WaveShaper): the USB descriptor match IS
+                # the identification; claim the port so the scan below does
+                # not re-report the device as newly discovered
+                port = verify_entry(entry, ports_by_serial, ports_by_name)
+                if port:
+                    entry.pop("missing_since", None)
+                    entry["adapter"] = ports_by_serial[entry["usb_serial"]].description
+                    entry["verified_on"] = now
+                    instruments[key] = entry
+                    assigned_ports.add(port)
+                    print(f"  OK   {key} -> {port} (passive USB match)")  # noqa: T201
+                elif args.prune:
+                    print(f"  MISS {key} (usb serial {entry['usb_serial']} absent) -> pruned")  # noqa: T201
+                else:
+                    entry.setdefault("missing_since", now)
+                    instruments[key] = entry
+                    print(  # noqa: T201
+                        f"  MISS {key} (usb serial {entry['usb_serial']} absent; kept)"
+                    )
+                continue
             if "port" not in entry:
                 instruments[key] = entry  # GPIB rescanned below; wsapi kept
                 continue
@@ -1008,14 +1148,23 @@ def main(argv=None) -> int:
                 continue
             port = verify_entry(entry, ports_by_serial, ports_by_name)
             if port:
+                entry.pop("missing_since", None)
                 entry["port"] = port
                 entry["address"] = address_for(entry, port, entry.get("usb_serial"))
                 entry["verified_on"] = now
                 instruments[key] = entry
                 assigned_ports.add(port)
                 print(f"  OK   {key} -> {port}")  # noqa: T201
+            elif args.prune:
+                print(f"  MISS {key} (was {entry.get('port')}) -> pruned")  # noqa: T201
             else:
-                print(f"  FAIL {key} (was {entry.get('port')}) -> will rediscover")  # noqa: T201
+                # no answer: device off or unplugged. Keep the block (its
+                # serial-anchored identity is hard-won); the port stays
+                # unclaimed so the probe scan can still re-find the device
+                # if it moved adapters. --prune removes silent blocks.
+                entry.setdefault("missing_since", now)
+                instruments[key] = entry
+                print(f"  MISS {key} (was {entry.get('port')}; kept, no answer)")  # noqa: T201
 
     # ---- discovery on remaining ports ----
     remaining = [p for p in ports if p.device not in assigned_ports]
@@ -1090,12 +1239,43 @@ def main(argv=None) -> int:
             entry["found_on"] = now
             entry["address"] = normalize_visa_addr(entry["address"])
             existing_key = find_existing_key(instruments, None, entry["address"])
+            if existing_key:
+                # re-found, not new: keep the original discovery date
+                prior_found = instruments[existing_key].get("found_on")
+                entry["found_on"] = prior_found or entry["found_on"]
+                entry["verified_on"] = now
             key = existing_key or make_key(
                 entry["driver"], entry.get("match_token"), None, instruments
             )
             instruments[key] = {**instruments.get(key, {}), **entry}
         for note in gpib_notes:
             print(f"  {note}")  # noqa: T201
+
+    # ---- MCC DAQ boards (USB inventory via mcculw; passive, nothing sent) ----
+    mcc_inv = mcc_inventory()
+    if mcc_inv:
+        known = {
+            str(e.get("address", "")).strip().upper()
+            for e in instruments.values()
+            if e.get("driver") == "usb2408"
+        }
+        new_boards = {
+            serial: product
+            for serial, product in mcc_inv.items()
+            if "USB-2408" in product and serial not in known
+        }
+        if new_boards:
+            print("\nScanning MCC DAQ boards ...")  # noqa: T201
+            for serial in sorted(new_boards):
+                key = MCC_SERIAL_KEYS.get(serial, f"usb2408_{serial}")
+                role = {"daq": " (rack)", "daq_eocb": " (optical table)"}.get(key, "")
+                instruments[key] = {
+                    "device": f"USB-2408 thermocouple DAQ{role}",
+                    "driver": "usb2408",
+                    "address": serial,
+                    "found_on": now,
+                }
+                print(f"  {new_boards[serial]} {serial} -> [devices.{key}]")  # noqa: T201
 
     save_config(instruments, config_path)
     report(instruments, gpib_notes, unidentified)

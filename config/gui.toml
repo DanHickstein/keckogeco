@@ -1,0 +1,23 @@
+# keckogeco GUI preferences — committed to the repo (unlike the site
+# config next to it). "Save as default" in the GUI's OSA panel rewrites
+# [osa_defaults]; commit the change when the new view is the keeper.
+
+[osa_defaults]
+start_nm = 1550.0
+stop_nm = 1570.0
+resolution_nm = 0.06
+sensitivity_dBm = -60.0
+
+# EDFA23 pump current (the unit runs in ACC, so mA): the last value entered
+# in the GUI, shown until the live value arrives — never auto-applied.
+# Shipped at the commissioned/recommended 80 mA.
+[edfa23]
+setpoint_mA = 80.0
+
+[wsp]
+gdd_ps_nm = 2.14
+tod_ps_nm2 = 0.0
+center_nm = 1559.8
+
+[osa_reference]
+csv = "C:/kecklfc/keckogeco/spectra/osa_2026-07-14_103849.csv"

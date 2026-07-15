@@ -83,13 +83,16 @@ Download the *USB driver* from the
 [GPP series download page](https://www.gwinstek.com/en-IN/products/detail/GPP-Series)
 and install with defaults.
 
-## 6. MCC InstaCal (USB-2408 DAQ)
+## 6. MCC Universal Library (USB-2408 DAQ)
 
-The USB-2408 thermocouple DAQ is driven through `mcculw` (the `daq`
-extra), which requires MCC's **InstaCal** to be installed and the board
-to have been opened in InstaCal once (that assigns the board number the
-config refers to). Download from the
-[MCC / Digilent site](https://digilent.com/reference/software/instacal/start).
+The USB-2408 thermocouple DAQs are driven through `mcculw` (the `daq`
+extra), which needs the MCC **Universal Library** DLL that ships with the
+InstaCal installer. Download from the
+[MCC / Digilent site](https://digilent.com/reference/software/instacal/start)
+and install it — but there is **no need to ever run InstaCal**: the driver
+binds boards directly from the USB inventory by serial number (the
+`address` in each `[devices.daq*]` config block), so no CB.CFG
+board-number table is created or consulted.
 
 ## 7. WaveShaper software and `wsapi`
 
@@ -185,7 +188,7 @@ or `keckogeco/gui/app.py` in VSCode and press Run.
 | VISA | NI-MAX lists the connected instruments |
 | GPIB | `python -m keckogeco.discovery` scans GPIB without a driver-stack error |
 | wsapi | `python -c "from wsapi import ws_get_version; print(ws_get_version())"` → version string |
-| DAQ | board visible in InstaCal |
+| DAQ | `python -c "from mcculw import ul; from mcculw.enums import InterfaceType; ul.ignore_instacal(); print([(d.product_name, d.unique_id) for d in ul.get_daq_device_inventory(InterfaceType.ANY)])"` → both USB-2408 serials |
 | End-to-end | `python -m keckogeco.check` → `ok` per enabled device |
 | No hardware | `python -m keckogeco.server.app --sim` + the GUI open and populate |
 
@@ -194,6 +197,24 @@ or `keckogeco/gui/app.py` in VSCode and press Run.
 - **An instrument is missing from discovery** — check NI-MAX (VISA
   devices) or Device Manager (plain COM ports) first; if the OS can't see
   it, no Python will.
+- **A COM port vanished from Windows entirely** (VISA `RSRC_NFOUND`, the
+  adapter gone from Device Manager) — don't reach for the instrument's
+  power switch: the FT232 USB-serial interfaces draw power from the USB
+  hub, not the instrument, so power-cycling the instrument cannot bring
+  its port back. Suspect the rack USB hub instead, especially if two or
+  more devices dropped at the same time: the 15-port hubs are internally
+  chains of 4-port VIA VL813 chips, and a single chip can wedge (e.g.
+  after USB driver installs/reboots) while the rest of the hub keeps
+  working. **Power-cycle the hub at its ePDU outlet** — hub A is strip A
+  outlet 15, hub B is strip B outlet 23 (see the
+  {ref}`power distribution table <power-distribution>`)
+  — then restart the server:
+  devices that were offline when the server started are not retried until
+  a restart. Laptop reboots do *not* fix this, because a self-powered hub
+  keeps its 5 V rail up through a reboot. Seen live 2026-07-14, when an
+  NI-488.2 reinstall plus reboots wedged one hub-A chip and took out
+  `edfa23` and `rb_clock` together
+  ([#36](https://github.com/DanHickstein/keckogeco/issues/36)).
 - **GPIB scan fails with a driver-stack error** — NI-488.2 version problem;
   see the downgrade warning in step 3.
 - **`wsapi` imports but opening `SN<serial>` fails** even though the USB

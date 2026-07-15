@@ -30,8 +30,10 @@ def main(argv: list[str] | None = None) -> int:
 
     from keckogeco.gui.client import KeckogecoClient
     from keckogeco.gui.mainwindow import MainWindow
+    from keckogeco.gui.theme import apply_dark_theme
 
     app = QApplication(sys.argv[:1])
+    apply_dark_theme(app)
     client = KeckogecoClient(args.url, token=args.token)
     try:
         client.health()
@@ -44,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     window = MainWindow(client)
-    window.resize(1100, 750)
+    window.resize(880, 780)
     window.show()
     return app.exec()
 

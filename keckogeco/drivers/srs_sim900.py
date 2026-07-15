@@ -86,6 +86,41 @@ class SIM900(Instrument):
     def sim928(self, slot: int, name: str = "") -> SIM928:
         return SIM928(self, slot, name)
 
+    def module_inventory(self, slots=None, probe_timeout_ms: int = 1500) -> dict[int, str | None]:
+        """``*IDN?`` every slot: {slot: idn string, or None if empty}.
+
+        An empty slot never replies, so the VISA timeout is temporarily
+        shortened — probing all 8 slots costs seconds instead of 25 s per
+        gap. Bypasses the base class's retry-once so a miss isn't retried.
+        Read-only: safe to run while locks are engaged.
+        """
+        if slots is None:
+            slots = range(1, 9)
+        results: dict[int, str | None] = {}
+        with self.lock:
+            restore_ms = getattr(self.transport, "timeout_ms", None)
+            set_timeout = getattr(self.transport, "set_timeout_ms", None)
+            if set_timeout is not None and restore_ms is not None:
+                set_timeout(probe_timeout_ms)
+            try:
+                for slot in slots:
+                    try:
+                        self.transport.clear()
+                        self._connect_slot(slot)
+                        idn = self.transport.query("*IDN?").strip()
+                        results[slot] = idn or None
+                    except Exception as exc:  # noqa: BLE001 - timeout = empty slot
+                        self.log.debug("slot %d: no reply (%s)", slot, exc)
+                        results[slot] = None
+            finally:
+                if set_timeout is not None and restore_ms is not None:
+                    set_timeout(restore_ms)
+                try:
+                    self.transport.clear()
+                except Exception:  # noqa: BLE001 - leave the mainframe usable
+                    self.log.debug("clear after inventory failed", exc_info=True)
+        return results
+
     # ----------------------------------------------------------------- sim
 
     @classmethod
@@ -135,9 +170,19 @@ class SIM900(Instrument):
             module()[m.group(1)] = m.group(2)
             return ""
 
+        # sim rack layout: SIM960s in 3 + 5, a SIM928 in 2, other slots
+        # empty (no reply -> module_inventory reports None); slot 0 is the
+        # mainframe itself (before any CONN)
+        slot_idn = {
+            0: "Stanford_Research_Systems,SIM900,s/n004666,ver3.6",
+            2: "Stanford_Research_Systems,SIM928,s/n019281,ver2.2",
+            3: "Stanford_Research_Systems,SIM960,s/n012345,ver2.17",
+            5: "Stanford_Research_Systems,SIM960,s/n012346,ver2.17",
+        }
+
         return {
             re.compile(r'CONN (\d+), ".*"$'): conn,
-            "*IDN?": "Stanford_Research_Systems,SIM960,s/n012345,ver2.17",
+            "*IDN?": lambda _: slot_idn.get(frames["slot"], ""),
             # monitors mirror internal state where sensible; MMON tracks the
             # manual output through a sinusoid so bias-lock sweeps see a
             # realistic IM transfer function in sim

@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import ClassVar, Self
 
 from ..config import DeviceConfig
@@ -57,6 +58,8 @@ DISCOVERY_KEYS = frozenset(
         "passive",
         "found_on",
         "verified_on",
+        "missing_since",
+        "note",
     }
 )
 
@@ -190,13 +193,17 @@ class Instrument:
 
     # ------------------------------------------------------------------- I/O
 
-    def _io(self, operation):
+    def _io(self, operation, what: str | Callable[[], str] = ""):
         """Run one transport operation; on failure, reconnect once and retry.
 
         Ported from the old ``Device._visa_io_with_reconnect``: transport
         settings (baud, terminations) are constructor state on the transport,
         so a reopen restores them automatically, and ``_configure()`` re-runs
         the driver's post-open setup (the old ``_after_reconnect``).
+
+        ``what`` names the operation in failure logs (e.g. the command
+        string). A callable is evaluated at failure time, so multi-step
+        operations can report which step failed.
         """
         with self.lock:
             if not self.transport.is_open:
@@ -206,7 +213,10 @@ class Instrument:
             # broad by design: any transport error (pyvisa, serial, OSError)
             # must trigger the one reconnect attempt
             except Exception as first_error:  # noqa: BLE001
-                self.log.warning("%s I/O failed (%s); reconnecting once", self.name, first_error)
+                desc = (what() if callable(what) else what) or "I/O"
+                self.log.warning(
+                    "%s: %s failed (%s); reconnecting once", self.name, desc, first_error
+                )
                 try:
                     self.transport.close()
                     self.transport.open()
@@ -216,23 +226,23 @@ class Instrument:
                 except Exception as second_error:
                     self.transport.close()
                     raise ConnectionLost(
-                        f"{self.name}: I/O failed after reconnect: {second_error}"
+                        f"{self.name}: {desc} failed after reconnect: {second_error}"
                     ) from second_error
 
     def write(self, cmd: str) -> None:
-        self._io(lambda: self.transport.write(cmd))
+        self._io(lambda: self.transport.write(cmd), what=f"write {cmd!r}")
 
     def read(self) -> str:
-        return self._io(self.transport.read)
+        return self._io(self.transport.read, what="read")
 
     def query(self, cmd: str) -> str:
-        return self._io(lambda: self.transport.query(cmd))
+        return self._io(lambda: self.transport.query(cmd), what=f"query {cmd!r}")
 
     def write_bytes(self, data: bytes) -> None:
-        self._io(lambda: self.transport.write_bytes(data))
+        self._io(lambda: self.transport.write_bytes(data), what="write_bytes")
 
     def read_bytes(self, n: int = 1) -> bytes:
-        return self._io(lambda: self.transport.read_bytes(n))
+        return self._io(lambda: self.transport.read_bytes(n), what="read_bytes")
 
     def __repr__(self) -> str:
         state = "connected" if self.connected else "closed"

@@ -46,6 +46,38 @@ def test_osa_wavelength_settings():
     assert osa.wl_span_nm == pytest.approx(20.0)
 
 
+def test_osa_set_range_never_inverts():
+    osa = make("agilent_86142b", "Agilent86142B", "osa", "GPIB0::30::INSTR")
+    # sim starts at 1545-1575; a range entirely above the current stop must
+    # write the new stop first so start <= stop holds throughout
+    osa.set_range(1600.0, 1650.0)
+    assert osa.wl_start_nm == pytest.approx(1600.0)
+    assert osa.wl_stop_nm == pytest.approx(1650.0)
+    sent = [c for c in osa.transport.sent if c.startswith("SENS:WAV")]
+    assert sent.index("SENS:WAV:STOP 1650.00nm") < sent.index("SENS:WAV:STAR 1600.00nm")
+    osa.set_range(stop_nm=1660.0)  # partial update
+    assert osa.wl_start_nm == pytest.approx(1600.0)
+    assert osa.wl_stop_nm == pytest.approx(1660.0)
+
+
+def test_osa_resolution_sensitivity_sweep():
+    osa = make("agilent_86142b", "Agilent86142B", "osa", "GPIB0::30::INSTR")
+    assert osa.resolution_nm == pytest.approx(0.06)  # sim default = best
+    assert osa.RESOLUTIONS_NM[0] == 0.06
+    osa.resolution_nm = 0.5
+    assert osa.resolution_nm == pytest.approx(0.5)
+    osa.sensitivity_dBm = -75.0
+    assert osa.sensitivity_dBm == pytest.approx(-75.0)
+    assert osa.sweep_continuous is True
+    osa.sweep_continuous = False
+    assert osa.sweep_continuous is False
+    osa.trigger_single()
+    assert "INIT:IMM" in osa.transport.sent
+    status = osa.status()
+    assert status["resolution_nm"] == pytest.approx(0.5)
+    assert status["sweep_continuous"] is False
+
+
 def test_voa_attenuation_roundtrip():
     voa = make("oz_voa", "OZOpticsVOA", "voa1550", "ASRL7::INSTR")
     assert voa.attenuation_dB == pytest.approx(0.0)
@@ -150,6 +182,31 @@ def test_keysight_fg_channel_roundtrip():
         fg.frequency_Hz(3)
     with pytest.raises(ValueError, match="function"):
         fg.set_function(1, "noise")
+
+
+def test_im_bias_scan_sim():
+    """The sweep returns the sim's sinusoidal transfer function and
+    streams every point through the callback."""
+    from keckogeco.comb.locking import im_bias_scan
+    from keckogeco.drivers.srs_sim900 import SIM900
+
+    cfg = DeviceConfig(key="srs", driver="srs_sim900", address="ASRL21::INSTR")
+    srs = SIM900.from_config(cfg, sim=True)
+    srs.connect()
+    servo = srs.sim960(3)
+    seen = []
+    voltages, inputs = im_bias_scan(
+        servo, v_start=-1.0, v_stop=1.0, v_step=0.1, sim=True, point=lambda *p: seen.append(p)
+    )
+    assert len(voltages) == len(inputs) == len(seen) == 20
+    assert servo.output_mode == "MAN"
+    # sim response 0.5*sin(2v+1) at each point
+    import math
+
+    for volt, value in zip(voltages, inputs, strict=True):
+        assert value == pytest.approx(0.5 * math.sin(2 * volt + 1), abs=1e-3)
+    with pytest.raises(ValueError, match="at least 2"):
+        im_bias_scan(servo, v_start=0.0, v_stop=0.01, v_step=0.1, sim=True)
 
 
 def test_im_auto_lock_sim():

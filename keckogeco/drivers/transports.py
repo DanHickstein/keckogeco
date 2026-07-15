@@ -115,6 +115,14 @@ class VisaTransport:
     def is_open(self) -> bool:
         return self._resource is not None
 
+    def set_timeout_ms(self, timeout_ms: int) -> None:
+        """Change the I/O timeout on the open resource (and future opens).
+        Used to probe for absent hardware — e.g. empty SIM900 slots —
+        without paying the instrument's full reply timeout per miss."""
+        self.timeout_ms = int(timeout_ms)
+        if self._resource is not None:
+            self._resource.timeout = self.timeout_ms
+
     def _require_open(self):
         if self._resource is None:
             raise NotConnected(f"VISA resource {self.address} is not open")
