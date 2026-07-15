@@ -4,12 +4,13 @@ Three tabs of schema-driven panels. **Overview** mirrors the OFF /
 STANDBY / FULL COMB + status-lamp layout of the old tkinter GUI
 (``KTL server/server_with_gui.py``) that Keck operators already know,
 plus the day-to-day controls (EDFAs, Pritel, interlock, RF chain,
-temperatures, mini-comb spectrum). **IM Bias Lock** scans the
-intensity-modulator bias (SIM960 manual output) against the minicomb
-photodiode (the servo's measure input) and plots the transfer function;
-the manual bias control lives here too. **Other** holds the
-rarely-touched hardware: EDFA13 (out of the light path), WaveShaper
-dispersion, TECs, YJ shutter, VOAs.
+temperatures, mini-comb spectrum). **IM Bias Lock** is the servo
+workbench: lock controls (bias, RF attenuation, setpoint, lock/unlock)
+with photodiode + bias strip charts on top, the bias-scan panel in the
+middle (transfer function; only while unlocked), and a mirror of the
+OSA spectrum at the bottom so the comb is visible while adjusting.
+**Other** holds the rarely-touched hardware: EDFA13 (out of the light
+path), WaveShaper dispersion, TECs, YJ shutter, VOAs.
 """
 
 from __future__ import annotations
@@ -41,13 +42,63 @@ from PyQt6.QtWidgets import (
 from . import prefs, spectra
 from .client import KeckogecoClient, PollThread, WriteThread
 from .theme import ACCENT, PLOT_BG, STATE_COLORS
-from .widgets import KeywordDisplay, KeywordSpinBox, OnOffButton, SelectAllSpinBox, StatusLamp
+from .widgets import (
+    KeywordDisplay,
+    KeywordSpinBox,
+    OnOffButton,
+    SelectAllSpinBox,
+    StatusLamp,
+    ThermoArray,
+)
 
 __all__ = ["MainWindow"]
 
 # a subsystem mix that matches no canonical state is normal during manual
 # work — present it as engineering mode, not a fault
 _STATE_DISPLAY = {"FAULT": "ENGINEERING MODE"}
+
+# Thermocouple channel labels mirror drivers/usb2408.DEFAULT_POSITIONS
+# (documented at commissioning, Jun 2023); full position text goes in the
+# tooltip. The rack board's ch7 is permanently unconnected and left out.
+# Values arrive as the LFC_TEMP_TEST1/2 array keywords, so every channel
+# is shown — not just the seven with individual LFC_T_* keywords.
+# Each channel's last value is its normal-operation baseline, recorded on
+# the live rack 2026-07-14 (system in its normal state; five /keywords
+# snapshots averaged). Readings more than ±_TEMP_TOLERANCE_C from the
+# baseline are colored bold red (hot) / bold blue (cold) — a per-channel
+# band, because "normal" spans 14 °C glycol to a 48 °C RF amplifier.
+_THERMO_PANELS = (
+    (
+        "LFC_TEMP_TEST1",
+        "Rack",
+        [
+            (0, "Side baffle", "Rack side baffle (middle side rack)", 28.7),
+            (1, "WaveShaper", "Waveshaper (upper rack)", 26.4),
+            (2, "Rb clock", "Rb clock (middle rack)", 27.0),
+            (3, "Pritel", "Pritel (middle upper rack)", 26.0),
+            (4, "Glycol out", "Rack glycol out", 19.6),
+            (5, "Glycol in", "Rack glycol in", 14.1),
+            (6, "PSU shelf", "Power supply shelf (bottom rack)", 26.0),
+        ],
+    ),
+    (
+        "LFC_TEMP_TEST2",
+        "Optical table (EOCB)",
+        [
+            (0, "RF oscillator", "RF oscillator", 40.3),
+            (1, "RF amplifier", "RF amplifier", 48.0),
+            (2, "Phase mods", "Main phase modulators", 32.7),
+            (3, "Filter cavity", "Filter cavity", 28.0),
+            (4, "Glycol out", "Board glycol out", 15.6),
+            (5, "Glycol in", "Board glycol in", 34.9),
+            (6, "Compression", "Compression stage", 23.1),
+            (7, "Rb cell", "Rubidium (Rb) cell D2-210", 24.2),
+        ],
+    ),
+)
+
+#: deviation from a channel's baseline that turns its readout red/blue
+_TEMP_TOLERANCE_C = 3.0
 
 # keywords whose writes toggle real optical/RF power -> confirm dialog
 _CONFIRM = {
@@ -278,19 +329,99 @@ class OsaControls(QWidget):
             button.setStyleSheet(f"color: {ACCENT}; font-weight: bold;" if active else "")
 
 
+class ImServoPanel(QWidget):
+    """Lock controls for the IM bias servo (top of the IM Bias Lock tab).
+
+    Manual bias (LFC_IM_BIAS), the RF attenuator drive (LFC_IM_RF_ATT),
+    the PID setpoint (the photodiode voltage the lock holds), and
+    Lock / Unlock buttons (LFC_IM_LOCK_MODE). Live readouts come from
+    the im_scan array payload; the strip charts beside this column are
+    owned by the main window.
+    """
+
+    def __init__(self, set_lock, bias_widget=None, rf_att_widget=None, setpoint_widget=None):
+        super().__init__()
+        self.setMaximumWidth(250)
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        if bias_widget is not None:
+            bias_widget.setToolTip("manual bias output (drives the IM while unlocked)")
+            form.addRow("Bias", bias_widget)
+        if rf_att_widget is not None:
+            # LFC_IM_RF_ATT: the VCA drive on RF oscillator supply ch 3.
+            # Iterate it against the bias while flattening the mini-comb.
+            form.addRow("RF atten", rf_att_widget)
+            hint = QLabel("recommended 0.80–0.85 V")
+            hint.setStyleSheet("color: #5a6472;")
+            hint.setToolTip(
+                "normal operating range of the RF attenuator drive (docs: locking procedure step 4)"
+            )
+            form.addRow("", hint)
+        self.setpoint = setpoint_widget
+        if setpoint_widget is not None:
+            form.addRow("Setpoint", setpoint_widget)
+
+        buttons = QHBoxLayout()
+        self.lock_button = QPushButton("Lock")
+        self.lock_button.setToolTip("engage the PID at the setpoint (LFC_IM_LOCK_MODE = 1)")
+        self.lock_button.clicked.connect(lambda: set_lock(True))
+        self.unlock_button = QPushButton("Unlock")
+        self.unlock_button.setToolTip("back to manual bias output (LFC_IM_LOCK_MODE = 0)")
+        self.unlock_button.clicked.connect(lambda: set_lock(False))
+        buttons.addWidget(self.lock_button)
+        buttons.addWidget(self.unlock_button)
+        form.addRow("Servo", buttons)
+
+        mode_row = QHBoxLayout()
+        self.lamp = StatusLamp("IM lock")
+        self.mode = QLabel("—")
+        self.mode.setToolTip("SIM960 output mode (manual bias vs engaged PID)")
+        mode_row.addWidget(self.lamp)
+        mode_row.addWidget(self.mode, stretch=1)
+        form.addRow("Mode", mode_row)
+        self.input_v = QLabel("—")
+        self.input_v.setToolTip("servo measure input — the minicomb photodiode voltage")
+        form.addRow("Photodiode", self.input_v)
+        self.output_v = QLabel("—")
+        self.output_v.setToolTip("servo output — the bias voltage actually applied to the IM")
+        form.addRow("Bias out", self.output_v)
+
+    def update_status(self, payload: dict) -> None:
+        """Refresh mode + readouts from the im_scan array (or a PUT /im
+        read-back — same keys)."""
+        if payload.get("running"):
+            self.mode.setText("scanning …")
+            self.lamp.set_state(None)
+        else:
+            mode = payload.get("mode")
+            if mode is not None:
+                locked = mode == "PID"
+                self.mode.setText("LOCKED (PID)" if locked else "MANUAL")
+                self.lamp.set_state(locked)
+        if self.setpoint is not None and payload.get("setpoint_V") is not None:
+            self.setpoint.update_value(payload["setpoint_V"])
+        # while scanning the live input is the last recorded sweep point
+        value = payload["y"][-1] if payload.get("running") and payload.get("y") else None
+        if value is None:
+            value = payload.get("input_V")
+        if value is not None:
+            self.input_v.setText(f"{value:.4f} V")
+        if payload.get("bias_V") is not None:
+            self.output_v.setText(f"{payload['bias_V']:.3f} V")
+
+
 class ImScanControls(QWidget):
-    """Controls column beside the IM bias-scan plot.
+    """Controls column beside the IM bias-scan plot (middle of the tab).
 
     Scan defaults are the auto-lock's commissioned sweep (−2 .. +1 V in
     20 mV steps, 0.2 s settle). The scan runs on the server's action
     executor, so it excludes the comb transitions and the shared Abort
-    stops it; the pre-scan bias is restored when the sweep ends. The
-    manual bias and RF-attenuator (LFC_IM_RF_ATT) keyword controls sit
-    below the scan buttons: the locking procedure iterates the two while
-    watching the mini-comb on the OSA.
+    stops it; the pre-scan bias is restored when the sweep ends. A scan
+    can only start while the lock is off (the server refuses otherwise).
     """
 
-    def __init__(self, start_scan, abort_scan, save_scan, bias_widget=None, rf_att_widget=None):
+    def __init__(self, start_scan, abort_scan, save_scan):
         super().__init__()
         self._start_scan = start_scan
         self.setMaximumWidth(250)
@@ -341,25 +472,6 @@ class ImScanControls(QWidget):
         save.clicked.connect(lambda: save_scan())
         form.addRow("Data", save)
 
-        if bias_widget is not None:
-            form.addRow("Bias", bias_widget)
-        if rf_att_widget is not None:
-            # LFC_IM_RF_ATT: the VCA drive on RF oscillator supply ch 3.
-            # Iterate it against the bias while flattening the mini-comb.
-            form.addRow("RF atten", rf_att_widget)
-            hint = QLabel("recommended 0.80–0.85 V")
-            hint.setStyleSheet("color: #5a6472;")
-            hint.setToolTip(
-                "normal operating range of the RF attenuator drive (docs: locking procedure step 4)"
-            )
-            form.addRow("", hint)
-        self.mode = QLabel("—")
-        self.mode.setToolTip("SIM960 output mode (manual bias vs engaged PID)")
-        form.addRow("Servo mode", self.mode)
-        self.input_v = QLabel("—")
-        self.input_v.setToolTip("servo measure input — the minicomb photodiode voltage")
-        form.addRow("Photodiode", self.input_v)
-
     def params(self) -> dict:
         return {
             "v_start": self.v_start.value(),
@@ -376,19 +488,16 @@ class ImScanControls(QWidget):
         self.estimate.setText(f"{n} points, ~{seconds:.0f} s" if n else "empty range")
 
     def update_status(self, payload: dict) -> None:
-        """Refresh the run state + live readouts from the im_scan array."""
+        """Gate the Scan button on the run/lock state from the im_scan array."""
         running = bool(payload.get("running"))
-        self.scan_button.setEnabled(not running)
+        locked = payload.get("mode") == "PID"
+        self.scan_button.setEnabled(not running and not locked)
+        self.scan_button.setToolTip(
+            "unlock the servo before scanning (the sweep would fight the PID)"
+            if locked
+            else "sweep the bias and plot the photodiode response"
+        )
         self.abort_button.setEnabled(running)
-        mode = payload.get("mode")
-        if running:
-            self.mode.setText("scanning …")
-        elif mode is not None:
-            self.mode.setText({"MAN": "MANUAL", "PID": "PID (locked)"}.get(mode, str(mode)))
-        # while scanning the live readout is the last recorded point
-        value = payload["y"][-1] if running and payload.get("y") else payload.get("input_V")
-        if value is not None:
-            self.input_v.setText(f"{value:.4f} V")
 
 
 class MainWindow(QMainWindow):
@@ -397,6 +506,7 @@ class MainWindow(QMainWindow):
         self.client = client
         self.setWindowTitle("keckogeco — LFC engineering GUI")
         self.widgets: dict[str, object] = {}  # keyword -> widget
+        self._im_status_shown = ""  # last IM action message sent to the status bar
 
         self.schema = client.schema()
         try:
@@ -483,22 +593,43 @@ class MainWindow(QMainWindow):
         return page
 
     def _im_lock_tab(self) -> QWidget:
-        """Bias scan plot + controls. Starts as a placeholder; the plot is
-        wired in by _on_arrays_available when the server offers the im_scan
-        array (i.e. the SRS SIM900 is configured and online)."""
+        """Three sections, top to bottom: servo/lock controls with live
+        strip charts, the bias scan, and a mirror of the OSA spectrum
+        (users watch the comb while adjusting bias + RF attenuation).
+        All start as placeholders; _on_arrays_available wires them when
+        the server offers the im_scan / osa_spectrum arrays."""
+
+        def placeholder(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
+            return label
+
         page = QWidget()
         layout = QVBoxLayout(page)
-        box = QGroupBox(
-            self._title_with_port("IM transfer function — minicomb photodiode vs bias", "srs")
-        )
-        self._im_layout = QHBoxLayout(box)
+
+        servo_box = QGroupBox(self._title_with_port("IM bias servo (SIM960)", "srs"))
+        self._im_servo_layout = QHBoxLayout(servo_box)
+        self._im_servo_panel: ImServoPanel | None = None
+        self._im_servo_placeholder = placeholder("(SRS SIM900 not connected)")
+        self._im_servo_layout.addWidget(self._im_servo_placeholder, stretch=1)
+        layout.addWidget(servo_box, stretch=2)
+
+        scan_box = QGroupBox("Bias scan — photodiode vs bias (unlock first)")
+        self._im_layout = QHBoxLayout(scan_box)
         self._im_plot = None
         self._im_controls: ImScanControls | None = None
-        self._im_placeholder = QLabel("(SRS SIM900 not connected)")
-        self._im_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._im_placeholder.setStyleSheet("color: #5a6472; font-style: italic; padding: 30px;")
+        self._im_placeholder = placeholder("(SRS SIM900 not connected)")
         self._im_layout.addWidget(self._im_placeholder, stretch=1)
-        layout.addWidget(box, stretch=1)
+        layout.addWidget(scan_box, stretch=3)
+
+        osa_box = QGroupBox("Mini-comb spectrum (OSA) — controls on the Overview tab")
+        self._im_osa_layout = QHBoxLayout(osa_box)
+        self._im_osa_plot = None
+        self._im_osa_placeholder = placeholder("(OSA not connected)")
+        self._im_osa_layout.addWidget(self._im_osa_placeholder, stretch=1)
+        layout.addWidget(osa_box, stretch=2)
+
         self.im_action_label = QLabel("")
         self.im_action_label.setWordWrap(True)
         layout.addWidget(self.im_action_label)
@@ -690,28 +821,23 @@ class MainWindow(QMainWindow):
         return box
 
     def _temperature_panel(self) -> QGroupBox:
+        """All thermocouple channels of both USB-2408 DAQ boards, fed by
+        the LFC_TEMP_TEST1/2 array keywords (the seven LFC_T_* keywords
+        stay bound server-side for KTL; here the full arrays cover them)."""
         box = QGroupBox("Temperatures")
-        grid = QGridLayout(box)
-        grid.setHorizontalSpacing(18)
-        present = [
-            (keyword, label)
-            for keyword, label in [
-                ("LFC_T_RACK_TOP", "Rack top"),
-                ("LFC_T_RACK_MID", "Rack mid"),
-                ("LFC_T_RACK_BOT", "Rack bottom"),
-                ("LFC_T_GLY_RACK_IN", "Glycol in"),
-                ("LFC_T_GLY_RACK_OUT", "Glycol out"),
-                ("LFC_T_EOCB_IN", "EOCB in"),
-                ("LFC_T_EOCB_OUT", "EOCB out"),
-            ]
-            if keyword in self.schema
-        ]
-        for index, (keyword, label) in enumerate(present):
-            row, pair = divmod(index, 2)
-            grid.addWidget(QLabel(label), row, pair * 2)
-            display = KeywordDisplay(keyword, self._spec(keyword))
-            self.widgets[keyword] = display
-            grid.addWidget(display, row, pair * 2 + 1)
+        row = QHBoxLayout(box)
+        for keyword, title, channels in _THERMO_PANELS:
+            if keyword not in self.schema:
+                continue
+            column = QVBoxLayout()
+            header = QLabel(title)
+            header.setStyleSheet("font-weight: bold;")
+            column.addWidget(header)
+            array = ThermoArray(keyword, channels, _TEMP_TOLERANCE_C)
+            self.widgets[keyword] = array
+            column.addWidget(array)
+            column.addStretch(1)
+            row.addLayout(column, stretch=1)
         return box
 
     def _osa_panel(self) -> QGroupBox:
@@ -732,6 +858,8 @@ class MainWindow(QMainWindow):
     def _on_arrays_available(self, names: list) -> None:
         if "osa_spectrum" in names and self._osa_plot is None:
             self._wire_osa_panel()
+        if "osa_spectrum" in names and self._im_osa_plot is None:
+            self._wire_im_osa_panel()
         if "im_scan" in names and self._im_plot is None:
             self._wire_im_panel()
 
@@ -773,13 +901,30 @@ class MainWindow(QMainWindow):
         self._osa_controls.apply_defaults()
         self._restore_reference()
 
+    def _wire_im_osa_panel(self) -> None:
+        """Spectrum-only mirror of the OSA on the IM tab: same array, its
+        own plot; view + sweep settings stay on the Overview tab."""
+        plot = self._plot_widget()
+        if plot is None:
+            self._im_osa_placeholder.setText("(pyqtgraph not installed; spectrum hidden)")
+            return
+        import pyqtgraph as pg
+
+        curve = plot.plot(pen=pg.mkPen(ACCENT, width=1))
+        self._im_osa_plot = (plot, curve)
+        self._im_osa_placeholder.deleteLater()
+        self._im_osa_layout.addWidget(plot, stretch=1)
+        self._subscribe_array("osa_spectrum")
+
     def _wire_im_panel(self) -> None:
         plot = self._plot_widget()
         if plot is None:
             self._im_placeholder.setText("(pyqtgraph not installed; scan plot hidden)")
+            self._im_servo_placeholder.setText("(pyqtgraph not installed)")
             return
         import pyqtgraph as pg
 
+        # --- middle: the scan plot + controls
         plot.setLabel("bottom", "IM bias (V)")
         plot.setLabel("left", "photodiode (V)")
         curve = plot.plot(
@@ -792,7 +937,10 @@ class MainWindow(QMainWindow):
         self._im_plot = (plot, curve)
         self._im_placeholder.deleteLater()
         self._im_layout.addWidget(plot, stretch=1)
+        self._im_controls = ImScanControls(self._im_scan_start, self._abort_action, self._im_save)
+        self._im_layout.addWidget(self._im_controls)
 
+        # --- top: lock controls + photodiode / bias strip charts
         def keyword_spin(keyword: str) -> KeywordSpinBox | None:
             if keyword not in self.schema:
                 return None
@@ -800,21 +948,66 @@ class MainWindow(QMainWindow):
             self.widgets[keyword] = widget
             return widget
 
-        self._im_controls = ImScanControls(
-            self._im_scan_start,
-            self._abort_action,
-            self._im_save,
+        setpoint = KeywordSpinBox(
+            "setpoint_V",
+            {
+                "units": "V",
+                "min": -10,
+                "max": 10,
+                "help": "lock setpoint — the photodiode voltage the PID holds",
+            },
+            lambda _f, value: self._im_apply(setpoint_V=value),
+        )
+        self._im_servo_panel = ImServoPanel(
+            self._im_set_lock,
             bias_widget=keyword_spin("LFC_IM_BIAS"),
             rf_att_widget=keyword_spin("LFC_IM_RF_ATT"),
+            setpoint_widget=setpoint,
         )
-        self._im_layout.addWidget(self._im_controls)
+        self._im_servo_placeholder.deleteLater()
+        self._im_servo_layout.addWidget(self._im_servo_panel)
+
+        self._im_history: dict[str, list] = {"t": [], "pd": [], "bias": []}
+        self._im_charts = []
+        for label, key in (("photodiode (V)", "pd"), ("bias out (V)", "bias")):
+            chart = self._plot_widget()
+            chart.setLabel("left", label)
+            chart.setLabel("bottom", "time (s ago)")
+            chart_curve = chart.plot(pen=pg.mkPen(ACCENT, width=1))
+            self._im_charts.append((key, chart, chart_curve))
+            self._im_servo_layout.addWidget(chart, stretch=1)
+
+        # every poll cycle: the strip charts sample at ~1 Hz and scans
+        # build up live (the payload is cached data during a sweep)
+        self.poller.array_every["im_scan"] = 1
         self._subscribe_array("im_scan")
+
+    #: strip-chart history length, seconds (at the ~1 s poll cadence)
+    IM_HISTORY_S = 600
+
+    def _im_record_history(self, payload: dict) -> None:
+        if payload.get("input_V") is None or payload.get("bias_V") is None:
+            return  # mid-scan or readout failed: leave a gap
+        history = self._im_history
+        now = time.time()
+        history["t"].append(now)
+        history["pd"].append(payload["input_V"])
+        history["bias"].append(payload["bias_V"])
+        while history["t"] and history["t"][0] < now - self.IM_HISTORY_S:
+            for series in history.values():
+                series.pop(0)
+        ages = [t - now for t in history["t"]]
+        for key, _chart, curve in self._im_charts:
+            curve.setData(ages, history[key])
+
+    def _im_set_lock(self, engage: bool) -> None:
+        self._submit("LFC_IM_LOCK_MODE", "1" if engage else "0")
+
+    def _im_apply(self, **settings) -> None:
+        self.writer.submit_call("IM settings", lambda c: c.im_apply(**settings))
 
     def _im_scan_start(self) -> None:
         params = self._im_controls.params()
-        # poll the scan array every cycle from the start, so the plot
-        # builds up live; _on_array relaxes it again when the scan ends
-        self.poller.array_every["im_scan"] = 1
         self.writer.submit_call("IM scan", lambda c: c.im_scan(**params))
 
     def _im_save(self) -> None:
@@ -926,6 +1119,10 @@ class MainWindow(QMainWindow):
     def _on_call_done(self, label: str, result) -> None:
         if label == "IM scan":
             self.statusBar().showMessage("IM bias scan started", 5000)
+            return
+        if label == "IM settings":
+            if self._im_servo_panel is not None and isinstance(result, dict):
+                self._im_servo_panel.update_status(result)  # PUT read-back
             return
         if not isinstance(result, dict):
             return
@@ -1101,28 +1298,38 @@ class MainWindow(QMainWindow):
             text = f"✓ last action {action['name']}: {action['message']}"
         else:
             text = ""
-        self.action_label.setText(text)
-        # the IM tab mirrors its own actions' progress next to the plot
+        # IM scan/lock progress stays off the comb-state row: the per-point
+        # messages are long and squish the top of the Overview tab. It goes
+        # to the status bar (like other info messages) + the IM tab's label.
         is_im = bool(action) and str(action.get("name", "")).startswith("im_")
+        self.action_label.setText("" if is_im else text)
         self.im_action_label.setText(text if is_im else "")
+        if is_im and text != self._im_status_shown:
+            self._im_status_shown = text
+            # persists while running (refreshed as the message advances);
+            # the final ✓/❌ shows once, then times out
+            self.statusBar().showMessage(text, 0 if action.get("running") else 8000)
 
     def _on_array(self, name: str, data: dict) -> None:
-        if name == "osa_spectrum" and self._osa_plot is not None:
-            self._osa_data = data  # kept for "Save"
-            plot, curve = self._osa_plot
-            curve.setData(data.get("x", []), data.get("y", []))
-            plot.setLabel("bottom", data.get("x_label", ""))
-            plot.setLabel("left", data.get("y_label", ""))
+        if name == "osa_spectrum":
+            if self._osa_plot is not None:
+                self._osa_data = data  # kept for "Save"
+                plot, curve = self._osa_plot
+                curve.setData(data.get("x", []), data.get("y", []))
+                plot.setLabel("bottom", data.get("x_label", ""))
+                plot.setLabel("left", data.get("y_label", ""))
+            if self._im_osa_plot is not None:
+                _plot, curve = self._im_osa_plot
+                curve.setData(data.get("x", []), data.get("y", []))
         elif name == "im_scan" and self._im_plot is not None:
             self._im_data = data  # kept for "Save"
             _plot, curve = self._im_plot
             curve.setData(data.get("x", []), data.get("y", []))
             if self._im_controls is not None:
                 self._im_controls.update_status(data)
-            # fetch every cycle while a scan runs (the payload is cached
-            # data, no extra hardware I/O); idle readouts stay at the slow
-            # cadence to keep GPIB traffic down
-            self.poller.array_every["im_scan"] = 1 if data.get("running") else 3
+            if self._im_servo_panel is not None:
+                self._im_servo_panel.update_status(data)
+                self._im_record_history(data)
 
     def _on_connection(self, ok: bool, detail: str) -> None:
         if ok:

@@ -34,6 +34,21 @@ class FakeClient:
             "LFC_EDFA27_P": {"value": 150.0, "timestamp": 0, "type": "double", "units": "mW"},
             "LFC_PTAMP_ONOFF": {"value": False, "timestamp": 0, "type": "boolean", "units": ""},
             "LFC_T_RACK_TOP": {"value": 23.5, "timestamp": 0, "type": "double", "units": "C"},
+            # rack DAQ: ch6 hot (baseline 26.0), ch7 permanently open (null)
+            "LFC_TEMP_TEST1": {
+                "value": [28.5, 26.0, 27.1, 26.3, 21.0, 14.0, 41.9, None],
+                "timestamp": 0,
+                "type": "double array",
+                "units": "",
+            },
+            # table DAQ: RF amp (ch1) at its hot-by-design baseline of 48,
+            # glycol out (ch4) well below its 15.6 baseline
+            "LFC_TEMP_TEST2": {
+                "value": [40.3, 48.1, 32.0, 28.2, 11.0, 34.5, 23.0, 24.0],
+                "timestamp": 0,
+                "type": "double array",
+                "units": "",
+            },
         }
 
     def state(self):
@@ -98,6 +113,26 @@ def test_mainwindow_constructs_and_updates(qtbot):
     window._on_state(FakeClient().state())
     assert window.state_banner.text() == "STANDBY"
     assert "150" in window.widgets["LFC_EDFA27_P"].spin.text()
+
+    # every thermocouple channel renders from the LFC_TEMP_TEST arrays,
+    # colored against its normal-operation baseline (±3 C band)
+    rack = {ch: cell for ch, _base, cell in window.widgets["LFC_TEMP_TEST1"]._cells}
+    assert len(rack) == 7  # ch7 (permanently unconnected) is not shown
+    assert rack[0].text() == "28.50 °C"
+    assert rack[0].styleSheet() == ""  # at its baseline -> plain
+    assert "#e05252" in rack[6].styleSheet()  # 41.9 vs 26.0 baseline -> red
+    assert "bold" in rack[6].styleSheet()
+    table = {ch: cell for ch, _base, cell in window.widgets["LFC_TEMP_TEST2"]._cells}
+    assert len(table) == 8
+    assert table[1].text() == "48.10 °C"
+    assert table[1].styleSheet() == ""  # RF amp: 48 C is its normal baseline
+    assert "#5b9bd5" in table[4].styleSheet()  # 11.0 vs 15.6 baseline -> blue
+    assert "bold" in table[4].styleSheet()
+
+    # a board going away (keyword drops to null) blanks its readouts
+    window._on_keywords({"LFC_TEMP_TEST2": {"value": None}})
+    assert table[0].text() == "—"
+    assert table[0].styleSheet() == ""
     window.poller.stop()
     window.writer.stop()
 
@@ -194,8 +229,9 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
 
 
 def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
-    """The IM Bias Lock tab starts as a placeholder and becomes a live
-    plot + controls when the server offers the im_scan array."""
+    """The IM Bias Lock tab starts as placeholders and becomes the
+    servo panel + strip charts, the scan panel, and the OSA mirror when
+    the server offers the im_scan / osa_spectrum arrays."""
     pytest.importorskip("pyqtgraph")
     from keckogeco.gui import prefs
     from keckogeco.gui.mainwindow import MainWindow
@@ -207,6 +243,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     window._on_arrays_available(["im_scan"])
     assert window._im_plot is not None
     assert "im_scan" in window.poller.array_names
+    assert window.poller.array_every["im_scan"] == 1  # strip charts sample ~1 Hz
     controls = window._im_controls
     assert controls is not None
     assert controls.params() == {
@@ -215,12 +252,14 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
         "v_step": 0.02,
         "settle_s": 0.2,
     }
-    # the manual bias + RF attenuator keyword controls live in the column
+    # bias + RF attenuator keyword controls live in the servo panel (top)
+    servo = window._im_servo_panel
+    assert servo is not None
     assert window.widgets["LFC_IM_BIAS"] is not None
     assert window.widgets["LFC_IM_RF_ATT"] is not None
+    assert len(window._im_charts) == 2  # photodiode + bias strip charts
 
-    # mid-scan payload: curve + readouts update, buttons flip to running,
-    # and the array poll drops to every cycle for a live plot
+    # mid-scan payload: curve + readouts update, buttons flip to running
     window._on_array(
         "im_scan",
         {"x": [-2.0, -1.98], "y": [0.1, 0.2], "running": True},
@@ -229,20 +268,55 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert list(curve.getData()[1]) == [0.1, 0.2]
     assert not controls.scan_button.isEnabled()
     assert controls.abort_button.isEnabled()
-    assert "0.2000 V" in controls.input_v.text()  # last recorded point
-    assert window.poller.array_every["im_scan"] == 1
+    assert "0.2000 V" in servo.input_v.text()  # last recorded point
+    assert "scanning" in servo.mode.text()
 
-    # idle payload carries the live servo readouts; poll cadence relaxes
+    # idle payload: servo readouts + strip-chart history; scan re-enabled
     window._on_array(
         "im_scan",
-        {"x": [], "y": [], "running": False, "mode": "MAN", "input_V": 0.42, "bias_V": 0.5},
+        {
+            "x": [],
+            "y": [],
+            "running": False,
+            "mode": "MAN",
+            "input_V": 0.42,
+            "bias_V": 0.5,
+            "setpoint_V": 0.41,
+        },
     )
     assert controls.scan_button.isEnabled()
-    assert controls.mode.text() == "MANUAL"
-    assert "0.4200 V" in controls.input_v.text()
-    assert window.poller.array_every["im_scan"] == 3
+    assert servo.mode.text() == "MANUAL"
+    assert "0.4200 V" in servo.input_v.text()
+    assert servo.setpoint.spin.value() == 0.41
+    assert window._im_history["pd"] == [0.42]
+    assert window._im_history["bias"] == [0.5]
 
-    # the IM tab mirrors its own actions' progress, not the transitions'
+    # locked: scan blocked (server would 409 anyway), lamp + label show it
+    window._on_array(
+        "im_scan",
+        {"x": [], "y": [], "running": False, "mode": "PID", "input_V": 0.41, "bias_V": 0.48},
+    )
+    assert not controls.scan_button.isEnabled()
+    assert "unlock" in controls.scan_button.toolTip()
+    assert servo.mode.text() == "LOCKED (PID)"
+
+    # Lock / Unlock buttons write the LFC_IM_LOCK_MODE keyword
+    submitted = []
+    monkeypatch.setattr(window, "_submit", lambda k, v: submitted.append((k, v)))
+    servo.lock_button.click()
+    servo.unlock_button.click()
+    assert submitted == [("LFC_IM_LOCK_MODE", "1"), ("LFC_IM_LOCK_MODE", "0")]
+
+    # the OSA mirror at the bottom follows the same spectrum array
+    window._on_arrays_available(["im_scan", "osa_spectrum"])
+    assert window._im_osa_plot is not None
+    window._on_array("osa_spectrum", {"x": [1550.0, 1560.0], "y": [-40.0, -20.0]})
+    _plot, osa_curve = window._im_osa_plot
+    assert list(osa_curve.getData()[1]) == [-40.0, -20.0]
+
+    # IM action progress goes to the status bar + the IM tab label, and
+    # stays OFF the Overview comb-state row (long per-point messages
+    # squished the top layout); transitions keep the comb-state row
     window._on_state(
         {
             "state": "STANDBY",
@@ -251,6 +325,8 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
         }
     )
     assert "im_bias_scan" in window.im_action_label.text()
+    assert "im_bias_scan" in window.statusBar().currentMessage()
+    assert window.action_label.text() == ""
     window._on_state(
         {
             "state": "STANDBY",
@@ -259,6 +335,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
         }
     )
     assert window.im_action_label.text() == ""
+    assert "set_standby" in window.action_label.text()
 
     window.poller.stop()
     window.writer.stop()

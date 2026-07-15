@@ -14,8 +14,6 @@ sensitivity_dBm = -60.0
 [edfa23]
 setpoint_mA = 80.0
 
-# WaveShaper dispersion, re-applied when the GUI starts; the GUI rewrites
-# this on every edit. Shipped at the commissioned values.
 [wsp]
 gdd_ps_nm = 2.14
 tod_ps_nm2 = 0.0

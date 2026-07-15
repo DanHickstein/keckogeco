@@ -554,12 +554,17 @@ class LFCController:
                     "running": running,
                 }
                 if not running:
-                    # live servo readouts for the GUI panel; skipped during
-                    # a scan so the poller doesn't compete for the mainframe
+                    # live servo readouts for the GUI panel (strip charts +
+                    # lock controls); skipped during a scan so the poller
+                    # doesn't compete for the mainframe. bias_V is OMON —
+                    # the voltage actually at the output, which the PID
+                    # moves around while locked (MOUT is only the manual
+                    # setting).
                     try:
-                        payload["bias_V"] = self._im_servo.manual_output_V
+                        payload["bias_V"] = self._im_servo.output_V
                         payload["input_V"] = self._im_servo.measure_input_V
                         payload["mode"] = self._im_servo.output_mode
+                        payload["setpoint_V"] = self._im_servo.setpoint_V
                     except InstrumentError as exc:
                         log.debug("im_scan live readout failed: %s", exc)
                 return payload

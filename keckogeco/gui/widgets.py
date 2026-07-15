@@ -7,12 +7,14 @@ range that the schema (and therefore Keck) doesn't agree with.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -26,6 +28,7 @@ __all__ = [
     "OnOffButton",
     "SelectAllSpinBox",
     "StatusLamp",
+    "ThermoArray",
 ]
 
 
@@ -87,6 +90,65 @@ class KeywordDisplay(QLabel):
         else:
             text = str(value)
         self.setText(f"{text} {self.units}".strip())
+
+
+class ThermoArray(QWidget):
+    """Labelled per-channel readouts fed by one thermocouple-array keyword
+    (a list of degC, one element per DAQ channel).
+
+    A channel reading null/NaN (open thermocouple, board offline) shows an
+    em dash. Each channel carries its normal-operation baseline: a reading
+    more than ``tolerance_C`` above it turns bold red, more than
+    ``tolerance_C`` below bold blue (the tooltip shows the expected value).
+    ``channels`` is ``(channel, label, tooltip, baseline_C)`` — channels
+    left out (e.g. the rack board's permanently unconnected ch7) are simply
+    not shown.
+    """
+
+    def __init__(
+        self,
+        keyword: str,
+        channels: list[tuple[int, str, str, float]],
+        tolerance_C: float = 3.0,
+        columns: int = 2,
+    ):
+        super().__init__()
+        self.keyword = keyword
+        self.tolerance_C = tolerance_C
+        self._cells: list[tuple[int, float, QLabel]] = []
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(18)
+        for index, (channel, label, tooltip, baseline_C) in enumerate(channels):
+            row, pair = divmod(index, columns)
+            name = QLabel(label)
+            name.setToolTip(
+                f"{tooltip} — {keyword}[{channel}], "
+                f"normally {baseline_C:.1f} ±{tolerance_C:.0f} °C"
+            )
+            value = QLabel("—")
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            value.setToolTip(name.toolTip())
+            grid.addWidget(name, row, pair * 2)
+            grid.addWidget(value, row, pair * 2 + 1)
+            self._cells.append((channel, baseline_C, value))
+
+    def update_value(self, values) -> None:
+        if not isinstance(values, (list, tuple)):
+            values = ()
+        for channel, baseline_C, cell in self._cells:
+            value = values[channel] if channel < len(values) else None
+            if value is None or (isinstance(value, float) and not math.isfinite(value)):
+                cell.setText("—")
+                cell.setStyleSheet("")
+                continue
+            cell.setText(f"{value:.2f} °C")
+            if value > baseline_C + self.tolerance_C:
+                cell.setStyleSheet("color: #e05252; font-weight: bold;")
+            elif value < baseline_C - self.tolerance_C:
+                cell.setStyleSheet("color: #5b9bd5; font-weight: bold;")
+            else:
+                cell.setStyleSheet("")
 
 
 class KeywordSpinBox(QWidget):

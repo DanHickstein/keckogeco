@@ -1,5 +1,6 @@
 """End-to-end REST API tests against a --sim controller."""
 
+import math
 import pathlib
 
 import pytest
@@ -80,6 +81,18 @@ def test_bulk_snapshot_populates_after_reads(client):
     assert body["LFC_EDFA27_P"]["units"] == "mW"
 
 
+def test_json_value_sanitizes_nan_inside_arrays():
+    """The rack DAQ's unconnected ch7 reads NaN; inside the LFC_TEMP_TEST1
+    list it must become null explicitly — whether clients see null must not
+    depend on how the installed FastAPI version encodes non-finite floats
+    (the sim DAQ never returns NaN, so unit-test it)."""
+    from keckogeco.server.app import _json_value
+
+    assert _json_value(math.nan) is None
+    assert _json_value(21.5) == 21.5
+    assert _json_value([21.5, math.nan, math.inf]) == [21.5, None, None]
+
+
 def test_state_endpoint(client):
     body = client.get("/api/v1/state").json()
     assert body["state"] == "OFF"
@@ -139,6 +152,40 @@ def test_im_scan_endpoint(client):
     assert len(body["x"]) == len(body["y"]) == 20
     assert body["x_label"] == "IM bias (V)"
     assert body["running"] is False
+
+
+def test_im_servo_settings_and_lock_gate(client):
+    # GET reads the live servo state
+    body = client.get("/api/v1/im").json()
+    assert body["mode"] == "MAN"
+    # PUT writes the lock setpoint and returns the read-back
+    body = client.put("/api/v1/im", json={"setpoint_V": 0.415}).json()
+    assert body["setpoint_V"] == pytest.approx(0.415)
+    assert client.put("/api/v1/im", json={"setpoint_V": 15}).status_code == 422
+    # a scan is refused while the lock is engaged
+    client.put("/api/v1/keywords/LFC_IM_LOCK_MODE", json={"value": "1"})
+    response = client.post("/api/v1/im/scan", json={"settle_s": 0.0})
+    assert response.status_code == 409
+    assert "unlock" in response.json()["detail"]
+    client.put("/api/v1/keywords/LFC_IM_LOCK_MODE", json={"value": "0"})
+    assert client.post("/api/v1/im/scan", json={"settle_s": 0.0}).status_code == 200
+
+
+def test_im_modules_inventory(client):
+    body = client.get("/api/v1/im/modules").json()["modules"]
+    assert len(body) == 8
+    assert "SIM960" in body["3"]
+    assert "SIM960" in body["5"]
+    assert "SIM928" in body["2"]
+    assert body["1"] is None  # empty slot: no reply
+
+
+def test_im_servo_status_any_slot(client):
+    body = client.get("/api/v1/im/servo/5").json()
+    assert body["slot"] == 5
+    assert body["output_mode"] in ("MAN", "PID")
+    assert "measure_input_V" in body
+    assert client.get("/api/v1/im/servo/9").status_code == 400
 
 
 def test_im_scan_validation(client):

@@ -39,3 +39,6 @@ Thumbs.db
 
 # Sphinx autosummary output
 docs/api/generated/
+
+# Claude Code local permission grants (machine-specific)
+.claude/settings.local.json

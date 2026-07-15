@@ -77,6 +77,17 @@ def test_setpoint_resolution_rounding(srs):
     assert servo.setpoint_V == pytest.approx(1.235)  # 1 mV resolution
 
 
+def test_module_inventory(srs):
+    """The inventory IDNs every slot; sim rack = SIM960s in 3+5, SIM928
+    in 2, everything else empty (no reply)."""
+    inventory = srs.module_inventory()
+    assert set(inventory) == set(range(1, 9))
+    assert "SIM960" in inventory[3]
+    assert "SIM960" in inventory[5]
+    assert "SIM928" in inventory[2]
+    assert all(inventory[slot] is None for slot in (1, 4, 6, 7, 8))
+
+
 def test_sim928_voltage_and_output(srs):
     source = srs.sim928(2)
     source.voltage_V = 3.3

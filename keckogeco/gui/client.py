@@ -100,6 +100,16 @@ class KeckogecoClient:
             raise RuntimeError(response.json().get("detail", response.text))
         return response.json()
 
+    def im_apply(self, **settings) -> dict:
+        """Write IM servo settings (setpoint_V); returns the read-back
+        servo state (mode, setpoint_V, bias_V, input_V)."""
+        response = self.session.put(
+            f"{self.base_url}/api/v1/im", json=settings, timeout=self.timeout
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(response.json().get("detail", response.text))
+        return response.json()
+
     def im_scan(self, **params) -> dict:
         """Start an IM bias scan (v_start, v_stop, v_step, settle_s);
         progress comes back through /state and the im_scan array."""
