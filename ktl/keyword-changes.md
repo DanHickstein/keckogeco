@@ -11,6 +11,7 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 | `LFC_PTAMP_PRE_P` | "pre-amp output power", mW, 50–140 | preamp **current**, mA, 0–600 | The deployed implementation always read/wrote the Pritel preamp current in mA (`KeckLFC.py` wrote `preAmp = '{value}mA'`; standby/full-comb sequences use 0 and 600). The CSV metadata never matched. |
 | `LFC_RFOSCI_I` | units mA, min 0.35, max 0.7 | units **A** (limits unchanged) | Implementation returned the GPD supply current in amps; the 0.35–0.7 limits only make sense in A. |
 | `LFC_EDFA27_INPUT_POWER_MONITOR`, `LFC_EDFA23_INPUT_POWER_MONITOR` | type boolean | type **double**, mW | The deployed handlers always returned the Amonics seed input power in mW; "boolean" in the CSV was never true. |
+| `LFC_IM_BIAS` | V, −3 to +3 | V, **−8 to +8** | The ±3 V bound was the commissioned auto-lock sweep range, not a hardware limit. The SIM960 output spec is ±10 V; ±8 V is the operating limit chosen (Dan, 2026-07-15) to stay under it. The servo's hardware output limits (ULIM/LLIM) and the bias-scan/auto-lock bounds are set to ±8 V to match. |
 | `LFC_EDFA23_P` | "output power", mW, 0–20 | pump **current**, mA, 0–1500 | The 23 dBm unit runs in ACC, so the value written to the Amonics `:DRIV:ACC:CUR` register is a current in mA (commissioned operating point 80 mA — impossible to express under the old 0–20 bound). The driver additionally clamps to the unit's own reported maximum. `LFC_EDFA13_P` almost certainly has the same problem (that unit is also configured ACC) but is left untouched until the out-of-use 13 dBm EDFA is confirmed on the rack. |
 
 ## Additions (new keywords, not in the 77-keyword baseline)
@@ -26,6 +27,15 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 
 ## Semantic notes (unchanged, but worth discussing)
 
+- `LFC_IM_AUTO_LOCK` is **unbound — proposed for retirement**
+  (2026-07-15). IM bias locking is deliberately manual: the operator
+  enters the photodiode setpoint, starting bias, and PI gains in the
+  engineering GUI (the GUI's bias scan suggests values) and engages via
+  `LFC_IM_LOCK_MODE` — whose write-1 now also copies the manual bias
+  into the SIM960 output offset so the PID takes over bumplessly. The
+  minicomb/STANDBY transitions no longer engage the lock as their last
+  step. Reads/writes of `LFC_IM_AUTO_LOCK` answer "not implemented"
+  (501) like other unbound keywords.
 - `LFC_CHECK_STATUS` still reports the legacy prime-product code
   (30030 = FULL COMB, 15015 = STANDBY, 1 = OFF). Proposal: add an
   enumerated `LFC_STATE` (OFF/STANDBY/FULL_COMB/FAULT/UNKNOWN) and keep

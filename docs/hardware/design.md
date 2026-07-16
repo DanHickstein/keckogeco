@@ -38,7 +38,15 @@ A small tap of the minicomb goes to a photodetector that generates the
 control signal for the minicomb **amplitude stabilization loop**: a
 90:10 optical tap sends 10% of the light to a photodetector, and an SRS
 SIM960 servo feeds back a bias voltage (−10 to +10 V) to the intensity
-modulator to hold the minicomb amplitude constant.
+modulator to hold the minicomb amplitude constant. The tap sits
+**downstream of the 27 dBm EDFA** — measured on the rack 2026-07-15:
+the photodetector signal scales with the EDFA27 APC setpoint (the
+signal-chain cartoon drawing it upstream of the EDFA is wrong). At the
+commissioned 450 mW the detector's amplifier compresses above ~5.5 V
+and ceilings near 6 V, so full-fringe bias scans clip at the peaks
+(fringe Vπ ≈ 3.0 V); the commissioned −2…+1 V lock window stays on the
+unclipped lower slope, and at 250 mW the full fringe is clean
+(peak ≈ 4 V).
 
 The main minicomb signal is amplified in an EDFA, sent through the
 dispersion-compensation WaveShaper, amplified again, then split in a

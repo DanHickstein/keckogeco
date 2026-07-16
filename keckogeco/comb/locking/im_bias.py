@@ -1,17 +1,18 @@
-"""Intensity-modulator bias auto-lock.
+"""Intensity-modulator bias scan + lock-point recommendation.
 
-Port of ``LFC_IM_AUTO_LOCK`` (``KeckLFC.py:1976``), the commissioning
-procedure that finds the IM transfer-function midpoint and hands over to
-the SIM960 PID:
+Locking itself is deliberately manual (simplification with Dan,
+2026-07-15, superseding both the ported ``LFC_IM_AUTO_LOCK`` sweep and
+the short-lived saved-lockpoint auto-engage): the operator enters the
+photodiode setpoint, the starting bias, and the PI gains in the GUI's
+servo panel and presses Lock (``LFC_IM_LOCK_MODE`` — engaging copies
+the manual bias into the SIM960 output offset so the PID starts from
+there). This module only provides the measurement side:
 
-1. put the servo in manual mode with conservative gains and ±3 V limits,
-2. sweep the manual output over [-2.0, 1.0] V in 20 mV steps, recording
-   the measured input at each point,
-3. the sweep's max/min slope sign sets the proportional-gain polarity,
-4. the bias closest to the (max+min)/2 midpoint becomes the operating
-   point: apply it, set the output offset there, and set the setpoint to
-   the measured input,
-5. switch the servo to PID mode.
+* :func:`im_bias_scan` sweeps the bias and records the photodiode
+  response (the ``im_bias_scan`` action, plotted live by the GUI);
+* :func:`recommend_lock_point` turns a finished scan into suggested
+  numbers for the panel — mid-fringe bias, the photodiode voltage
+  there, and PI gains scaled from the measured slope.
 """
 
 from __future__ import annotations
@@ -21,9 +22,19 @@ import time
 
 import numpy as np
 
-__all__ = ["im_auto_lock", "im_bias_scan"]
+__all__ = ["im_bias_scan", "recommend_lock_point"]
 
 log = logging.getLogger(__name__)
+
+#: hardware/software bias limit: ±8 V operating limit, under the
+#: SIM960's ±10 V output spec (Dan, 2026-07-15)
+BIAS_LIMIT_V = 8.0
+
+#: commissioned loop tuning (live on the rack 2026-07-15: P −2.0 with a
+#: slope of −1 V/V, I 0.1): the P recommendation keeps |P × slope| at
+#: this loop gain, the I recommendation is used as-is
+LOOP_GAIN = 2.0
+INTG_GAIN = 0.1
 
 
 def im_bias_scan(
@@ -39,8 +50,8 @@ def im_bias_scan(
     (the minicomb photodiode) at each step. Returns (voltages, inputs).
 
     Puts the servo in manual mode and leaves the output at the last sweep
-    point; callers decide the operating point afterwards (the auto-lock
-    moves to mid-fringe, the GUI scan restores the pre-scan bias).
+    point; callers decide the operating point afterwards (the GUI scan
+    action restores the pre-scan bias).
 
     Parameters
     ----------
@@ -66,73 +77,59 @@ def im_bias_scan(
     return voltages, inputs
 
 
-def im_auto_lock(
-    servo,
-    v_start: float = -2.0,
-    v_stop: float = 1.0,
-    v_step: float = 0.02,
-    settle_s: float = 0.2,
-    prop_gain: float = 2.0,
-    intg_gain: float = 0.1,
-    output_limit_V: float = 3.0,
-    sim: bool = False,
-    progress=None,
-) -> dict:
-    """Run the IM bias lock on a SIM960 servo. Returns a result summary.
+def recommend_lock_point(voltages, inputs, near_bias: float | None = None) -> dict:
+    """Suggest lock settings from a completed bias scan (pure math, no
+    hardware — the GUI runs this on the ``im_scan`` array).
 
-    Parameters
-    ----------
-    servo : keckogeco.drivers.srs_sim900.SIM960
-    progress : callable(str) | None
-        Called with a short message at each stage (action step reporting).
+    Mid-fringe selection is the old commissioned procedure's: a bias
+    whose photodiode reading is closest to the (max+min)/2 target — the
+    steepest, most linear part of the fringe. A wide scan crosses that
+    target on several fringes; ``near_bias`` (the operator's lock-start
+    bias) picks the crossing closest to it, so the suggestion stays on
+    the fringe the lock already uses. The PI suggestion scales the
+    proportional gain off the local slope so the loop gain matches the
+    commissioned tuning (P = LOOP_GAIN / slope, sign included: the
+    SIM960's P must carry the plant slope's sign), with the commissioned
+    integral gain.
+
+    Returns ``bias_V``, ``setpoint_V``, ``slope_V_per_V``, ``prop_gain``,
+    ``intg_gain``, plus the sweep's ``input_min_V``/``input_max_V``.
+
+    Raises
+    ------
+    ValueError
+        Flat scan (no modulation) or no usable slope at the midpoint.
     """
-
-    def report(message: str) -> None:
-        log.info("im_auto_lock: %s", message)
-        if progress is not None:
-            progress(message)
-
-    report("configuring servo: manual mode, ±3 V limits, conservative gains")
-    servo.output_mode = "MAN"
-    servo.output_upper_limit_V = output_limit_V
-    servo.output_lower_limit_V = -output_limit_V
-    servo.proportional_gain = prop_gain
-    servo.integral_gain = intg_gain
-
-    n_points = len(np.arange(v_start, v_stop, v_step))
-    report(f"sweeping bias {v_start} V .. {v_stop} V ({n_points} points)")
-    voltages, inputs = im_bias_scan(
-        servo, v_start=v_start, v_stop=v_stop, v_step=v_step, settle_s=settle_s, sim=sim
-    )
-
+    voltages = np.asarray(voltages, dtype=float)
+    inputs = np.asarray(inputs, dtype=float)
+    if len(voltages) < 3 or len(voltages) != len(inputs):
+        raise ValueError("need a completed scan of at least 3 points")
     idx_max, idx_min = int(np.argmax(inputs)), int(np.argmin(inputs))
-    v_max, v_min = voltages[idx_max], voltages[idx_min]
-    if v_max == v_min:
-        raise RuntimeError(
-            "IM sweep saw no modulation (flat response); check the RF drive and photodiode"
+    if inputs[idx_max] == inputs[idx_min]:
+        raise ValueError(
+            "scan shows no modulation (flat response); check the RF drive and photodiode"
         )
-    slope = (inputs[idx_max] - inputs[idx_min]) / (v_max - v_min)
-    if slope < 0:
-        servo.proportional_gain = -abs(prop_gain)
-        report(f"negative slope ({slope:.3f}); proportional gain polarity flipped")
-
     target = (inputs[idx_max] + inputs[idx_min]) / 2
-    best_idx = int(np.argmin(np.abs(inputs - target)))
-    best_v = float(voltages[best_idx])
-    report(f"midpoint bias {best_v:.3f} V (input {inputs[best_idx]:.4f} V)")
-
-    servo.manual_output_V = best_v
-    setpoint = servo.measure_input_V
-    servo.output_offset_V = best_v
-    servo.setpoint_V = setpoint
-
-    report("engaging PID")
-    servo.output_mode = "PID"
-
+    diffs = inputs - target
+    best = int(np.argmin(np.abs(diffs)))
+    if near_bias is not None:
+        # sign changes of (input - target) = the mid-fringe crossings
+        crossings = np.nonzero(np.signbit(diffs[:-1]) != np.signbit(diffs[1:]))[0]
+        if len(crossings):
+            left = int(crossings[np.argmin(np.abs(voltages[crossings] - near_bias))])
+            best = left if abs(diffs[left]) <= abs(diffs[left + 1]) else left + 1
+    best = min(max(best, 1), len(voltages) - 2)  # keep neighbors for the slope
+    slope = float(np.gradient(inputs, voltages)[best])
+    if slope == 0:
+        raise ValueError(
+            "no slope at the mid-fringe point; re-scan with a finer step or larger range"
+        )
     return {
-        "bias_V": best_v,
-        "setpoint_V": float(setpoint),
-        "slope_sign": -1 if slope < 0 else 1,
-        "sweep_min_V": float(inputs[idx_min]),
-        "sweep_max_V": float(inputs[idx_max]),
+        "bias_V": float(voltages[best]),
+        "setpoint_V": float(inputs[best]),
+        "slope_V_per_V": slope,
+        "prop_gain": round(LOOP_GAIN / slope, 1),  # SIM960 GAIN resolution is 0.1
+        "intg_gain": INTG_GAIN,
+        "input_min_V": float(inputs[idx_min]),
+        "input_max_V": float(inputs[idx_max]),
     }

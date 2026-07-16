@@ -101,8 +101,9 @@ class KeckogecoClient:
         return response.json()
 
     def im_apply(self, **settings) -> dict:
-        """Write IM servo settings (setpoint_V); returns the read-back
-        servo state (mode, setpoint_V, bias_V, input_V)."""
+        """Write IM servo settings (setpoint_V, prop_gain, intg_gain);
+        returns the read-back servo state (mode, setpoint_V, bias_V,
+        input_V, prop_gain, intg_gain). Call with no settings to read."""
         response = self.session.put(
             f"{self.base_url}/api/v1/im", json=settings, timeout=self.timeout
         )
@@ -115,6 +116,30 @@ class KeckogecoClient:
         progress comes back through /state and the im_scan array."""
         response = self.session.post(
             f"{self.base_url}/api/v1/im/scan", json=params, timeout=self.timeout
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(response.json().get("detail", response.text))
+        return response.json()
+
+    def flattener_slider(self) -> dict:
+        """Read the ND-filter slider state (position, positions)."""
+        return self._get("flattener/slider")
+
+    def flattener_slider_set(self, position: int) -> dict:
+        """Move the ND-filter slider to a slot; returns the read-back."""
+        response = self.session.put(
+            f"{self.base_url}/api/v1/flattener/slider",
+            json={"position": position},
+            timeout=self.timeout,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(response.json().get("detail", response.text))
+        return response.json()
+
+    def flattener_slider_home(self) -> dict:
+        """Home the ND-filter slider; returns the read-back."""
+        response = self.session.post(
+            f"{self.base_url}/api/v1/flattener/slider/home", timeout=self.timeout
         )
         if response.status_code >= 400:
             raise RuntimeError(response.json().get("detail", response.text))

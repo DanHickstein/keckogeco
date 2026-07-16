@@ -216,6 +216,9 @@ def test_all_keywords_bound_with_full_config(controller):
         "LFC_TEMP_TEST2",  # daq_eocb (EO comb board DAQ) not in example config
         "LFC_T_EOCB_IN",
         "LFC_T_EOCB_OUT",
+        # IM bias locking is deliberately manual; the auto-lock keyword is
+        # unbound and proposed for retirement (ktl/keyword-changes.md)
+        "LFC_IM_AUTO_LOCK",
         # VOA keys stay unit-serial-based until each unit's wavelength is
         # identified on-site; the wavelength keywords bind only after a
         # config block is renamed to voa1310/voa1550/voa2000

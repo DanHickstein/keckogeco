@@ -53,6 +53,23 @@ comes with a delay.
 - **Secrets**: `config/keckogeco.toml`, and
   `config/site-info.txt` are git-ignored and must never be committed. 
   sensitive info goes here.
+- **IM bias locking is deliberately MANUAL (2026-07-15).** No autolock
+  anywhere — an earlier saved-lockpoint auto-engage design (and the
+  ported `LFC_IM_AUTO_LOCK` sweep before it) was built and then removed
+  the same day; do not resurrect either. The server locks at
+  operator-entered values only: photodiode setpoint + PI gains via
+  `PUT /im`, starting bias via `LFC_IM_BIAS`, engage via
+  `LFC_IM_LOCK_MODE` (engaging copies the manual bias into the SIM960
+  output offset for a bumpless start). The GUI scan panel only
+  *suggests* values (text); the operator types them into the servo
+  panel. `LFC_IM_AUTO_LOCK` is unbound (retirement proposed in
+  `ktl/keyword-changes.md`); the minicomb transition no longer locks.
+  A reference calibration scan can be overlaid in the GUI (CSV +
+  gui.toml pref, same pattern as the OSA reference spectrum). All IM
+  bias adjustments are limited to ±8 V (under the SIM960's ±10 V spec).
+  Beware: the transfer curve's amplitude scales with EDFA27 power, and
+  at the commissioned 450 mW the lock photodetector clips above ~5.5 V
+  (docs/hardware/design.md) — scan at the power you'll operate at.
 
 ## Environments
 

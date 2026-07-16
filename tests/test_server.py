@@ -155,15 +155,26 @@ def test_im_scan_endpoint(client):
 
 
 def test_im_servo_settings_and_lock_gate(client):
-    # GET reads the live servo state
+    # GET reads the live servo state, PI gains included
     body = client.get("/api/v1/im").json()
     assert body["mode"] == "MAN"
-    # PUT writes the lock setpoint and returns the read-back
-    body = client.put("/api/v1/im", json={"setpoint_V": 0.415}).json()
+    assert "prop_gain" in body and "intg_gain" in body
+    # PUT writes the manual lock settings and returns the read-back
+    body = client.put(
+        "/api/v1/im", json={"setpoint_V": 0.415, "prop_gain": -2.0, "intg_gain": 0.1}
+    ).json()
     assert body["setpoint_V"] == pytest.approx(0.415)
+    assert body["prop_gain"] == pytest.approx(-2.0)
+    assert body["intg_gain"] == pytest.approx(0.1)
     assert client.put("/api/v1/im", json={"setpoint_V": 15}).status_code == 422
-    # a scan is refused while the lock is engaged
+    assert client.put("/api/v1/im", json={"prop_gain": 2000}).status_code == 422
+    # engaging the lock (keyword write) starts the PID from the manual
+    # bias: the output offset is copied on engage (manual lock design)
+    client.put("/api/v1/keywords/LFC_IM_BIAS", json={"value": "1.2"})
     client.put("/api/v1/keywords/LFC_IM_LOCK_MODE", json={"value": "1"})
+    servo = client.app.state.controller._im_servo
+    assert servo.output_offset_V == pytest.approx(1.2)
+    # a scan is refused while the lock is engaged
     response = client.post("/api/v1/im/scan", json={"settle_s": 0.0})
     assert response.status_code == 409
     assert "unlock" in response.json()["detail"]
@@ -193,8 +204,8 @@ def test_im_scan_validation(client):
     response = client.post("/api/v1/im/scan", json={"v_start": 1.0, "v_stop": -1.0})
     assert response.status_code == 400
     assert "empty scan" in response.json()["detail"]
-    # out-of-bounds bias -> 422 from pydantic (±3 V keyword limits)
-    assert client.post("/api/v1/im/scan", json={"v_start": -5.0}).status_code == 422
+    # out-of-bounds bias -> 422 from pydantic (±10 V SIM960 output limits)
+    assert client.post("/api/v1/im/scan", json={"v_start": -12.0}).status_code == 422
 
 
 def test_interlock_endpoint(client):
@@ -231,6 +242,38 @@ def test_osa_sweep_endpoint(client):
     body = client.post("/api/v1/osa/sweep", json={"mode": "single"}).json()
     assert body["sweep_continuous"] is False  # single sweep then hold
     assert client.post("/api/v1/osa/sweep", json={"mode": "bogus"}).status_code == 422
+
+
+def test_flattener_slider_endpoints(client):
+    body = client.get("/api/v1/flattener/slider").json()
+    assert body == {"position": 1, "positions": 6}  # sim powers up homed
+    body = client.put("/api/v1/flattener/slider", json={"position": 4}).json()
+    assert body["position"] == 4
+    body = client.post("/api/v1/flattener/slider/home").json()
+    assert body["position"] == 1
+    # slot bounds enforced by pydantic
+    assert client.put("/api/v1/flattener/slider", json={"position": 0}).status_code == 422
+    assert client.put("/api/v1/flattener/slider", json={"position": 7}).status_code == 422
+
+
+def test_flattener_slider_offline_503(tmp_path):
+    """With no nd_slider block the endpoints answer 503 (not connected),
+    never 500 — the GUI tab must work with the slider absent."""
+    import shutil
+
+    cfg_file = tmp_path / "keckogeco.toml"
+    shutil.copy(EXAMPLE, cfg_file)
+    text = cfg_file.read_text().replace(
+        "[devices.nd_slider]", "[devices.nd_slider]\nenabled = false"
+    )
+    assert "[devices.nd_slider]\nenabled = false" in text
+    cfg_file.write_text(text)
+    app = create_app(load_config(cfg_file), sim=True, poll_s=0)
+    with TestClient(app) as offline_client:
+        assert offline_client.get("/api/v1/flattener/slider").status_code == 503
+        response = offline_client.put("/api/v1/flattener/slider", json={"position": 2})
+        assert response.status_code == 503
+        assert offline_client.post("/api/v1/flattener/slider/home").status_code == 503
 
 
 def test_bearer_token_auth(tmp_path):

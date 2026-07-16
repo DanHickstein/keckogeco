@@ -251,8 +251,8 @@ type = "double"
 writable = true
 help = "Mini-comb amplitude lock offset bias"
 units = "V"
-min = -3.0
-max = 3.0
+min = -8.0
+max = 8.0
 format = "%.1f"
 
 [LFC_IM_RF_ATT]

@@ -8,9 +8,10 @@ per-widget code never hardcodes chrome colors — only semantic ones
 
 from __future__ import annotations
 
-__all__ = ["ACCENT", "PLOT_BG", "STATE_COLORS", "apply_dark_theme"]
+__all__ = ["ACCENT", "MUTED", "PLOT_BG", "STATE_COLORS", "apply_dark_theme"]
 
 ACCENT = "#4fd1c5"  # teal — titles, highlights, plot traces
+MUTED = "#5a6472"  # gray — hints under a control (recommended values)
 PLOT_BG = "#0f131a"
 
 #: comb-state banner colors (FAULT is shown as ENGINEERING MODE)

@@ -275,6 +275,11 @@ class LFCController:
         if has("srs"):
             im_slot = int(self.config.devices["srs"].options.get("im_slot", 3))
             self._im_servo = self.device("srs").sim960(im_slot, "IM bias servo")
+            # ±8 V operating limit, under the SIM960's ±10 V output spec
+            # (Dan, 2026-07-15); matches the LFC_IM_BIAS schema and the
+            # scan/auto-lock bounds
+            self._im_servo.manual_output_min = -8.0
+            self._im_servo.manual_output_max = 8.0
             bind(
                 "LFC_IM_BIAS",
                 getter=lambda: self._im_servo.manual_output_V,
@@ -338,13 +343,8 @@ class LFCController:
                 setter=lambda v: self.device("clarity").set_output(bool(int(v))),
             )
 
-        # --- IM bias auto-lock (write 1 to run; enqueued like transitions)
-        if has("srs"):
-            bind(
-                "LFC_IM_AUTO_LOCK",
-                getter=lambda: self._action_result("im_auto_lock"),
-                setter=lambda v: self._submit_if_true("im_auto_lock", v),
-            )
+        # LFC_IM_AUTO_LOCK is deliberately unbound: locking is manual from
+        # the engineering GUI (Dan, 2026-07-15; see ktl/keyword-changes.md)
 
         # --- WaveShaper scalar keywords: WSP_PHASE programs 2nd-order
         # dispersion (GDD, d2 in ps/nm) and WSP_TOD 3rd-order (d3 in
@@ -400,7 +400,7 @@ class LFCController:
             bind(
                 "LFC_IM_LOCK_MODE",
                 getter=lambda: self._im_servo.output_mode == "PID",
-                setter=lambda v: setattr(self._im_servo, "output_mode", "PID" if v else "MAN"),
+                setter=lambda v: self._im_set_lock(bool(int(v))),
             )
         if has("rf_osc_psu"):
             bind(
@@ -694,6 +694,18 @@ class LFCController:
             if not self.sim:
                 time.sleep(4)
         tec.set_temperature_C(target_C)
+
+    def _im_set_lock(self, engage: bool) -> None:
+        """LFC_IM_LOCK_MODE setter. Engaging locks at the operator's
+        current panel settings: the manual bias is copied into the SIM960
+        output offset so the PID starts from where the operator parked the
+        bias (bumpless takeover); setpoint and PI gains are whatever was
+        last written. Disengaging just returns to manual output."""
+        if engage:
+            self._im_servo.output_offset_V = self._im_servo.manual_output_V
+            self._im_servo.output_mode = "PID"
+        else:
+            self._im_servo.output_mode = "MAN"
 
     def _submit_if_true(self, action: str, value) -> None:
         """Transition keywords fire on a truthy write (modify kw=1)."""

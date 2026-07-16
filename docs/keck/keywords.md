@@ -22,9 +22,9 @@ runs.
 | `LFC_SET_STANDBY` | integer | RW | Drive the comb to STANDBY: RF chain + seeded EDFAs up, Pritel power amp down. |
 | `LFC_SET_FULL_COMB` | integer | RW | Bring the comb fully up: RF chain, EDFAs, Pritel to operating current. Takes on the order of a minute. |
 | `LFC_SET_OFF` | integer | RW 🔒 | Shut the comb down in a safe, predefined order. |
-| `LFC_MINICOMB_AUTO_SETUP` | enumerated | RW 🔒 | Automatic minicomb bring-up (RF chain, seeded EDFAs with input-power gates), finishing with the IM bias auto-lock. 1 = DONE, 0 = WRONG. |
+| `LFC_MINICOMB_AUTO_SETUP` | enumerated | RW 🔒 | Automatic minicomb bring-up (RF chain, seeded EDFAs with input-power gates). The IM bias lock is engaged manually afterwards from the engineering GUI. 1 = DONE, 0 = WRONG. |
 | `LFC_CLOSE_ALL` | boolean | RW 🔒 | Emergency shutdown of every optical/RF output. |
-| `LFC_IM_AUTO_LOCK` | boolean | RW 🔒 | Run the IM bias auto-lock: sweep the bias, pick the mid-fringe point, engage the SIM960 PID. |
+| `LFC_IM_AUTO_LOCK` | boolean | — | **Unbound (proposed for retirement).** IM bias locking is manual from the engineering GUI: the operator enters the photodiode setpoint, starting bias, and PI gains, then engages `LFC_IM_LOCK_MODE`. Reads/writes answer 501. |
 
 ## Comb status
 

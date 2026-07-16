@@ -9,6 +9,9 @@ workbench: lock controls (bias, RF attenuation, setpoint, lock/unlock)
 with photodiode + bias strip charts on top, the bias-scan panel in the
 middle (transfer function; only while unlocked), and a mirror of the
 OSA spectrum at the bottom so the comb is visible while adjusting.
+**Spectral Flattener** holds the flattener hardware reachable from this
+laptop — currently just the ND-filter output slider (the SLM flattener
+itself stays on the Menlo laptop, see docs/user_guide/menlo_flattener.md).
 **Other** holds the rarely-touched hardware: EDFA13 (out of the light
 path), WaveShaper dispersion, TECs, YJ shutter, VOAs.
 """
@@ -39,12 +42,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..comb.locking import recommend_lock_point
 from . import prefs, spectra
 from .client import KeckogecoClient, PollThread, WriteThread
-from .theme import ACCENT, PLOT_BG, STATE_COLORS
+from .theme import ACCENT, MUTED, PLOT_BG, STATE_COLORS
 from .widgets import (
     KeywordDisplay,
     KeywordSpinBox,
+    LampDisplay,
     OnOffButton,
     SelectAllSpinBox,
     StatusLamp,
@@ -52,6 +57,17 @@ from .widgets import (
 )
 
 __all__ = ["MainWindow"]
+
+
+def _hint_label(text: str, tooltip: str = "") -> QLabel:
+    """Gray hint shown on its own row under the control it describes
+    (recommended values, normal operating ranges)."""
+    label = QLabel(text)
+    label.setStyleSheet(f"color: {MUTED};")
+    if tooltip:
+        label.setToolTip(tooltip)
+    return label
+
 
 # a subsystem mix that matches no canonical state is normal during manual
 # work — present it as engineering mode, not a fault
@@ -332,102 +348,170 @@ class OsaControls(QWidget):
 class ImServoPanel(QWidget):
     """Lock controls for the IM bias servo (top of the IM Bias Lock tab).
 
-    Manual bias (LFC_IM_BIAS), the RF attenuator drive (LFC_IM_RF_ATT),
-    the PID setpoint (the photodiode voltage the lock holds), and
-    Lock / Unlock buttons (LFC_IM_LOCK_MODE). Live readouts come from
-    the im_scan array payload; the strip charts beside this column are
-    owned by the main window.
+    Locking is deliberately manual (Dan, 2026-07-15): the operator sets
+    the photodiode lockpoint, the PI gains, and the Bias start here,
+    then presses Lock — the GUI writes Bias start to LFC_IM_BIAS and
+    engages LFC_IM_LOCK_MODE (the server copies that bias into the
+    SIM960 output offset on engage, so the PID takes over bumplessly).
+    While locked the Bias out box is read-only and follows the PID's
+    live output; the lockpoint stays adjustable. The scan panel below
+    suggests values for these boxes. Live readouts come from the
+    im_scan array payload; gains populate from GET/PUT /im read-backs.
+    The strip charts beside this column are owned by the main window.
     """
 
-    def __init__(self, set_lock, bias_widget=None, rf_att_widget=None, setpoint_widget=None):
+    def __init__(
+        self,
+        set_lock,
+        bias_widget=None,
+        rf_att_widget=None,
+        setpoint_widget=None,
+        prop_widget=None,
+        intg_widget=None,
+        bias_start_widget=None,
+    ):
         super().__init__()
-        self.setMaximumWidth(250)
-        form = QFormLayout(self)
-        form.setContentsMargins(0, 0, 0, 0)
+        self._set_lock = set_lock
+        self._locked: bool | None = None
+        self.setMaximumWidth(500)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
 
-        if bias_widget is not None:
-            bias_widget.setToolTip("manual bias output (drives the IM while unlocked)")
-            form.addRow("Bias", bias_widget)
-        if rf_att_widget is not None:
-            # LFC_IM_RF_ATT: the VCA drive on RF oscillator supply ch 3.
-            # Iterate it against the bias while flattening the mini-comb.
-            form.addRow("RF atten", rf_att_widget)
-            hint = QLabel("recommended 0.80–0.85 V")
-            hint.setStyleSheet("color: #5a6472;")
-            hint.setToolTip(
-                "normal operating range of the RF attenuator drive (docs: locking procedure step 4)"
-            )
-            form.addRow("", hint)
-        self.setpoint = setpoint_widget
-        if setpoint_widget is not None:
-            form.addRow("Setpoint", setpoint_widget)
-
-        buttons = QHBoxLayout()
-        self.lock_button = QPushButton("Lock")
-        self.lock_button.setToolTip("engage the PID at the setpoint (LFC_IM_LOCK_MODE = 1)")
-        self.lock_button.clicked.connect(lambda: set_lock(True))
-        self.unlock_button = QPushButton("Unlock")
-        self.unlock_button.setToolTip("back to manual bias output (LFC_IM_LOCK_MODE = 0)")
-        self.unlock_button.clicked.connect(lambda: set_lock(False))
-        buttons.addWidget(self.lock_button)
-        buttons.addWidget(self.unlock_button)
-        form.addRow("Servo", buttons)
-
-        mode_row = QHBoxLayout()
+        # the one-button workflow comes first: the lamp in the corner,
+        # Locked/Unlocked, and the Lock/Unlock toggle (no row label)
+        status_row = QHBoxLayout()
         self.lamp = StatusLamp("IM lock")
-        self.mode = QLabel("—")
-        self.mode.setToolTip("SIM960 output mode (manual bias vs engaged PID)")
-        mode_row.addWidget(self.lamp)
-        mode_row.addWidget(self.mode, stretch=1)
-        form.addRow("Mode", mode_row)
+        self.status = QLabel("—")
+        self.status.setToolTip("SIM960 output mode (manual bias vs engaged PID)")
+        self.lock_button = QPushButton("Lock")
+        self.lock_button.clicked.connect(self._toggle_lock)
+        status_row.addWidget(self.lamp)
+        status_row.addWidget(self.status)
+        status_row.addWidget(self.lock_button, stretch=1)
+        grid.addLayout(status_row, 0, 0, 1, 4)
+
+        self.bias = bias_widget
+        if bias_widget is not None:
+            bias_widget.setToolTip(
+                "bias applied to the IM — editable while unlocked; while locked "
+                "it is read-only and follows the PID's live output"
+            )
         self.input_v = QLabel("—")
         self.input_v.setToolTip("servo measure input — the minicomb photodiode voltage")
-        form.addRow("Photodiode", self.input_v)
-        self.output_v = QLabel("—")
-        self.output_v.setToolTip("servo output — the bias voltage actually applied to the IM")
-        form.addRow("Bias out", self.output_v)
+        self.setpoint = setpoint_widget
+        self.prop = prop_widget
+        self.intg = intg_widget
+        self.bias_start = bias_start_widget
+        # two columns, filled top to bottom, keep the panel short (the
+        # spectrum at the bottom of the tab needs the vertical space)
+        pairs = [
+            (label, widget)
+            for label, widget in (
+                ("Bias out", bias_widget),
+                ("Photodiode", self.input_v),
+                ("Lockpoint", setpoint_widget),
+                ("P gain", prop_widget),
+                ("I gain", intg_widget),
+                ("Bias start", bias_start_widget),
+                # LFC_IM_RF_ATT: the VCA drive on RF oscillator supply ch 3.
+                # Iterate it against the bias while flattening the mini-comb.
+                ("RF atten", rf_att_widget),
+            )
+            if widget is not None
+        ]
+        rows = (len(pairs) + 1) // 2
+        for index, (label, widget) in enumerate(pairs):
+            column, row = divmod(index, rows)
+            grid.addWidget(QLabel(label), row + 1, column * 2)
+            grid.addWidget(widget, row + 1, column * 2 + 1)
+        if rf_att_widget is not None:
+            # the RF-atten hint takes the slot after the last pair
+            column, row = divmod(len(pairs), rows)
+            grid.addWidget(
+                _hint_label(
+                    "recommended 0.80–0.85 V",
+                    "normal operating range of the RF attenuator drive "
+                    "(docs: locking procedure step 4)",
+                ),
+                row + 1,
+                column * 2,
+                1,
+                2,
+            )
+        self._show_locked(None)
+
+    def _toggle_lock(self) -> None:
+        # unknown state (server unreachable, scanning): treat as unlocked
+        self._set_lock(not self._locked)
+
+    def _show_locked(self, locked: bool | None) -> None:
+        """Flip the status row + bias-box editability to the lock state
+        (None = unknown/scanning: leave the bias box alone)."""
+        self._locked = locked
+        self.lamp.set_state(locked)
+        if locked is None:
+            return
+        self.status.setText("Locked" if locked else "Unlocked")
+        self.lock_button.setText("Unlock" if locked else "Lock")
+        self.lock_button.setToolTip(
+            "back to manual bias output (LFC_IM_LOCK_MODE = 0)"
+            if locked
+            else "engage the PID at the setpoint, starting from the Bias start "
+            "value (writes LFC_IM_BIAS, then LFC_IM_LOCK_MODE = 1)"
+        )
+        if self.bias is not None:
+            self.bias.setEnabled(not locked)
 
     def update_status(self, payload: dict) -> None:
         """Refresh mode + readouts from the im_scan array (or a PUT /im
         read-back — same keys)."""
         if payload.get("running"):
-            self.mode.setText("scanning …")
+            self.status.setText("scanning …")
             self.lamp.set_state(None)
-        else:
-            mode = payload.get("mode")
-            if mode is not None:
-                locked = mode == "PID"
-                self.mode.setText("LOCKED (PID)" if locked else "MANUAL")
-                self.lamp.set_state(locked)
+        elif payload.get("mode") is not None:
+            self._show_locked(payload["mode"] == "PID")
         if self.setpoint is not None and payload.get("setpoint_V") is not None:
             self.setpoint.update_value(payload["setpoint_V"])
+        if self.prop is not None and payload.get("prop_gain") is not None:
+            self.prop.update_value(payload["prop_gain"])
+        if self.intg is not None and payload.get("intg_gain") is not None:
+            self.intg.update_value(payload["intg_gain"])
         # while scanning the live input is the last recorded sweep point
         value = payload["y"][-1] if payload.get("running") and payload.get("y") else None
         if value is None:
             value = payload.get("input_V")
         if value is not None:
             self.input_v.setText(f"{value:.4f} V")
-        if payload.get("bias_V") is not None:
-            self.output_v.setText(f"{payload['bias_V']:.3f} V")
+        if self.bias is not None and payload.get("bias_V") is not None:
+            self.bias.update_value(payload["bias_V"])
 
 
 class ImScanControls(QWidget):
     """Controls column beside the IM bias-scan plot (middle of the tab).
 
-    Scan defaults are the auto-lock's commissioned sweep (−2 .. +1 V in
-    20 mV steps, 0.2 s settle). The scan runs on the server's action
-    executor, so it excludes the comb transitions and the shared Abort
-    stops it; the pre-scan bias is restored when the sweep ends. A scan
-    can only start while the lock is off (the server refuses otherwise).
+    Scan defaults sweep ±5 V in 0.1 V steps with a 1 s settle (a
+    sub-second settle makes MMON repeat readings across consecutive
+    points; at the EDFA27 commissioned 450 mW the photodetector clips
+    above ~5.5 V — see docs/hardware/design.md). A finished scan shows
+    suggested lock settings here (text only — the operator enters them
+    in the servo panel above). Save writes the scan to CSV; Load ref
+    overlays a saved calibration curve on the plot and is remembered
+    across GUI restarts, like the OSA reference spectrum. The scan runs
+    on the server's action executor, so it excludes the comb transitions
+    and the shared Abort stops it; the pre-scan bias is restored when
+    the sweep ends. A scan can only start while the lock is off (the
+    server refuses otherwise).
     """
 
-    def __init__(self, start_scan, abort_scan, save_scan):
+    def __init__(self, start_scan, abort_scan, save_scan, load_ref):
         super().__init__()
         self._start_scan = start_scan
-        self.setMaximumWidth(250)
+        self.setMaximumWidth(280)
 
-        form = QFormLayout(self)
-        form.setContentsMargins(0, 0, 0, 0)
+        # two-column grid keeps the panel short (the spectrum below needs
+        # the vertical space): Start|Stop and Step|Settle share rows
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
 
         def spin(value, low, high, step, decimals, units, tip) -> QDoubleSpinBox:
             box = SelectAllSpinBox()
@@ -440,19 +524,24 @@ class ImScanControls(QWidget):
             box.valueChanged.connect(self._refresh_estimate)
             return box
 
-        # bounds mirror the server's ImScanRequest (±3 V, the LFC_IM_BIAS range)
-        self.v_start = spin(-2.0, -3, 3, 0.1, 3, "V", "scan start bias")
-        self.v_stop = spin(1.0, -3, 3, 0.1, 3, "V", "scan stop bias")
-        self.v_step = spin(0.02, 0.002, 0.5, 0.005, 3, "V", "bias step between points")
-        self.settle_s = spin(0.2, 0.0, 5.0, 0.1, 2, "s", "settle time before each reading")
-        form.addRow("Start", self.v_start)
-        form.addRow("Stop", self.v_stop)
-        form.addRow("Step", self.v_step)
-        form.addRow("Settle", self.settle_s)
+        # bounds mirror the server's ImScanRequest (±8 V, under the SIM960's ±10 V spec)
+        self.v_start = spin(-5.0, -8, 8, 0.1, 3, "V", "scan start bias")
+        self.v_stop = spin(5.0, -8, 8, 0.1, 3, "V", "scan stop bias")
+        self.v_step = spin(0.1, 0.002, 0.5, 0.005, 3, "V", "bias step between points")
+        self.settle_s = spin(1.0, 0.0, 5.0, 0.1, 2, "s", "settle time before each reading")
+        for row, pairs in enumerate(
+            (
+                (("Start", self.v_start), ("Stop", self.v_stop)),
+                (("Step", self.v_step), ("Settle", self.settle_s)),
+            )
+        ):
+            for column, (label, box) in enumerate(pairs):
+                grid.addWidget(QLabel(label), row, column * 2)
+                grid.addWidget(box, row, column * 2 + 1)
 
         self.estimate = QLabel("")
         self.estimate.setStyleSheet("color: #5a6472;")
-        form.addRow("", self.estimate)
+        grid.addWidget(self.estimate, 2, 0, 1, 4)
         self._refresh_estimate()
 
         buttons = QHBoxLayout()
@@ -463,14 +552,49 @@ class ImScanControls(QWidget):
         self.abort_button.setToolTip("stop the running scan (the bias is restored)")
         self.abort_button.setEnabled(False)
         self.abort_button.clicked.connect(lambda: abort_scan())
-        buttons.addWidget(self.scan_button)
-        buttons.addWidget(self.abort_button)
-        form.addRow("Scan", buttons)
-
         save = QPushButton("Save")
         save.setToolTip("save the scan to a CSV file")
         save.clicked.connect(lambda: save_scan())
-        form.addRow("Data", save)
+        ref = QPushButton("Load ref")
+        ref.setToolTip(
+            "overlay a saved calibration scan on the plot (remembered across GUI restarts)"
+        )
+        ref.clicked.connect(lambda: load_ref())
+        for button in (self.scan_button, self.abort_button, save, ref):
+            buttons.addWidget(button)
+        grid.addLayout(buttons, 3, 0, 1, 4)
+
+        self.recommend = QLabel(self.RECOMMEND_PLACEHOLDER)
+        self.recommend.setWordWrap(True)
+        self.recommend.setStyleSheet("color: #5a6472;")
+        self.recommend.setToolTip(
+            "suggested lock settings from the last scan — enter them in the "
+            "servo panel above, then Lock (scan progress shows here too)"
+        )
+        # reserve two lines so text arriving doesn't reflow the whole tab
+        self.recommend.setMinimumHeight(2 * self.recommend.fontMetrics().lineSpacing())
+        grid.addWidget(self.recommend, 4, 0, 1, 4)
+        grid.setRowStretch(5, 1)
+
+    #: what the suggestion box says before any scan has run
+    RECOMMEND_PLACEHOLDER = "run a scan to determine the lockpoint"
+
+    def show_recommendation(self, rec: dict) -> None:
+        """Display suggested lock settings from a finished scan (text
+        only, deliberately: the operator types them into the servo panel)."""
+        self.recommend.setText(
+            f"suggest: lockpoint {rec['setpoint_V']:+.3f} V from bias "
+            f"{rec['bias_V']:+.3f} V, P {rec['prop_gain']:+.1f}, I {rec['intg_gain']:g}"
+        )
+
+    def show_progress(self, text: str) -> None:
+        """Scan progress shares the suggestion box (no separate status
+        line on this tab); the suggestion replaces it when the scan ends."""
+        self.recommend.setText(text)
+
+    def show_placeholder(self) -> None:
+        """Back to the resting text (aborted/unusable scan)."""
+        self.recommend.setText(self.RECOMMEND_PLACEHOLDER)
 
     def params(self) -> dict:
         return {
@@ -498,6 +622,81 @@ class ImScanControls(QWidget):
             else "sweep the bias and plot the photodiode response"
         )
         self.abort_button.setEnabled(running)
+
+
+class FlattenerSliderPanel(QWidget):
+    """The flattener's ND-filter output slider (Thorlabs ELL12).
+
+    Six slot buttons carrying the measured attenuations from the user
+    guide (position 6 is the 0 dB reference); the current slot is
+    highlighted from the GET/PUT read-back. The slider is not polled —
+    the state refreshes after every command and via the Refresh button.
+    Works fine with the slider not connected: the status line reports it
+    and every command answers with the server's refusal.
+    """
+
+    #: measured insertion loss per slot (docs/user_guide/menlo_flattener.md)
+    ATTENUATIONS = {
+        1: "~5 dB",
+        2: "~10 dB",
+        3: "~20 dB",
+        4: ">20 dB",
+        5: ">20 dB",
+        6: "0 dB",
+    }
+
+    def __init__(self, set_position, home, refresh):
+        super().__init__()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        slots = QHBoxLayout()
+        self.position_buttons: dict[int, QPushButton] = {}
+        for slot, atten in self.ATTENUATIONS.items():
+            button = QPushButton(f"{slot}\n{atten}")
+            suffix = " — the 0 dB reference" if slot == 6 else ""
+            button.setToolTip(f"move the slider to position {slot} ({atten}{suffix})")
+            button.clicked.connect(lambda _checked, s=slot: set_position(s))
+            self.position_buttons[slot] = button
+            slots.addWidget(button)
+        outer.addLayout(slots)
+
+        status_row = QHBoxLayout()
+        self.position_label = QLabel("position —")
+        self.position_label.setToolTip(
+            "current slot from the last read-back; — means unknown "
+            "(between slots, not homed, or slider offline)"
+        )
+        status_row.addWidget(self.position_label)
+        self.detail_label = QLabel("")
+        self.detail_label.setStyleSheet("color: #5a6472; font-style: italic;")
+        status_row.addWidget(self.detail_label, stretch=1)
+        home_button = QPushButton("Home")
+        home_button.setToolTip("re-reference the slider (needed once after a power-up)")
+        home_button.clicked.connect(lambda: home())
+        status_row.addWidget(home_button)
+        refresh_button = QPushButton("Refresh")
+        refresh_button.setToolTip("re-read the slider position")
+        refresh_button.clicked.connect(lambda: refresh())
+        status_row.addWidget(refresh_button)
+        outer.addLayout(status_row)
+
+    def update_status(self, payload: dict) -> None:
+        """Highlight the current slot from a GET/PUT read-back."""
+        position = payload.get("position")
+        self.detail_label.setText("")
+        self.position_label.setText(f"position {position if position is not None else '—'}")
+        for slot, button in self.position_buttons.items():
+            active = position == slot
+            button.setStyleSheet(f"color: {ACCENT}; font-weight: bold;" if active else "")
+
+    def set_offline(self, detail: str) -> None:
+        """Show why the slider is unreachable; the buttons stay live so a
+        retry is one click (the server answers 503 with the reason)."""
+        self.position_label.setText("position —")
+        self.detail_label.setText(f"(not connected: {detail})")
+        for button in self.position_buttons.values():
+            button.setStyleSheet("")
 
 
 class MainWindow(QMainWindow):
@@ -541,10 +740,25 @@ class MainWindow(QMainWindow):
     def _spec(self, keyword: str) -> dict:
         return self.schema.get(keyword, {})
 
-    def _add_spin(self, form: QFormLayout, label: str, keyword: str, submit=None) -> None:
+    def _add_spin(
+        self,
+        form: QFormLayout,
+        label: str,
+        keyword: str,
+        submit=None,
+        readback: bool = False,
+        default: float | None = None,
+    ) -> None:
+        """Add a setpoint box. ``readback`` shows the measured value beside
+        it (the box then holds the setpoint only); ``default`` pre-fills the
+        box — display only, a value is never auto-applied to hardware."""
         if keyword not in self.schema:
             return
-        widget = KeywordSpinBox(keyword, self._spec(keyword), submit or self._submit)
+        widget = KeywordSpinBox(keyword, self._spec(keyword), submit or self._submit, readback)
+        if default is not None:
+            widget.spin.blockSignals(True)
+            widget.spin.setValue(default)
+            widget.spin.blockSignals(False)
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
@@ -552,6 +766,13 @@ class MainWindow(QMainWindow):
         if keyword not in self.schema:
             return
         widget = KeywordDisplay(keyword, self._spec(keyword))
+        self.widgets[keyword] = widget
+        form.addRow(label, widget)
+
+    def _add_lamp_display(self, form: QFormLayout, label: str, keyword: str, ok) -> None:
+        if keyword not in self.schema:
+            return
+        widget = LampDisplay(keyword, self._spec(keyword), ok, label=label)
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
@@ -568,6 +789,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._overview_tab(), "Overview")
         tabs.addTab(self._im_lock_tab(), "IM Bias Lock")
+        tabs.addTab(self._flattener_tab(), "Spectral Flattener")
         tabs.addTab(self._other_tab(), "Other")
         self.setCentralWidget(tabs)
 
@@ -619,21 +841,71 @@ class MainWindow(QMainWindow):
         self._im_layout = QHBoxLayout(scan_box)
         self._im_plot = None
         self._im_controls: ImScanControls | None = None
+        self._im_pos_dot = None
+        self._im_ref_curve = None
+        self._im_scan_was_running = False
+        self._im_bias_start = None
         self._im_placeholder = placeholder("(SRS SIM900 not connected)")
         self._im_layout.addWidget(self._im_placeholder, stretch=1)
-        layout.addWidget(scan_box, stretch=3)
+        layout.addWidget(scan_box, stretch=2)
 
         osa_box = QGroupBox("Mini-comb spectrum (OSA) — controls on the Overview tab")
         self._im_osa_layout = QHBoxLayout(osa_box)
         self._im_osa_plot = None
         self._im_osa_placeholder = placeholder("(OSA not connected)")
         self._im_osa_layout.addWidget(self._im_osa_placeholder, stretch=1)
-        layout.addWidget(osa_box, stretch=2)
-
-        self.im_action_label = QLabel("")
-        self.im_action_label.setWordWrap(True)
-        layout.addWidget(self.im_action_label)
+        layout.addWidget(osa_box, stretch=3)
         return page
+
+    def _flattener_tab(self) -> QWidget:
+        """Flattener hardware reachable from this laptop — for now just
+        the ND-filter output slider. Built whether or not the slider is
+        connected: offline shows as a status line, and commands surface
+        the server's refusal in the status bar."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        box = QGroupBox(
+            self._title_with_port(
+                "Output attenuator — ND filter slider (Thorlabs ELL12)", "nd_slider"
+            )
+        )
+        inner = QVBoxLayout(box)
+        self._flattener_panel = FlattenerSliderPanel(
+            self._flattener_set, self._flattener_home, self._flattener_refresh
+        )
+        inner.addWidget(self._flattener_panel)
+        layout.addWidget(box)
+
+        note = QLabel(
+            "The SLM flattener itself (Flatten / Filter modes) runs on the Menlo "
+            "laptop via Google Remote Desktop — see the user guide "
+            "(docs/user_guide/menlo_flattener.md). Only the output ND-filter "
+            "slider is controlled from here."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #5a6472;")
+        layout.addWidget(note)
+        layout.addStretch(1)
+
+        device = self.devices.get("nd_slider", {})
+        if device.get("online"):
+            self._flattener_refresh()
+        else:
+            reason = device.get("offline_reason") or (
+                "offline" if device else "no nd_slider block in the server config"
+            )
+            self._flattener_panel.set_offline(str(reason))
+        return page
+
+    def _flattener_set(self, position: int) -> None:
+        self.writer.submit_call("flattener", lambda c: c.flattener_slider_set(position))
+
+    def _flattener_home(self) -> None:
+        self.writer.submit_call("flattener", lambda c: c.flattener_slider_home())
+
+    def _flattener_refresh(self) -> None:
+        self.writer.submit_call("flattener", lambda c: c.flattener_slider())
 
     def _other_tab(self) -> QWidget:
         page = QWidget()
@@ -764,10 +1036,13 @@ class MainWindow(QMainWindow):
                     widget.spin.blockSignals(True)
                     widget.spin.setValue(float(saved))
                     widget.spin.blockSignals(False)
-                hint = QLabel(f"{self._EDFA23_RECOMMENDED_MA:g} mA")
-                hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                hint.setToolTip("the commissioned ACC pump current")
-                form.addRow("Recommended", hint)
+                form.addRow(
+                    "",
+                    _hint_label(
+                        f"recommended {self._EDFA23_RECOMMENDED_MA:g} mA",
+                        "the commissioned ACC pump current",
+                    ),
+                )
         else:
             self._add_spin(form, "Setpoint", f"{prefix}_P")
         self._add_display(form, "Input power", f"{prefix}_INPUT_POWER_MONITOR")
@@ -779,10 +1054,17 @@ class MainWindow(QMainWindow):
         self._submit(keyword, value)
         prefs.save_section("edfa23", {"setpoint_mA": float(value)})
 
+    #: LFC_PTAMP_LATCH enum value meaning "ready to amplify" (schema enum:
+    #: 1 ready, 0 stop-but-resettable, 3 too high, 5 too low, 4 unknown)
+    _LATCH_READY = 1
+
     def _interlock_panel(self) -> QGroupBox:
         box = QGroupBox(self._title_with_port("Interlock", "arduino_relay"))
         form = QFormLayout(box)
-        self._add_display(form, "Latch", "LFC_PTAMP_LATCH")
+        # lamp on the top row, like the Emission rows of the panels beside it
+        self._add_lamp_display(
+            form, "Latch", "LFC_PTAMP_LATCH", ok=lambda v: int(v) == self._LATCH_READY
+        )
         self._add_display(form, "Voltage", "LFC_PTAMP_INTERLOCK_V")
         # trip window fetched once at startup (thresholds are quasi-static);
         # the live voltage is colored green/red against it in _on_keywords
@@ -799,13 +1081,27 @@ class MainWindow(QMainWindow):
         self.writer.submit_call("interlock", lambda c: c.interlock())
         return box
 
+    #: commissioned Pritel bring-up currents (comb/actions.py _pritel_up)
+    _PTAMP_PREAMP_MA = 600.0
+    _PTAMP_PWRAMP_A = 3.9
+
     def _pritel_panel(self) -> QGroupBox:
         box = QGroupBox(self._title_with_port("Pritel amplifier", "ptamp"))
         form = QFormLayout(box)
-        self._add_onoff(form, "Pump", "LFC_PTAMP_ONOFF")
-        self._add_display(form, "Input power", "LFC_PTAMP_IN")
-        self._add_spin(form, "Preamp", "LFC_PTAMP_PRE_P")
-        self._add_spin(form, "Power amp", "LFC_PTAMP_I")
+        # "Emission" (not "Pump") to match the EDFA panels: one enable for
+        # the whole box — it gates the power amp; the preamp is driven by
+        # its current setpoint alone.
+        self._add_onoff(form, "Emission", "LFC_PTAMP_ONOFF")
+        self._add_display(form, "Power after preamp", "LFC_PTAMP_IN")
+        # both currents read back 0 until emission is on, so these boxes
+        # hold the setpoint (pre-filled with the commissioned bring-up
+        # values) and show the measured current beside it
+        self._add_spin(
+            form, "Preamp", "LFC_PTAMP_PRE_P", readback=True, default=self._PTAMP_PREAMP_MA
+        )
+        self._add_spin(
+            form, "Power amp", "LFC_PTAMP_I", readback=True, default=self._PTAMP_PWRAMP_A
+        )
         self._add_display(form, "Output", "LFC_PTAMP_OUT")
         return box
 
@@ -935,16 +1231,27 @@ class MainWindow(QMainWindow):
             symbolPen=None,
         )
         self._im_plot = (plot, curve)
+        # purple dot: where the servo currently sits on the transfer curve
+        # (current bias out vs photodiode), refreshed by the im_scan array
+        self._im_pos_dot = plot.plot(
+            [], [], pen=None, symbol="o", symbolSize=10, symbolBrush="#c678dd", symbolPen=None
+        )
+        self._im_pos_dot.setZValue(1)  # above the scan trace
+        self._im_ref_curve = None  # dashed overlay, created on first load
         self._im_placeholder.deleteLater()
         self._im_layout.addWidget(plot, stretch=1)
-        self._im_controls = ImScanControls(self._im_scan_start, self._abort_action, self._im_save)
+        self._im_controls = ImScanControls(
+            self._im_scan_start, self._abort_action, self._im_save, self._im_load_ref
+        )
         self._im_layout.addWidget(self._im_controls)
+        self._im_restore_reference()
 
         # --- top: lock controls + photodiode / bias strip charts
+        # every editable box steps 0.01 per arrow click (Dan, 2026-07-16)
         def keyword_spin(keyword: str) -> KeywordSpinBox | None:
             if keyword not in self.schema:
                 return None
-            widget = KeywordSpinBox(keyword, self._spec(keyword), self._submit)
+            widget = KeywordSpinBox(keyword, {**self._spec(keyword), "step": 0.01}, self._submit)
             self.widgets[keyword] = widget
             return widget
 
@@ -954,18 +1261,62 @@ class MainWindow(QMainWindow):
                 "units": "V",
                 "min": -10,
                 "max": 10,
-                "help": "lock setpoint — the photodiode voltage the PID holds",
+                "step": 0.01,
+                "help": "lockpoint — the photodiode voltage the PID holds "
+                "(adjustable while locked)",
             },
             lambda _f, value: self._im_apply(setpoint_V=value),
         )
+        prop = KeywordSpinBox(
+            "prop_gain",
+            {
+                "min": -1000,
+                "max": 1000,
+                "step": 0.01,
+                "help": "SIM960 proportional gain — the sign sets the feedback "
+                "polarity and must match the fringe slope's sign",
+            },
+            lambda _f, value: self._im_apply(prop_gain=value),
+        )
+        intg = KeywordSpinBox(
+            "intg_gain",
+            {
+                "min": 0.01,
+                "max": 500000,
+                "step": 0.01,
+                "help": "SIM960 integral gain (1/s)",
+            },
+            lambda _f, value: self._im_apply(intg_gain=value),
+        )
+        self._im_bias_start = KeywordSpinBox(
+            "bias_start",
+            {
+                "units": "V",
+                "min": -8,
+                "max": 8,
+                "step": 0.01,
+                "help": "bias the lock starts from — Lock writes it to LFC_IM_BIAS "
+                "before engaging (remembered across GUI restarts)",
+            },
+            lambda _f, value: prefs.save_section("im_lock", {"bias_start": value}),
+        )
+        saved_start = prefs.load_section("im_lock").get("bias_start")
+        if saved_start is not None:
+            self._im_bias_start.update_value(saved_start)
         self._im_servo_panel = ImServoPanel(
             self._im_set_lock,
             bias_widget=keyword_spin("LFC_IM_BIAS"),
             rf_att_widget=keyword_spin("LFC_IM_RF_ATT"),
             setpoint_widget=setpoint,
+            prop_widget=prop,
+            intg_widget=intg,
+            bias_start_widget=self._im_bias_start,
         )
         self._im_servo_placeholder.deleteLater()
         self._im_servo_layout.addWidget(self._im_servo_panel)
+        # populate the gain boxes (and mode) from the live servo: an empty
+        # im_apply is a read — gains are not in the polled array payload
+        self.writer.submit_call("IM settings", lambda c: c.im_apply())
 
         self._im_history: dict[str, list] = {"t": [], "pd": [], "bias": []}
         self._im_charts = []
@@ -1001,6 +1352,11 @@ class MainWindow(QMainWindow):
             curve.setData(ages, history[key])
 
     def _im_set_lock(self, engage: bool) -> None:
+        if engage and self._im_bias_start is not None:
+            # start the lock from the Bias start box: the write queue is
+            # FIFO, so the bias lands before the engage copies it into
+            # the SIM960 output offset
+            self._submit("LFC_IM_BIAS", self._im_bias_start.spin.value())
         self._submit("LFC_IM_LOCK_MODE", "1" if engage else "0")
 
     def _im_apply(self, **settings) -> None:
@@ -1009,6 +1365,68 @@ class MainWindow(QMainWindow):
     def _im_scan_start(self) -> None:
         params = self._im_controls.params()
         self.writer.submit_call("IM scan", lambda c: c.im_scan(**params))
+
+    def _im_recommend_if_scan_finished(self, data: dict) -> None:
+        """A running->stopped edge on the im_scan array means a sweep just
+        ended: analyze it and show suggested lock settings (text only —
+        the operator enters them in the servo panel)."""
+        running = bool(data.get("running"))
+        finished = self._im_scan_was_running and not running
+        self._im_scan_was_running = running
+        if not finished or self._im_controls is None:
+            return
+        try:
+            # suggest the mid-fringe crossing nearest the previous
+            # lock-start bias, so the suggestion stays on "our" fringe
+            start = self._im_bias_start
+            near = start.spin.value() if start is not None else None
+            rec = recommend_lock_point(data.get("x") or [], data.get("y") or [], near_bias=near)
+        except ValueError as exc:
+            # e.g. an aborted sweep: clear the stale progress text
+            self._im_controls.show_placeholder()
+            self.statusBar().showMessage(f"no lock-setting suggestion: {exc}", 10000)
+            return
+        self._im_controls.show_recommendation(rec)
+
+    def _im_set_ref_curve(self, x: list, y: list) -> None:
+        """Show (or update) the dashed reference-calibration overlay."""
+        if self._im_ref_curve is None:
+            import pyqtgraph as pg
+
+            plot, _live = self._im_plot
+            pen = pg.mkPen("#b085f5", width=1, style=Qt.PenStyle.DashLine)
+            self._im_ref_curve = plot.plot(pen=pen, name="reference")
+            self._im_ref_curve.setZValue(-1)  # behind the live scan
+        self._im_ref_curve.setData(x, y)
+
+    def _im_load_ref(self) -> None:
+        """Pick a saved scan CSV as the reference calibration curve; the
+        choice is remembered in the GUI prefs (like the OSA reference)."""
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Load reference calibration scan", str(self._spectra_dir()), "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            x, y, _metadata = spectra.load_spectrum_csv(path)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"LOAD FAILED: {exc}", 10000)
+            return
+        self._im_set_ref_curve(x, y)
+        prefs.save_section("im_reference", {"csv": Path(path).as_posix()})
+        self.statusBar().showMessage(f"IM reference calibration: {path}", 8000)
+
+    def _im_restore_reference(self) -> None:
+        """Re-display the saved reference calibration scan, if any."""
+        saved = prefs.load_section("im_reference").get("csv")
+        if not saved:
+            return
+        try:
+            x, y, _metadata = spectra.load_spectrum_csv(saved)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"IM reference not restored: {exc}", 10000)
+            return
+        self._im_set_ref_curve(x, y)
 
     def _im_save(self) -> None:
         data = getattr(self, "_im_data", None)
@@ -1125,6 +1543,9 @@ class MainWindow(QMainWindow):
                 self._im_servo_panel.update_status(result)  # PUT read-back
             return
         if not isinstance(result, dict):
+            return
+        if label == "flattener":
+            self._flattener_panel.update_status(result)
             return
         if label == "interlock":
             low = result.get("low_threshold_V")
@@ -1300,10 +1721,13 @@ class MainWindow(QMainWindow):
             text = ""
         # IM scan/lock progress stays off the comb-state row: the per-point
         # messages are long and squish the top of the Overview tab. It goes
-        # to the status bar (like other info messages) + the IM tab's label.
+        # to the status bar (like other info messages) and, while running,
+        # to the scan panel's suggestion box (the suggestion replaces it
+        # when the sweep ends).
         is_im = bool(action) and str(action.get("name", "")).startswith("im_")
         self.action_label.setText("" if is_im else text)
-        self.im_action_label.setText(text if is_im else "")
+        if is_im and action.get("running") and self._im_controls is not None:
+            self._im_controls.show_progress(text)
         if is_im and text != self._im_status_shown:
             self._im_status_shown = text
             # persists while running (refreshed as the message advances);
@@ -1330,6 +1754,16 @@ class MainWindow(QMainWindow):
             if self._im_servo_panel is not None:
                 self._im_servo_panel.update_status(data)
                 self._im_record_history(data)
+            # purple dot: where the servo sits on the curve right now.
+            # Mid-sweep the payload has no live readouts (the poller
+            # doesn't compete with the scan for the mainframe), but the
+            # newest sweep point IS the current position
+            if self._im_pos_dot is not None:
+                if data.get("running") and data.get("x") and data.get("y"):
+                    self._im_pos_dot.setData([data["x"][-1]], [data["y"][-1]])
+                elif data.get("bias_V") is not None and data.get("input_V") is not None:
+                    self._im_pos_dot.setData([data["bias_V"]], [data["input_V"]])
+            self._im_recommend_if_scan_finished(data)
 
     def _on_connection(self, ok: bool, detail: str) -> None:
         if ok:
@@ -1342,6 +1776,8 @@ class MainWindow(QMainWindow):
 
     def _on_write_failed(self, keyword: str, error: str) -> None:
         self.statusBar().showMessage(f"WRITE FAILED {keyword}: {error}", 10000)
+        if keyword == "flattener":
+            self._flattener_panel.set_offline(error)
         # let the next poll snap the box back to the instrument's value
         widget = self.widgets.get(keyword)
         if hasattr(widget, "write_rejected"):
