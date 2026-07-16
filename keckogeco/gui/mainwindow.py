@@ -847,14 +847,16 @@ class MainWindow(QMainWindow):
         self._im_bias_start = None
         self._im_placeholder = placeholder("(SRS SIM900 not connected)")
         self._im_layout.addWidget(self._im_placeholder, stretch=1)
-        layout.addWidget(scan_box, stretch=2)
+        # the scan is a utility view: keep it short (stretch 1 + a height
+        # cap on its plot) so the spectrum below dominates the tab
+        layout.addWidget(scan_box, stretch=1)
 
         osa_box = QGroupBox("Mini-comb spectrum (OSA) — controls on the Overview tab")
         self._im_osa_layout = QHBoxLayout(osa_box)
         self._im_osa_plot = None
         self._im_osa_placeholder = placeholder("(OSA not connected)")
         self._im_osa_layout.addWidget(self._im_osa_placeholder, stretch=1)
-        layout.addWidget(osa_box, stretch=3)
+        layout.addWidget(osa_box, stretch=4)
         return page
 
     def _flattener_tab(self) -> QWidget:
@@ -1220,7 +1222,8 @@ class MainWindow(QMainWindow):
             return
         import pyqtgraph as pg
 
-        # --- middle: the scan plot + controls
+        # --- middle: the scan plot + controls (kept short deliberately)
+        plot.setMaximumHeight(230)
         plot.setLabel("bottom", "IM bias (V)")
         plot.setLabel("left", "photodiode (V)")
         curve = plot.plot(
