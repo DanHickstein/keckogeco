@@ -114,7 +114,28 @@ class PritelAmp(Instrument):
                 reply = self.transport.read()
             return reply.lstrip("\r\x00\x11\x13 ").strip()
 
-        return self._io(op, what=lambda: f"{cmd!r} ({stage})")
+        def op_with_resend() -> str:
+            # The unit occasionally goes silent for one command (~0.5%/cmd
+            # under the server's polling; rack-probed 2026-07-15: replies
+            # otherwise arrive in <200 ms). Every FA command is an
+            # idempotent absolute set or a query, so flush anything that
+            # straggled in and re-send once on the same open port —
+            # close/reopen (the base reconnect) is never needed for this
+            # and used to churn the log with a warning every few minutes.
+            try:
+                return op()
+            except Exception as exc:  # noqa: BLE001 - any transport error
+                self.log.debug(
+                    "%s: %r got no reply (%s at %s); resending on the open port",
+                    self.name,
+                    cmd,
+                    exc,
+                    stage,
+                )
+                self.transport.read_available()
+                return op()
+
+        return self._io(op_with_resend, what=lambda: f"{cmd!r} ({stage})")
 
     @staticmethod
     def _value_after_equals(response: str, what: str) -> float:
@@ -151,19 +172,35 @@ class PritelAmp(Instrument):
     def set_pump(self, on: bool) -> None:
         """Turn the pump on/off, re-sending until the readback confirms."""
         target = bool(on)
+        cmd = "FA ON" if target else "FA OFF"
         if target:
             self.log.info(
                 "%s: ACTIVATING PUMP - seed input power must be appropriate to avoid damage",
                 self.name,
             )
         deadline = time.monotonic() + self.PUMP_TIMEOUT_S
+        reply = None
         while self.pump_on != target:
             if time.monotonic() > deadline:
-                raise RuntimeError(
+                # The unit refuses with a reason (its reply text) — surface
+                # it plus the ASD state instead of a bare timeout, so a
+                # refusal in the log says WHY (2026-07-15: pump-on refusals
+                # looked healthy on every monitor we bind).
+                try:
+                    asd = self.auto_shutdown_status
+                except Exception as exc:  # noqa: BLE001 - best-effort context
+                    asd = f"<unreadable: {exc}>"
+                message = (
                     f"{self.name}: pump did not turn {'ON' if target else 'OFF'} "
-                    f"within {self.PUMP_TIMEOUT_S:.0f} s"
+                    f"within {self.PUMP_TIMEOUT_S:.0f} s; last {cmd!r} reply: "
+                    f"{reply!r}; ASD status: {asd!r}"
                 )
-            self._ask("FA ON" if target else "FA OFF")
+                # log it here too: raisers reached via a REST keyword write
+                # only surface a bare 500, and this reason must not be lost
+                self.log.error("%s", message)
+                raise RuntimeError(message)
+            reply = self._ask(cmd)
+            self.log.info("%s: %s -> %r", self.name, cmd, reply)
         self.log.info("%s: pump %s", self.name, "ON" if target else "OFF")
 
     # -------------------------------------------------------------- preamp
