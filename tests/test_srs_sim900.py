@@ -77,6 +77,19 @@ def test_setpoint_resolution_rounding(srs):
     assert servo.setpoint_V == pytest.approx(1.235)  # 1 mV resolution
 
 
+def test_slot_write_syncs_before_returning(srs):
+    """Every module write is followed by a query on the same connection:
+    the mainframe forwards commands to the module over a slow internal
+    link, and the next operation's device clear flushes that pipe — an
+    unsynced write could be silently discarded (live 2026-07-17: SETP
+    while locked never landed because PUT /im read state right back)."""
+    servo = srs.sim960(3)
+    servo.setpoint_V = 2.45
+    sent = srs.transport.sent
+    setp = max(i for i, c in enumerate(sent) if c.startswith("SETP") and not c.endswith("?"))
+    assert "*IDN?" in sent[setp + 1 :]  # sync query after the write, before any clear
+
+
 def test_module_inventory(srs):
     """The inventory IDNs every slot; sim rack = SIM960s in 3+5, SIM928
     in 2, everything else empty (no reply)."""
