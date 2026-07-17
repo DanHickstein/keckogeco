@@ -763,20 +763,20 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(page)
         outer.addWidget(self._comb_state_panel())
 
-        # three panels per row, tops: four across forced a >900 px window
+        # two dense rows (Dan, 2026-07-17): a ~950 px window is fine, but
+        # height is scarce — the window was clipping at the screen bottom
         row2 = QHBoxLayout()
         row2.addWidget(self._edfa_panel("Amonics EDFA 27 dBm", "LFC_EDFA27", "edfa27"), stretch=3)
         row2.addWidget(self._edfa_panel("Amonics EDFA 23 dBm", "LFC_EDFA23", "edfa23"), stretch=3)
         row2.addWidget(self._interlock_panel(), stretch=2)
+        row2.addWidget(self._pritel_panel(), stretch=4)
         outer.addLayout(row2)
 
         row3 = QHBoxLayout()
-        row3.addWidget(self._pritel_panel(), stretch=2)
-        row3.addWidget(self._rf_panel(), stretch=1)
-        row3.addWidget(self._waveshaper_panel(), stretch=1)
+        row3.addWidget(self._rf_panel())
+        row3.addWidget(self._waveshaper_panel())
+        row3.addWidget(self._temperature_panel(), stretch=1)
         outer.addLayout(row3)
-
-        outer.addWidget(self._temperature_panel())
 
         outer.addWidget(self._osa_panel(), stretch=1)
         return page
