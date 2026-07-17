@@ -325,6 +325,7 @@ class LFCController:
             )
         if has("pendulum"):
             bind("LFC_PENDULEM_FREQ_MONITOR", getter=lambda: self._rep_rate_ok() is True)
+            bind("LFC_REPRATE", getter=self._rep_rate_Hz)
 
         # --- Agiltron 2x2 switch (enumerated: 1 = YJ path, 2 = HK path)
         if has("switch2x2"):
@@ -774,6 +775,22 @@ class LFCController:
     REP_RATE_HZ = 16e9
     REP_RATE_TOLERANCE_HZ = 1000.0
 
+    def _rf_chain_on(self) -> bool:
+        """Both RF supplies (oscillator + amplifier) outputting."""
+        if "rf_osc_psu" not in self.devices or "rf_amp_psu" not in self.devices:
+            return False
+        return self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu")) and self.device(
+            "rf_amp_psu"
+        ).output_on(self.psu_channel("rf_amp_psu"))
+
+    def _rep_rate_Hz(self) -> float:
+        """Measured comb rep rate (LFC_REPRATE): Pendulum channel C.
+        NaN while the RF chain is off — with no 16 GHz drive the counter
+        has nothing to count and its FETC? would only time out."""
+        if not self._rf_chain_on():
+            return float("nan")
+        return self.device("pendulum").measure_frequency_Hz("c")
+
     def _rep_rate_ok(self) -> bool:
         """Rep-rate factor of the comb state (Pendulum counter, channel C).
 
@@ -783,10 +800,7 @@ class LFCController:
         trigger, so here a bad rep rate is reported (and logged loudly) but
         acting on it is left to the operator / a future safety monitor.
         """
-        rf_on = self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu")) and self.device(
-            "rf_amp_psu"
-        ).output_on(self.psu_channel("rf_amp_psu"))
-        if not rf_on:
+        if not self._rf_chain_on():
             return False
         if "pendulum" not in self.devices:
             return True  # counter unavailable: fall back to the RF-chain inference

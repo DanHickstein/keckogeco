@@ -51,6 +51,7 @@ from .widgets import (
     KeywordSpinBox,
     LampDisplay,
     OnOffButton,
+    PrecisionDisplay,
     SelectAllSpinBox,
     StatusLamp,
     ThermoArray,
@@ -923,8 +924,25 @@ class MainWindow(QMainWindow):
         row2.addWidget(self._voa_panel(), stretch=1)
         outer.addLayout(row2)
 
+        outer.addWidget(self._pendulum_panel())
         outer.addStretch(1)
         return page
+
+    def _pendulum_panel(self) -> QGroupBox:
+        """The comb repetition rate, measured — every digit the CNT-90XL
+        resolves (LFC_REPRATE; em dash while the RF chain is off)."""
+        box = QGroupBox(self._title_with_port("Repetition rate — Pendulum CNT-90XL", "pendulum"))
+        layout = QVBoxLayout(box)
+        display = PrecisionDisplay(
+            "LFC_REPRATE",
+            self._spec("LFC_REPRATE"),
+            decimals=2,
+            reference=16e9,  # the comb's design rep rate
+            reference_label="Δ from 16 GHz",
+        )
+        self.widgets["LFC_REPRATE"] = display
+        layout.addWidget(display)
+        return box
 
     def _comb_state_panel(self) -> QGroupBox:
         box = QGroupBox("Comb State")

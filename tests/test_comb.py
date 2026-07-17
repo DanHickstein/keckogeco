@@ -14,12 +14,12 @@ EXAMPLE = pathlib.Path(__file__).parent.parent / "config" / "instruments.example
 # ------------------------------------------------------------------ schema
 
 
-def test_schema_loads_85_keywords():
+def test_schema_loads_86_keywords():
     # 77 baseline keywords + additions listed in ktl/keyword-changes.md
     # (LFC_WSP_TOD, LFC_WSP_CENTER, EDFA output monitors x3, EDFA13 input
-    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V)
+    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V, LFC_REPRATE)
     schema = load_schema()
-    assert len(schema) == 85
+    assert len(schema) == 86
     assert schema["LFC_EDFA27_P"].writable
     assert schema["LFC_EDFA27_P"].units == "mW"
     assert schema["LFC_EDFA27_P"].max == 630
@@ -198,6 +198,17 @@ def test_controller_presets_and_monitors(controller):
     assert controller.read("LFC_TEMP_MONITOR").value is True
     temps = controller.read("LFC_TEMP_TEST1").value
     assert len(temps) == 8
+
+
+def test_controller_rep_rate_keyword(controller):
+    # RF chain off: NaN (nothing to count; the GUI shows an em dash) —
+    # never an error, so the snapshot poll stays cheap with the RF down
+    import math
+
+    assert math.isnan(controller.read("LFC_REPRATE").value)
+    controller.write("LFC_RFOSCI_ONOFF", "1")
+    controller.write("LFC_RFAMP_ONOFF", "1")
+    assert controller.read("LFC_REPRATE").value == pytest.approx(16e9)
 
 
 def test_controller_im_rf_att_and_lock_mode(controller):

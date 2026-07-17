@@ -112,6 +112,26 @@ class FakeClient:
         }
 
 
+def test_pendulum_rep_rate_display(qtbot):
+    """The Other tab shows the measured rep rate with all the digits the
+    CNT-90XL earns, plus a delta-from-16-GHz line; NaN arrives as null
+    (RF chain off) and shows an em dash."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    display = window.widgets["LFC_REPRATE"]
+    assert display.text() == "—"
+    window._on_keywords({"LFC_REPRATE": {"value": 16000000000.12}})
+    assert "16" in display.text() and "Hz" in display.text()
+    assert "&thinsp;000" in display.text()  # digit grouping, all 13 digits
+    assert "+0.12" in display.text()  # Δ from 16 GHz
+    window._on_keywords({"LFC_REPRATE": {"value": None}})
+    assert display.text() == "—"
+    window.poller.stop()
+    window.writer.stop()
+
+
 def test_mainwindow_constructs_and_updates(qtbot):
     from keckogeco.gui.mainwindow import MainWindow
 

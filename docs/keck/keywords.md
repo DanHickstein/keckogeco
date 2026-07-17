@@ -47,6 +47,7 @@ logs an error instead (see the change list).
 | `LFC_RFOSCI_MONITOR` | boolean | RO | RF oscillator supply within its envelope (15 V; ~0.41 A steady-state, transiently up to ~0.62 A while warming). Old polling ~20 s. |
 | `LFC_RFAMP_MONITOR` | boolean | RO | RF amplifier supply within its envelope (30 V; ~4.2 A driven, ~0.7 A idling). Old polling ~20 s. |
 | `LFC_PENDULEM_FREQ_MONITOR` | boolean | RO | Rep-rate within 16 GHz ± 1 kHz on the Pendulum counter (only meaningful with the RF chain up). |
+| `LFC_REPRATE` | double, Hz | RO | The measured repetition rate itself (Pendulum CNT-90XL channel C, 0.1 s gate); NaN/null while the RF chain is off. **New in the rewrite.** |
 | `LFC_EDFA27_INPUT_POWER_MONITOR` | double, mW | RO | EDFA27 seed input power (retyped from the baseline's "boolean": the deployed handler always returned mW). Old polling ~120 s. |
 | `LFC_EDFA23_INPUT_POWER_MONITOR` | double, mW | RO | EDFA23 seed input power (retyped, as above). Old polling ~120 s. |
 | `LFC_EDFA13_INPUT_POWER_MONITOR` | double, mW | RO | EDFA13 seed input power. **New in the rewrite.** |

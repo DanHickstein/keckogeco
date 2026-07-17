@@ -83,7 +83,7 @@ def test_bulk_snapshot_populates_after_reads(client):
 
 def test_json_value_sanitizes_nan_inside_arrays():
     """The rack DAQ's unconnected ch7 reads NaN; inside the LFC_TEMP_TEST1
-    list it must become null explicitly — whether clients see null must not
+    list it must become null explicitly â€” whether clients see null must not
     depend on how the installed FastAPI version encodes non-finite floats
     (the sim DAQ never returns NaN, so unit-test it)."""
     from keckogeco.server.app import _json_value
@@ -103,7 +103,7 @@ def test_state_endpoint(client):
 
 def test_schema_endpoint(client):
     body = client.get("/api/v1/schema").json()
-    assert len(body) == 85  # 77 baseline + additions in ktl/keyword-changes.md
+    assert len(body) == 86  # 77 baseline + additions in ktl/keyword-changes.md
     assert body["LFC_EDFA27_P"]["max"] == 630
     assert body["LFC_EDFA27_P"]["bound"] is True
     assert body["LFC_TEMP_TEST2"]["bound"] is True  # daq_eocb board in the example config
@@ -204,7 +204,7 @@ def test_im_scan_validation(client):
     response = client.post("/api/v1/im/scan", json={"v_start": 1.0, "v_stop": -1.0})
     assert response.status_code == 400
     assert "empty scan" in response.json()["detail"]
-    # out-of-bounds bias -> 422 from pydantic (±10 V SIM960 output limits)
+    # out-of-bounds bias -> 422 from pydantic (Â±10 V SIM960 output limits)
     assert client.post("/api/v1/im/scan", json={"v_start": -12.0}).status_code == 422
 
 
@@ -258,7 +258,7 @@ def test_flattener_slider_endpoints(client):
 
 def test_flattener_slider_offline_503(tmp_path):
     """With no nd_slider block the endpoints answer 503 (not connected),
-    never 500 — the GUI tab must work with the slider absent."""
+    never 500 â€” the GUI tab must work with the slider absent."""
     import shutil
 
     cfg_file = tmp_path / "keckogeco.toml"

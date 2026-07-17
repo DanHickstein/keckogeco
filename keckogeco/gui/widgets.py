@@ -27,6 +27,7 @@ __all__ = [
     "KeywordSpinBox",
     "LampDisplay",
     "OnOffButton",
+    "PrecisionDisplay",
     "SelectAllSpinBox",
     "StatusLamp",
     "ThermoArray",
@@ -82,6 +83,52 @@ class StatusLamp(QLabel):
         )
         state_name = {True: "ON", False: "OFF", None: "?"}.get(state, str(state))
         self.setToolTip(f"{self._label}: {state_name}")
+
+
+class PrecisionDisplay(QLabel):
+    """Large digit-grouped readout for a high-resolution keyword (the
+    Pendulum rep rate: a 0.1 s gate on the CNT-90XL resolves ~12 digits
+    at 16 GHz, and every one of them deserves to be visible).
+
+    Shows the full value with thin-space digit grouping in a big
+    monospace face; ``reference`` adds a small second line with the
+    offset from that value (e.g. Δ from 16 GHz). NaN/None (RF chain
+    off, counter unavailable) shows an em dash.
+    """
+
+    def __init__(
+        self,
+        keyword: str,
+        spec: dict,
+        decimals: int = 2,
+        reference: float | None = None,
+        reference_label: str = "",
+    ):
+        super().__init__("—")
+        self.keyword = keyword
+        self.units = spec.get("units", "")
+        self.decimals = decimals
+        self.reference = reference
+        self.reference_label = reference_label
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setToolTip(spec.get("help") or keyword)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setStyleSheet("font-family: Consolas, 'Courier New', monospace;")
+
+    def update_value(self, value) -> None:
+        if value is None or (isinstance(value, float) and not math.isfinite(value)):
+            self.setText("—")
+            return
+        value = float(value)
+        grouped = f"{value:,.{self.decimals}f}".replace(",", "&thinsp;")
+        text = f'<span style="font-size: 26px; color: #4fd1c5;">{grouped} {self.units}</span>'
+        if self.reference is not None:
+            delta = value - self.reference
+            text += (
+                f'<br><span style="font-size: 12px; color: #8b96a5;">'
+                f"{self.reference_label}: {delta:+,.{self.decimals}f} {self.units}</span>"
+            )
+        self.setText(text)
 
 
 class KeywordDisplay(QLabel):

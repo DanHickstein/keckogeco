@@ -24,6 +24,7 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 | `LFC_EDFA13_INPUT_POWER_MONITOR` | double, RO, mW | The 27/23 input monitors existed in the baseline; the 13 dBm unit was simply missing. |
 | `LFC_PTAMP_IN` | double, RO, mW | Pritel seed input power (`FA INPUT?`), the natural companion to `LFC_PTAMP_OUT`. |
 | `LFC_PTAMP_INTERLOCK_V` | double, RO, V (0–5) | The Arduino interlock's photodiode voltage (10-bit ADC scaled to volts) — the quantity `LFC_PTAMP_LATCH` judges against its thresholds, useful for seeing how much margin the interlock has. |
+| `LFC_REPRATE` | double, RO, Hz | The measured comb repetition rate (Pendulum CNT-90XL, channel C, 0.1 s gate). The baseline only had the boolean `LFC_PENDULEM_FREQ_MONITOR` (within 1 kHz of 16 GHz); the actual frequency was never exposed. Reads NaN while the RF chain is off (no 16 GHz drive — the counter would only time out). |
 
 ## Semantic notes (unchanged, but worth discussing)
 

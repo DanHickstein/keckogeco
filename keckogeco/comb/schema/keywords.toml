@@ -93,6 +93,14 @@ type = "boolean"
 writable = false
 help = "rf freq monitor"
 
+# Addition (2026-07-16, see ktl/keyword-changes.md): the actual measured
+# rep rate, not just the boolean 16 GHz +/- 1 kHz check above.
+[LFC_REPRATE]
+type = "double"
+writable = false
+units = "Hz"
+help = "Comb repetition rate measured by the Pendulum counter (channel C, 0.1 s gate); NaN while the RF chain is off"
+
 [LFC_CLOSE_ALL]
 type = "boolean"
 writable = true
