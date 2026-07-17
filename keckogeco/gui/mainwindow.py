@@ -21,11 +21,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -126,41 +124,6 @@ _CONFIRM = {
     "LFC_RFOSCI_ONOFF",
     "LFC_RFAMP_ONOFF",
 }
-
-
-class SelfDestructDialog(QDialog):
-    """Requested by Steph Leifer. Fully armed and completely harmless:
-    OK and Cancel both just dismiss it."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("keckogeco")
-        self._remaining = 5
-        layout = QVBoxLayout(self)
-        self.label = QLabel(self._message())
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setStyleSheet("font-size: 14px; padding: 12px;")
-        layout.addWidget(self.label)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(1000)
-
-    def _message(self) -> str:
-        return f"The system will self-destruct in {self._remaining} seconds."
-
-    def _tick(self) -> None:
-        self._remaining -= 1
-        if self._remaining > 0:
-            self.label.setText(self._message())
-        else:
-            self._timer.stop()
-            self.label.setText("💥  ...just kidding. Hi Steph!")
 
 
 class OsaControls(QWidget):
@@ -707,7 +670,7 @@ class MainWindow(QMainWindow):
         self.client = client
         self.setWindowTitle("keckogeco — LFC engineering GUI")
         self.widgets: dict[str, object] = {}  # keyword -> widget
-        self._im_status_shown = ""  # last IM action message sent to the status bar
+        self._action_status_shown = ""  # last action message sent to the status bar
 
         self.schema = client.schema()
         try:
@@ -948,22 +911,22 @@ class MainWindow(QMainWindow):
         return box
 
     def _comb_state_panel(self) -> QGroupBox:
-        # two rows (banner + lamps / transition buttons) so the strip
-        # never dictates the window width; progress text sits below
+        # one compact row: banner, lamps, transition buttons. Transition
+        # progress goes to the status bar (like the IM scan), not a label
+        # here — a text area in the strip cost a whole row of height.
         box = QGroupBox("Comb State")
-        outer = QVBoxLayout(box)
-        top = QHBoxLayout()
+        outer = QHBoxLayout(box)
 
         self.state_banner = QLabel("UNKNOWN")
         self.state_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.state_banner.setMinimumWidth(140)
+        self.state_banner.setMinimumWidth(118)  # widest text: ENGINEERING MODE
         self._set_banner("UNKNOWN")
-        top.addWidget(self.state_banner)
+        outer.addWidget(self.state_banner)
 
         # lamp order per operations: RF chain first, then amplification
         self.subsystem_lamps: dict[str, StatusLamp] = {}
         lamps = QGridLayout()
-        lamps.setHorizontalSpacing(10)
+        lamps.setHorizontalSpacing(6)
         for column, (key, label) in enumerate(
             [
                 ("rf_oscillator", "RF Osc"),
@@ -978,35 +941,26 @@ class MainWindow(QMainWindow):
             self.subsystem_lamps[key] = lamp
             lamps.addWidget(lamp, 0, column, alignment=Qt.AlignmentFlag.AlignCenter)
             lamps.addWidget(QLabel(label), 1, column, alignment=Qt.AlignmentFlag.AlignCenter)
-        top.addLayout(lamps)
-        top.addStretch(1)
-        outer.addLayout(top)
+        outer.addLayout(lamps)
+        outer.addStretch(1)
 
-        buttons = QHBoxLayout()
         for text, action in (
             ("STANDBY", "set_standby"),
             ("FULL COMB", "set_full_comb"),
             ("OFF", "set_off"),
         ):
             button = QPushButton(text)
+            # the Windows style gives push buttons a ~140 px minimum;
+            # four of those would set the whole window's width
+            button.setMaximumWidth(84)
             button.setToolTip(f"Run the {text} transition sequence")
             button.clicked.connect(lambda _checked, a=action, t=text: self._start_action(a, t))
-            buttons.addWidget(button)
+            outer.addWidget(button)
         abort = QPushButton("Abort")
+        abort.setMaximumWidth(84)
         abort.setToolTip("Abort the running transition")
         abort.clicked.connect(self._abort_action)
-        buttons.addWidget(abort)
-        boom = QPushButton("Self-destruct")
-        boom.setToolTip("for Steph")
-        boom.setStyleSheet("color: #e05252;")
-        boom.clicked.connect(lambda: SelfDestructDialog(self).exec())
-        buttons.addWidget(boom)
-        buttons.addStretch(1)
-        outer.addLayout(buttons)
-
-        self.action_label = QLabel("")
-        self.action_label.setWordWrap(True)
-        outer.addWidget(self.action_label)
+        outer.addWidget(abort)
         return box
 
     def _set_banner(self, state_name: str) -> None:
@@ -1333,9 +1287,15 @@ class MainWindow(QMainWindow):
         saved_start = prefs.load_section("im_lock").get("bias_start")
         if saved_start is not None:
             self._im_bias_start.update_value(saved_start)
+        bias = keyword_spin("LFC_IM_BIAS")
+        # the Bias out box is fed exclusively by the im_scan array (OMON,
+        # the live output). The keyword snapshot reports MOUT — the manual
+        # setting, which differs from OMON while the PID drives the
+        # output, so double-feeding made the box flip between two values.
+        self.widgets.pop("LFC_IM_BIAS", None)
         self._im_servo_panel = ImServoPanel(
             self._im_set_lock,
-            bias_widget=keyword_spin("LFC_IM_BIAS"),
+            bias_widget=bias,
             rf_att_widget=keyword_spin("LFC_IM_RF_ATT"),
             setpoint_widget=setpoint,
             prop_widget=prop,
@@ -1747,20 +1707,18 @@ class MainWindow(QMainWindow):
             text = f"✓ last action {action['name']}: {action['message']}"
         else:
             text = ""
-        # IM scan/lock progress stays off the comb-state row: the per-point
-        # messages are long and squish the top of the Overview tab. It goes
-        # to the status bar (like other info messages) and, while running,
-        # to the scan panel's suggestion box (the suggestion replaces it
-        # when the sweep ends).
+        # All action progress goes to the status bar (a dedicated label
+        # cost a row of the comb-state strip); IM scans additionally show
+        # in the scan panel's suggestion box while running (the suggestion
+        # replaces it when the sweep ends).
         is_im = bool(action) and str(action.get("name", "")).startswith("im_")
-        self.action_label.setText("" if is_im else text)
         if is_im and action.get("running") and self._im_controls is not None:
             self._im_controls.show_progress(text)
-        if is_im and text != self._im_status_shown:
-            self._im_status_shown = text
+        if text and text != self._action_status_shown:
             # persists while running (refreshed as the message advances);
             # the final ✓/❌ shows once, then times out
             self.statusBar().showMessage(text, 0 if action.get("running") else 8000)
+        self._action_status_shown = text
 
     def _on_array(self, name: str, data: dict) -> None:
         if name == "osa_spectrum":

@@ -287,10 +287,14 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
         "v_step": 0.2,
         "settle_s": 1.0,
     }
-    # bias + RF attenuator keyword controls live in the servo panel (top)
+    # bias + RF attenuator keyword controls live in the servo panel (top);
+    # the bias box is deliberately NOT keyword-registered — the snapshot
+    # reports MOUT while the array reports the live OMON, and feeding the
+    # box from both made it flip between the two while locked
     servo = window._im_servo_panel
     assert servo is not None
-    assert window.widgets["LFC_IM_BIAS"] is not None
+    assert servo.bias is not None
+    assert "LFC_IM_BIAS" not in window.widgets
     assert window.widgets["LFC_IM_RF_ATT"] is not None
     assert len(window._im_charts) == 2  # photodiode + bias strip charts
 
@@ -403,10 +407,9 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     _plot, osa_curve = window._im_osa_plot
     assert list(osa_curve.getData()[1]) == [-40.0, -20.0]
 
-    # IM action progress goes to the status bar + the scan panel's
-    # suggestion box, and stays OFF the Overview comb-state row (long
-    # per-point messages squished the top layout); transitions keep the
-    # comb-state row
+    # ALL action progress goes to the status bar (the comb-state strip
+    # has no text area); IM scans additionally show in the scan panel's
+    # suggestion box while running
     window._on_state(
         {
             "state": "STANDBY",
@@ -416,7 +419,6 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     )
     assert "im_bias_scan" in controls.recommend.text()
     assert "im_bias_scan" in window.statusBar().currentMessage()
-    assert window.action_label.text() == ""
     window._on_state(
         {
             "state": "STANDBY",
@@ -424,7 +426,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
             "action": {"name": "set_standby", "running": True, "step": 1, "message": "y"},
         }
     )
-    assert "set_standby" in window.action_label.text()
+    assert "set_standby" in window.statusBar().currentMessage()
 
     window.poller.stop()
     window.writer.stop()
@@ -620,19 +622,6 @@ def test_flattener_slider_panel(qtbot, monkeypatch):
 
     window.poller.stop()
     window.writer.stop()
-
-
-def test_self_destruct_countdown(qtbot):
-    """Fully armed and completely harmless."""
-    from keckogeco.gui.mainwindow import SelfDestructDialog
-
-    dialog = SelfDestructDialog()
-    qtbot.addWidget(dialog)
-    assert dialog.label.text() == "The system will self-destruct in 5 seconds."
-    for _ in range(5):
-        dialog._tick()
-    assert "kidding" in dialog.label.text()
-    assert "Steph" in dialog.label.text()
 
 
 def test_osa_save_as_default(qtbot, tmp_path, monkeypatch):
