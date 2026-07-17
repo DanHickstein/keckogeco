@@ -209,6 +209,15 @@ def test_controller_rep_rate_keyword(controller):
     controller.write("LFC_RFOSCI_ONOFF", "1")
     controller.write("LFC_RFAMP_ONOFF", "1")
     assert controller.read("LFC_REPRATE").value == pytest.approx(16e9)
+    # full-resolution gate (12 digits/s on the CNT-90XL), and one gated
+    # measurement serves every caller inside the cache window — the
+    # /state poll and the keyword poller must not re-gate per call
+    sent = controller.device("pendulum").transport.sent
+    assert ":ACQ:APER 1.0" in sent
+    inits = sent.count(":INIT")
+    controller.read("LFC_REPRATE")
+    controller.state_summary()
+    assert controller.device("pendulum").transport.sent.count(":INIT") == inits
 
 
 def test_controller_im_rf_att_and_lock_mode(controller):

@@ -60,6 +60,8 @@ class LFCController:
         # (bias_V, input_V) points streamed by the im_bias_scan action;
         # served as the im_scan array so the GUI can plot the sweep live
         self.im_scan_points: list[tuple[float, float]] = []
+        # (monotonic time, Hz) of the last gated Pendulum measurement
+        self._rep_rate_cache: tuple[float, float] | None = None
         self._started = False
 
     # ------------------------------------------------------------ lifecycle
@@ -774,6 +776,14 @@ class LFCController:
     #: rep rate must be within this of 16 GHz to count as detected
     REP_RATE_HZ = 16e9
     REP_RATE_TOLERANCE_HZ = 1000.0
+    #: counter gate: the CNT-90XL resolves ~12 digits/s, so 1 s buys the
+    #: full readout (~0.1 Hz at 16 GHz; the old 0.1 s gate stopped ~1 Hz)
+    REP_RATE_GATE_S = 1.0
+    #: one gated measurement serves every caller for this long — the
+    #: /state poll (~1 Hz from the GUI) and the keyword cache poller
+    #: would otherwise each re-gate, holding the shared GPIB board lock
+    #: for a full gate time per call
+    REP_RATE_CACHE_S = 5.0
 
     def _rf_chain_on(self) -> bool:
         """Both RF supplies (oscillator + amplifier) outputting."""
@@ -786,10 +796,21 @@ class LFCController:
     def _rep_rate_Hz(self) -> float:
         """Measured comb rep rate (LFC_REPRATE): Pendulum channel C.
         NaN while the RF chain is off — with no 16 GHz drive the counter
-        has nothing to count and its FETC? would only time out."""
+        has nothing to count and its FETC? would only time out. The
+        reading is cached for REP_RATE_CACHE_S (see the class constants)."""
         if not self._rf_chain_on():
+            self._rep_rate_cache = None
             return float("nan")
-        return self.device("pendulum").measure_frequency_Hz("c")
+        now = time.monotonic()
+        if self._rep_rate_cache is not None and now - self._rep_rate_cache[0] < (
+            self.REP_RATE_CACHE_S
+        ):
+            return self._rep_rate_cache[1]
+        frequency = self.device("pendulum").measure_frequency_Hz(
+            "c", meas_time_s=self.REP_RATE_GATE_S
+        )
+        self._rep_rate_cache = (now, frequency)
+        return frequency
 
     def _rep_rate_ok(self) -> bool:
         """Rep-rate factor of the comb state (Pendulum counter, channel C).
@@ -804,7 +825,7 @@ class LFCController:
             return False
         if "pendulum" not in self.devices:
             return True  # counter unavailable: fall back to the RF-chain inference
-        frequency = self.device("pendulum").measure_frequency_Hz("c")
+        frequency = self._rep_rate_Hz()  # shares the cached gated measurement
         ok = abs(frequency - self.REP_RATE_HZ) <= self.REP_RATE_TOLERANCE_HZ
         if not ok:
             log.error(
