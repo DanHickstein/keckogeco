@@ -655,6 +655,7 @@ class FlattenerSliderPanel(QWidget):
         self.position_buttons: dict[int, QPushButton] = {}
         for slot, atten in self.ATTENUATIONS.items():
             button = QPushButton(f"{slot}\n{atten}")
+            button.setMaximumWidth(64)  # six of these must not set the window width
             suffix = " — the 0 dB reference" if slot == 6 else ""
             button.setToolTip(f"move the slider to position {slot} ({atten}{suffix})")
             button.clicked.connect(lambda _checked, s=slot: set_position(s))
@@ -799,18 +800,20 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(page)
         outer.addWidget(self._comb_state_panel())
 
+        # three panels per row, tops: four across forced a >900 px window
         row2 = QHBoxLayout()
         row2.addWidget(self._edfa_panel("Amonics EDFA 27 dBm", "LFC_EDFA27", "edfa27"), stretch=3)
         row2.addWidget(self._edfa_panel("Amonics EDFA 23 dBm", "LFC_EDFA23", "edfa23"), stretch=3)
         row2.addWidget(self._interlock_panel(), stretch=2)
-        row2.addWidget(self._pritel_panel(), stretch=4)
         outer.addLayout(row2)
 
         row3 = QHBoxLayout()
-        row3.addWidget(self._rf_panel())
-        row3.addWidget(self._waveshaper_panel())
-        row3.addWidget(self._temperature_panel(), stretch=1)
+        row3.addWidget(self._pritel_panel(), stretch=2)
+        row3.addWidget(self._rf_panel(), stretch=1)
+        row3.addWidget(self._waveshaper_panel(), stretch=1)
         outer.addLayout(row3)
+
+        outer.addWidget(self._temperature_panel())
 
         outer.addWidget(self._osa_panel(), stretch=1)
         return page
@@ -945,14 +948,17 @@ class MainWindow(QMainWindow):
         return box
 
     def _comb_state_panel(self) -> QGroupBox:
+        # two rows (banner + lamps / transition buttons) so the strip
+        # never dictates the window width; progress text sits below
         box = QGroupBox("Comb State")
-        outer = QHBoxLayout(box)
+        outer = QVBoxLayout(box)
+        top = QHBoxLayout()
 
         self.state_banner = QLabel("UNKNOWN")
         self.state_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.state_banner.setMinimumWidth(140)
         self._set_banner("UNKNOWN")
-        outer.addWidget(self.state_banner)
+        top.addWidget(self.state_banner)
 
         # lamp order per operations: RF chain first, then amplification
         self.subsystem_lamps: dict[str, StatusLamp] = {}
@@ -972,11 +978,9 @@ class MainWindow(QMainWindow):
             self.subsystem_lamps[key] = lamp
             lamps.addWidget(lamp, 0, column, alignment=Qt.AlignmentFlag.AlignCenter)
             lamps.addWidget(QLabel(label), 1, column, alignment=Qt.AlignmentFlag.AlignCenter)
-        outer.addLayout(lamps)
-
-        self.action_label = QLabel("")
-        self.action_label.setWordWrap(True)
-        outer.addWidget(self.action_label, stretch=1)
+        top.addLayout(lamps)
+        top.addStretch(1)
+        outer.addLayout(top)
 
         buttons = QHBoxLayout()
         for text, action in (
@@ -997,7 +1001,12 @@ class MainWindow(QMainWindow):
         boom.setStyleSheet("color: #e05252;")
         boom.clicked.connect(lambda: SelfDestructDialog(self).exec())
         buttons.addWidget(boom)
+        buttons.addStretch(1)
         outer.addLayout(buttons)
+
+        self.action_label = QLabel("")
+        self.action_label.setWordWrap(True)
+        outer.addWidget(self.action_label)
         return box
 
     def _set_banner(self, state_name: str) -> None:
@@ -1679,7 +1688,7 @@ class MainWindow(QMainWindow):
         # are not in the optical chain, so they are listed by serial number;
         # relabel by wavelength if they ever get installed on those fibers.
         box = QGroupBox("VOA attenuation (not in optical chain)")
-        layout = QHBoxLayout(box)
+        form = QFormLayout(box)  # one unit per row: side by side was 700 px wide
         for serial, keyword in [
             ("NO-303699-01", "LFC_VOA1550_ATTEN"),
             ("NO-303700-01", "LFC_VOA1310_ATTEN"),
@@ -1687,9 +1696,7 @@ class MainWindow(QMainWindow):
         ]:
             if keyword not in self.schema:
                 continue
-            form = QFormLayout()
             self._add_spin(form, serial, keyword)
-            layout.addLayout(form)
         return box
 
     # --------------------------------------------------------------- slots

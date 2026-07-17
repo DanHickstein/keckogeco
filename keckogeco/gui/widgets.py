@@ -272,6 +272,10 @@ class KeywordSpinBox(QWidget):
         )
         if spec.get("step") is not None:  # arrow/wheel increment
             self.spin.setSingleStep(spec["step"])
+        # Qt sizes a spin box for its range's widest text — keywords with
+        # no schema limits get ±1e9 and a comically wide box that used to
+        # set the whole window's minimum width. Real values fit in this.
+        self.spin.setMaximumWidth(130)
         if self.units:
             self.spin.setSuffix(f" {self.units}")
         self.spin.setToolTip(spec.get("help") or keyword)
