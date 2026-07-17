@@ -282,6 +282,12 @@ class LFCController:
             # scan/auto-lock bounds
             self._im_servo.manual_output_min = -8.0
             self._im_servo.manual_output_max = 8.0
+            # setpoint ramping OFF: it only acts in PID mode, so with the
+            # unit's front-panel RAMP left on (legacy state), a lockpoint
+            # change while locked crawls at RATE V/s instead of stepping —
+            # the GUI's on-the-fly lockpoint edits looked like they
+            # "reverted" (Dan, 2026-07-16). Re-asserted on every engage.
+            self._im_servo.setpoint_ramping_on = False
             bind(
                 "LFC_IM_BIAS",
                 getter=lambda: self._im_servo.manual_output_V,
@@ -705,6 +711,10 @@ class LFCController:
         bias (bumpless takeover); setpoint and PI gains are whatever was
         last written. Disengaging just returns to manual output."""
         if engage:
+            # ramping would turn later lockpoint edits into a slow crawl
+            # (see _register_keywords); assert off in case the front
+            # panel re-enabled it since startup
+            self._im_servo.setpoint_ramping_on = False
             self._im_servo.output_offset_V = self._im_servo.manual_output_V
             self._im_servo.output_mode = "PID"
         else:
