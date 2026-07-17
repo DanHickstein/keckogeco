@@ -490,7 +490,7 @@ class ImServoPanel(QWidget):
 class ImScanControls(QWidget):
     """Controls column beside the IM bias-scan plot (middle of the tab).
 
-    Scan defaults sweep ±5 V in 0.1 V steps with a 1 s settle (a
+    Scan defaults sweep ±5 V in 0.2 V steps with a 1 s settle (a
     sub-second settle makes MMON repeat readings across consecutive
     points; at the EDFA27 commissioned 450 mW the photodetector clips
     above ~5.5 V — see docs/hardware/design.md). A finished scan shows
@@ -528,7 +528,7 @@ class ImScanControls(QWidget):
         # bounds mirror the server's ImScanRequest (±8 V, under the SIM960's ±10 V spec)
         self.v_start = spin(-5.0, -8, 8, 0.1, 3, "V", "scan start bias")
         self.v_stop = spin(5.0, -8, 8, 0.1, 3, "V", "scan stop bias")
-        self.v_step = spin(0.1, 0.002, 0.5, 0.005, 3, "V", "bias step between points")
+        self.v_step = spin(0.2, 0.002, 0.5, 0.005, 3, "V", "bias step between points")
         self.settle_s = spin(1.0, 0.0, 5.0, 0.1, 2, "s", "settle time before each reading")
         for row, pairs in enumerate(
             (

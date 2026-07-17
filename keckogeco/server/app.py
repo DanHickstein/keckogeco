@@ -70,7 +70,7 @@ class ImScanRequest(BaseModel):
 
     v_start: float = Field(-5.0, ge=-8.0, le=8.0)
     v_stop: float = Field(5.0, ge=-8.0, le=8.0)
-    v_step: float = Field(0.1, ge=0.002, le=0.5)
+    v_step: float = Field(0.2, ge=0.002, le=0.5)
     settle_s: float = Field(1.0, ge=0.0, le=5.0)
 
 

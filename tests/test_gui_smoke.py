@@ -284,7 +284,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert controls.params() == {
         "v_start": -5.0,
         "v_stop": 5.0,
-        "v_step": 0.1,
+        "v_step": 0.2,
         "settle_s": 1.0,
     }
     # bias + RF attenuator keyword controls live in the servo panel (top)
