@@ -198,6 +198,16 @@ class PritelAmp(Instrument):
                 "%s: ACTIVATING PUMP - seed input power must be appropriate to avoid damage",
                 self.name,
             )
+            # The unit refuses FA ON while its STORED power-amp setpoint
+            # is too high for the measured seed (rack-probed 2026-07-18:
+            # 3.9 A stored -> refused, <= 1.0 A -> fine, at the 2.3 V
+            # lockpoint seed). An abnormal shutdown (ASD trip, crash)
+            # leaves the last operating current stored — and FA PWRAMP?
+            # reads the ACTUAL current (0 while off), so the trap is
+            # invisible to any monitor. Zero the stored setpoint before
+            # enabling: pump-on always starts at 0 A, callers ramp up.
+            if not self.pump_on:
+                self._ask("FA SETPWR 000")
         else:
             self._ramp_abort.set()
         deadline = time.monotonic() + self.PUMP_TIMEOUT_S
@@ -344,6 +354,12 @@ class PritelAmp(Instrument):
 
         def set_pump(target):
             def _set(_):
+                # model the real unit's enable-time refusal (2026-07-18):
+                # FA ON is accepted but not acted on while the stored
+                # power-amp setpoint is too high for the seed (cutoff
+                # here 2 A — between the probed 1.0 A ok / 3.9 A refused)
+                if target == "ON" and state["pwr"] > 2000:
+                    return "Pump Enabled"
                 state["pump"] = target
                 return f"Pump {target}"
 

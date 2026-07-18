@@ -81,11 +81,12 @@ def test_preamp_over_limit_raises(amp):
 
 
 def test_pwramp_command_encoding(amp):
-    """5800 mA must be sent as 'FA SETPWR 580' (0.01 A units)."""
+    """5800 mA must be sent as 'FA SETPWR 580' (0.01 A units); pump-on
+    itself contributes the zero-before-enable 'FA SETPWR 000'."""
     amp.set_pump(True)
     amp.set_pwramp_mA(5800, ramp=False)
     setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
-    assert setpwr == ["FA SETPWR 580"]
+    assert setpwr == ["FA SETPWR 000", "FA SETPWR 580"]
     assert amp.pwramp_mA == pytest.approx(5800.0)
 
 
@@ -104,7 +105,9 @@ def test_pwramp_ramp_reaches_target(amp):
     amp.set_pump(True)
     amp.set_pwramp_mA(500)
     setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
-    assert len(setpwr) == 3  # 0 -> 500 at 200 mA steps (linspace incl. start)
+    # pump-on's zero-before-enable + 0 -> 500 at 200 mA steps (linspace
+    # including the start point)
+    assert len(setpwr) == 4
     assert amp.pwramp_mA == pytest.approx(500.0)
 
 
@@ -115,9 +118,28 @@ def test_pwramp_full_rampup_step_count(amp):
     amp.set_pump(True)
     amp.set_pwramp_mA(3900)
     setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
-    assert len(setpwr) == 20
+    assert len(setpwr) == 21  # pump-on's 000 + 20 ramp points
     assert setpwr[-1] == "FA SETPWR 390"
     assert amp.pwramp_mA == pytest.approx(3900.0)
+
+
+def test_pump_on_zeroes_stale_stored_setpoint(amp):
+    """The trap behind the 2026-07-17/18 refusals: an abnormal shutdown
+    (ASD trip, server crash) leaves the last operating current stored in
+    the unit, FA ON is refused while that stored value is too high for
+    the seed, and FA PWRAMP? reads the ACTUAL current (0 while off) so
+    nothing shows it. set_pump(True) must zero the stored setpoint
+    before enabling; the sim refuses FA ON above 2 A to keep this
+    honest."""
+    amp.set_pump(True)
+    amp.set_pwramp_mA(3900)
+    amp.set_pump(False)  # setpoint stays stored, like an abnormal stop
+    amp.set_pump(True)  # would time out refused without the zeroing
+    assert amp.pump_on is True
+    sent = amp.transport.sent
+    last_on = len(sent) - 1 - sent[::-1].index("FA ON")
+    assert "FA SETPWR 000" in sent[:last_on]  # zeroed before enabling
+    assert amp.pwramp_mA == pytest.approx(0.0)
 
 
 def test_pump_off_aborts_running_ramp(amp):
@@ -141,8 +163,8 @@ def test_pump_off_aborts_running_ramp(amp):
     amp.transport.write = write_counting
     amp.set_pwramp_mA(3900)
     setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
-    # 3 steps went out, then the abort parked the stage at 0
-    assert len(setpwr) == 4
+    # pump-on's zero-before-enable, 3 ramp steps, then the abort's park
+    assert len(setpwr) == 5
     assert setpwr[-1] == "FA SETPWR 000"
     assert amp.pwramp_mA == pytest.approx(0.0)
 
