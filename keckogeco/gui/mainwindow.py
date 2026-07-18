@@ -1321,6 +1321,16 @@ class MainWindow(QMainWindow):
         stay bound server-side for KTL; here the full arrays cover them)."""
         box = QGroupBox("Temperatures")
         row = QHBoxLayout(box)
+        # the laptop lives in the rack, so its hottest ACPI zone shows as
+        # an extra row of the Rack column (a third column cost too much
+        # width — Dan, 2026-07-18). Fed by the local health thread
+        # (details on the Laptop tab), colored by the absolute bands,
+        # not the rack's ±3 C baselines. Created before the loop so the
+        # label exists (for _on_laptop_sample) even without a rack board.
+        self._overview_laptop_temp = QLabel("—")
+        self._overview_laptop_temp.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         for keyword, title, channels in _THERMO_PANELS:
             if keyword not in self.schema:
                 continue
@@ -1331,34 +1341,23 @@ class MainWindow(QMainWindow):
             array = ThermoArray(keyword, channels, _TEMP_TOLERANCE_C)
             self.widgets[keyword] = array
             column.addWidget(array)
+            if keyword == "LFC_TEMP_TEST1":  # the rack board's column
+                grid = QGridLayout()
+                grid.setHorizontalSpacing(18)
+                name = QLabel("Laptop CPU")
+                tip = (
+                    "hottest ACPI thermal zone of this laptop (details on the "
+                    f"Laptop tab) — amber above {TEMP_WARN_C:.0f} °C, red above "
+                    f"{TEMP_HOT_C:.0f} °C"
+                )
+                name.setToolTip(tip)
+                self._overview_laptop_temp.setToolTip(tip)
+                grid.addWidget(name, 0, 0)
+                grid.addWidget(self._overview_laptop_temp, 0, 1)
+                grid.setColumnStretch(2, 1)  # hug the left pair like the array
+                column.addLayout(grid)
             column.addStretch(1)
             row.addLayout(column, stretch=1)
-
-        # the laptop lives in the same warm room: its hottest ACPI zone,
-        # fed by the local health thread (details on the Laptop tab) and
-        # colored by the absolute bands, not the rack's ±3 C baselines
-        column = QVBoxLayout()
-        header = QLabel("Laptop")
-        header.setStyleSheet("font-weight: bold;")
-        column.addWidget(header)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(18)
-        name = QLabel("CPU zone")
-        self._overview_laptop_temp = QLabel("—")
-        self._overview_laptop_temp.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        tip = (
-            "hottest ACPI thermal zone of this laptop (details on the Laptop "
-            f"tab) — amber above {TEMP_WARN_C:.0f} °C, red above {TEMP_HOT_C:.0f} °C"
-        )
-        name.setToolTip(tip)
-        self._overview_laptop_temp.setToolTip(tip)
-        grid.addWidget(name, 0, 0)
-        grid.addWidget(self._overview_laptop_temp, 0, 1)
-        column.addLayout(grid)
-        column.addStretch(1)
-        row.addLayout(column)
         return box
 
     def _osa_panel(self) -> QGroupBox:
