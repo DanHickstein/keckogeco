@@ -334,6 +334,14 @@ class LFCController:
         if has("pendulum"):
             bind("LFC_PENDULEM_FREQ_MONITOR", getter=lambda: self._rep_rate_ok() is True)
             bind("LFC_REPRATE", getter=self._rep_rate_Hz)
+            bind("LFC_REPRATE_REF", getter=lambda: self.device("pendulum").reference_source)
+
+        # --- Rb frequency standard health (FS725, read-only). This is the
+        # 10 MHz behind both the DRO and the counter; see LFC_REPRATE_REF
+        # in the schema for why the chain needs its own keywords.
+        if has("rb_clock"):
+            bind("LFC_RBCLOCK_PHASELOCK", getter=lambda: self.device("rb_clock").phase_locked)
+            bind("LFC_RBCLOCK_FREQLOCK", getter=lambda: self.device("rb_clock").frequency_locked)
 
         # --- Agiltron 2x2 switch (enumerated: 1 = YJ path, 2 = HK path)
         if has("switch2x2"):

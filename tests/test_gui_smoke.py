@@ -113,7 +113,7 @@ class FakeClient:
 
 
 def test_pendulum_rep_rate_display(qtbot):
-    """The Other tab shows the measured rep rate with all the digits the
+    """The Clock tab shows the measured rep rate with all the digits the
     CNT-90XL earns, plus a delta-from-16-GHz line; NaN arrives as null
     (RF chain off) and shows an em dash."""
     from keckogeco.gui.mainwindow import MainWindow
@@ -128,6 +128,46 @@ def test_pendulum_rep_rate_display(qtbot):
     assert "+0.12" in display.text()  # Δ from 16 GHz
     window._on_keywords({"LFC_REPRATE": {"value": None}})
     assert display.text() == "—"
+    window.poller.stop()
+    window.writer.stop()
+
+
+def test_clock_tab_reference_chain(qtbot):
+    """The Clock tab surfaces the reference chain: FS725 lock lamps, and
+    a counter-timebase lamp that is green ONLY on EXT — a counter on its
+    internal timebase read ~200 Hz off 16 GHz with everything else green
+    (2026-07-17), which is exactly what these exist to catch."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    phase = window.widgets["LFC_RBCLOCK_PHASELOCK"]
+    freq = window.widgets["LFC_RBCLOCK_FREQLOCK"]
+    ref = window.widgets["LFC_REPRATE_REF"]
+
+    window._on_keywords(
+        {
+            "LFC_RBCLOCK_PHASELOCK": {"value": True},
+            "LFC_RBCLOCK_FREQLOCK": {"value": True},
+            "LFC_REPRATE_REF": {"value": "EXT"},
+        }
+    )
+    assert "#35d07f" in phase.lamp.styleSheet()  # locked -> green
+    assert "#35d07f" in freq.lamp.styleSheet()
+    assert "#35d07f" in ref.lamp.styleSheet()  # external 10 MHz -> green
+    assert ref.display.text() == "EXT"
+
+    # the failure signatures: Rb unlocked, counter on internal timebase
+    window._on_keywords(
+        {
+            "LFC_RBCLOCK_PHASELOCK": {"value": False},
+            "LFC_REPRATE_REF": {"value": "INT"},
+        }
+    )
+    assert "#3a4350" in phase.lamp.styleSheet()  # unlocked -> grey
+    assert "#3a4350" in ref.lamp.styleSheet()  # internal timebase -> grey
+    assert ref.display.text() == "INT"
+
     window.poller.stop()
     window.writer.stop()
 
@@ -510,6 +550,36 @@ def test_pritel_panel_setpoints_and_interlock_lamp(qtbot):
         assert "#3a4350" in latch.lamp.styleSheet()  # anything else -> grey
 
 
+def test_pritel_emission_on_writes_preamp_first(qtbot, monkeypatch):
+    """Clicking Emission ON queues the preamp setpoint write before the
+    pump-on (the writer queue is FIFO). The box used to display 600 mA
+    without ever writing it, leaving the preamp at 0 and the unit's ASD
+    refusing FA ON (2026-07-15/17); OFF touches only the pump keyword."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    submitted = []
+    monkeypatch.setattr(window, "_submit", lambda k, v: submitted.append((k, v)))
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    emission = window.widgets["LFC_PTAMP_ONOFF"]
+    emission.update_value(False)
+    emission.button.click()
+    assert submitted == [("LFC_PTAMP_PRE_P", 600.0), ("LFC_PTAMP_ONOFF", "1")]
+
+    submitted.clear()
+    emission.update_value(True)
+    emission.button.click()
+    assert submitted == [("LFC_PTAMP_ONOFF", "0")]
+
+    window.poller.stop()
+    window.writer.stop()
+
+
 def test_interlock_voltage_coloring(qtbot):
     """The trip window populates from /interlock and the live voltage
     turns green inside the window, red outside."""
@@ -545,6 +615,8 @@ def test_wsp_panel_remembers_values(qtbot, tmp_path, monkeypatch):
     assert window._wsp_spins["LFC_WSP_PHASE"].spin.value() == 2.14
     assert window._wsp_spins["LFC_WSP_TOD"].spin.value() == 0.0
     assert window._wsp_spins["LFC_WSP_CENTER"].spin.value() == 1559.8
+    # arrows step 0.01 per click on all three boxes (Dan, 2026-07-17)
+    assert all(w.spin.singleStep() == 0.01 for w in window._wsp_spins.values())
     # user edits GDD -> saved; a fresh GUI comes up with the edited trio
     window._wsp_spins["LFC_WSP_PHASE"].spin.setValue(3.1)
     window._wsp_submit("LFC_WSP_PHASE", 3.1)

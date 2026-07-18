@@ -25,6 +25,9 @@ rewrite makes, for discussion before the dispatcher is redeployed.
 | `LFC_PTAMP_IN` | double, RO, mW | Pritel seed input power (`FA INPUT?`), the natural companion to `LFC_PTAMP_OUT`. |
 | `LFC_PTAMP_INTERLOCK_V` | double, RO, V (0–5) | The Arduino interlock's photodiode voltage (10-bit ADC scaled to volts) — the quantity `LFC_PTAMP_LATCH` judges against its thresholds, useful for seeing how much margin the interlock has. |
 | `LFC_REPRATE` | double, RO, Hz | The measured comb repetition rate (Pendulum CNT-90XL, channel C, 0.1 s gate). The baseline only had the boolean `LFC_PENDULEM_FREQ_MONITOR` (within 1 kHz of 16 GHz); the actual frequency was never exposed. Reads NaN while the RF chain is off (no 16 GHz drive — the counter would only time out). |
+| `LFC_REPRATE_REF` | string, RO | The counter's timebase in use (`:ROSC:SOUR?`: EXT = rear 10 MHz from the Rb standard, INT = internal). Added 2026-07-17 after the counter silently dropped to its internal timebase and read ~200 Hz off at 16 GHz with every other monitor green — the DRO and counter share the Rb 10 MHz, so a reference-chain break is invisible in `LFC_REPRATE` alone. |
+| `LFC_RBCLOCK_PHASELOCK` | boolean, RO | FS725 Rb standard 10 MHz phase-locked to the Rb transition (`PL?`). The baseline never exposed the reference's own health. |
+| `LFC_RBCLOCK_FREQLOCK` | boolean, RO | FS725 frequency lock loop closed (`LO?`). |
 
 ## Semantic notes (unchanged, but worth discussing)
 

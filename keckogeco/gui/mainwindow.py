@@ -18,6 +18,7 @@ path), WaveShaper dispersion, TECs, YJ shutter, VOAs.
 
 from __future__ import annotations
 
+import platform
 import time
 from pathlib import Path
 
@@ -43,6 +44,7 @@ from PyQt6.QtWidgets import (
 from ..comb.locking import recommend_lock_point
 from . import prefs, spectra
 from .client import KeckogecoClient, PollThread, WriteThread
+from .laptop import TEMP_HOT_C, TEMP_WARN_C, LaptopPollThread, temp_state
 from .theme import ACCENT, MUTED, PLOT_BG, STATE_COLORS
 from .widgets import (
     KeywordDisplay,
@@ -696,6 +698,13 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(f"connecting to {client.base_url} ...")
 
+        # laptop health (this machine, not the rack): a local sampling
+        # thread, no server involvement — the Laptop tab must keep working
+        # while the server is down. Started after the layout exists.
+        self.laptop_poller = LaptopPollThread()
+        self.laptop_poller.sample_ready.connect(self._on_laptop_sample)
+        self.laptop_poller.start()
+
     # ------------------------------------------------------------- building
 
     def _submit(self, keyword: str, value) -> None:
@@ -741,11 +750,15 @@ class MainWindow(QMainWindow):
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
-    def _add_onoff(self, form: QFormLayout, label: str, keyword: str) -> None:
+    def _add_onoff(self, form: QFormLayout, label: str, keyword: str, submit=None) -> None:
         if keyword not in self.schema:
             return
         widget = OnOffButton(
-            keyword, self._spec(keyword), self._submit, confirm=keyword in _CONFIRM, label=label
+            keyword,
+            self._spec(keyword),
+            submit or self._submit,
+            confirm=keyword in _CONFIRM,
+            label=label,
         )
         self.widgets[keyword] = widget
         form.addRow(label, widget)
@@ -755,7 +768,9 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._overview_tab(), "Overview")
         tabs.addTab(self._im_lock_tab(), "IM Bias Lock")
         tabs.addTab(self._flattener_tab(), "Spectral Flattener")
+        tabs.addTab(self._clock_tab(), "Clock")
         tabs.addTab(self._other_tab(), "Other")
+        tabs.addTab(self._laptop_tab(), "Laptop")
         self.setCentralWidget(tabs)
 
     def _overview_tab(self) -> QWidget:
@@ -867,6 +882,84 @@ class MainWindow(QMainWindow):
             self._flattener_panel.set_offline(str(reason))
         return page
 
+    def _laptop_tab(self) -> QWidget:
+        """Health of the machine running this GUI (the comb laptop): ACPI
+        zone temperatures with a strip chart, Windows' throttle response,
+        CPU load/clock, and AC/battery state. Fan RPM is not readable
+        without admin rights (see gui/laptop.py) — the throttle lamp is
+        the fan-health proxy. Rows for the thermal zones are created when
+        the first sample names them."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        box = QGroupBox(f"Laptop health — {platform.node() or 'this machine'}")
+        row = QHBoxLayout(box)
+
+        form = QFormLayout()
+        self._laptop_form = form
+        self._laptop_zone_rows: dict[str, QLabel] = {}
+        self._laptop_status = QLabel("(waiting for the first sample ...)")
+        self._laptop_status.setStyleSheet(f"color: {MUTED}; font-style: italic;")
+        form.addRow(self._laptop_status)
+
+        throttle_row = QWidget()
+        throttle_layout = QHBoxLayout(throttle_row)
+        throttle_layout.setContentsMargins(0, 0, 0, 0)
+        self._laptop_throttle_lamp = StatusLamp("thermal throttling")
+        self._laptop_throttle = QLabel("—")
+        throttle_layout.addWidget(self._laptop_throttle_lamp)
+        throttle_layout.addWidget(self._laptop_throttle)
+        throttle_layout.addStretch(1)
+        form.addRow("Thermal throttling", throttle_row)
+
+        self._laptop_passive = QLabel("—")
+        self._laptop_passive.setToolTip(
+            "Windows' passive cooling limit: 100 % = full speed allowed; "
+            "anything lower means the CPU is being slowed to shed heat"
+        )
+        form.addRow("Passive cooling limit", self._laptop_passive)
+        self._laptop_cpu = QLabel("—")
+        form.addRow("CPU load", self._laptop_cpu)
+        self._laptop_clock = QLabel("—")
+        self._laptop_clock.setToolTip(
+            "effective clock vs the base frequency: >100 % = turbo, "
+            "well under 100 % under load = throttled"
+        )
+        form.addRow("CPU clock", self._laptop_clock)
+        self._laptop_power = QLabel("—")
+        form.addRow("Power", self._laptop_power)
+        row.addLayout(form)
+
+        self._laptop_chart = self._plot_widget()
+        self._laptop_curves: dict[str, object] = {}
+        self._laptop_series: dict[str, tuple[list, list]] = {}
+        if self._laptop_chart is not None:
+            import pyqtgraph as pg
+
+            self._laptop_chart.setLabel("left", "zone temperature (°C)")
+            self._laptop_chart.setLabel("bottom", "time (min ago)")
+            # minutes, not SI-scaled "x0.001 min" while history is short
+            self._laptop_chart.getAxis("bottom").enableAutoSIPrefix(False)
+            self._laptop_chart.addLegend(offset=(-10, 10), labelTextColor="#8b96a5")
+            self._laptop_chart.addLine(
+                y=TEMP_WARN_C, pen=pg.mkPen("#c78a00", style=Qt.PenStyle.DashLine)
+            )
+            row.addWidget(self._laptop_chart, stretch=1)
+        outer.addWidget(box, stretch=1)
+
+        note = QLabel(
+            "Temperatures are the laptop's ACPI thermal zones (amber above "
+            f"{TEMP_WARN_C:.0f} °C, red above {TEMP_HOT_C:.0f} °C). Fan RPM is not "
+            "readable without admin rights on this machine, so the throttle lamp "
+            "is the fan-health proxy: when cooling can't keep up, Windows slows "
+            "the CPU (the passive cooling limit drops below 100 %) and the lamp "
+            "turns red. A rising zone temperature plus throttling means check "
+            "the fan and vents."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {MUTED};")
+        outer.addWidget(note)
+        return page
+
     def _flattener_set(self, position: int) -> None:
         self.writer.submit_call("flattener", lambda c: c.flattener_slider_set(position))
 
@@ -890,13 +983,34 @@ class MainWindow(QMainWindow):
         row2.addWidget(self._voa_panel(), stretch=1)
         outer.addLayout(row2)
 
+        outer.addStretch(1)
+        return page
+
+    def _clock_tab(self) -> QWidget:
+        """Reference-chain health: the FS725 Rb standard and the counter
+        that should be disciplined by it. The DRO and the counter share
+        the Rb 10 MHz, so a good LFC_REPRATE proves the whole chain —
+        but a broken chain (counter on its internal timebase, 2026-07-17)
+        reads ~200 Hz off with every other monitor green."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.addWidget(self._rb_clock_panel())
         outer.addWidget(self._pendulum_panel())
         outer.addStretch(1)
         return page
 
+    def _rb_clock_panel(self) -> QGroupBox:
+        box = QGroupBox(self._title_with_port("Rb frequency standard — SRS FS725", "rb_clock"))
+        form = QFormLayout(box)
+        self._add_lamp_display(form, "Phase lock", "LFC_RBCLOCK_PHASELOCK", ok=bool)
+        self._add_lamp_display(form, "Frequency lock", "LFC_RBCLOCK_FREQLOCK", ok=bool)
+        return box
+
     def _pendulum_panel(self) -> QGroupBox:
         """The comb repetition rate, measured — every digit the CNT-90XL
-        resolves (LFC_REPRATE; em dash while the RF chain is off)."""
+        resolves (LFC_REPRATE; em dash while the RF chain is off) — and
+        the timebase the counter is actually using (green only on EXT,
+        the Rb-disciplined rear 10 MHz input)."""
         box = QGroupBox(self._title_with_port("Repetition rate — Pendulum CNT-90XL", "pendulum"))
         layout = QVBoxLayout(box)
         display = PrecisionDisplay(
@@ -908,6 +1022,14 @@ class MainWindow(QMainWindow):
         )
         self.widgets["LFC_REPRATE"] = display
         layout.addWidget(display)
+        form = QFormLayout()
+        self._add_lamp_display(
+            form,
+            "Timebase",
+            "LFC_REPRATE_REF",
+            ok=lambda v: str(v).strip().upper() == "EXT",
+        )
+        layout.addLayout(form)
         return box
 
     def _comb_state_panel(self) -> QGroupBox:
@@ -1074,7 +1196,7 @@ class MainWindow(QMainWindow):
         # "Emission" (not "Pump") to match the EDFA panels: one enable for
         # the whole box — it gates the power amp; the preamp is driven by
         # its current setpoint alone.
-        self._add_onoff(form, "Emission", "LFC_PTAMP_ONOFF")
+        self._add_onoff(form, "Emission", "LFC_PTAMP_ONOFF", submit=self._pritel_emission_submit)
         self._add_display(form, "Power after preamp", "LFC_PTAMP_IN")
         # both currents read back 0 until emission is on, so these boxes
         # hold the setpoint (pre-filled with the commissioned bring-up
@@ -1087,6 +1209,19 @@ class MainWindow(QMainWindow):
         )
         self._add_display(form, "Output", "LFC_PTAMP_OUT")
         return box
+
+    def _pritel_emission_submit(self, keyword: str, value) -> None:
+        """Emission ON writes the preamp box's setpoint first. The unit's
+        ASD refuses pump-on while the preamp is at 0 mA, and the box shows
+        the bring-up default without ever having written it — clicking ON
+        with the displayed value unapplied caused the 2026-07-15/17 "pump
+        did not turn ON" refusals. The writer queue is FIFO, so the preamp
+        write lands before the pump-on; if it fails, the ASD still blocks."""
+        if str(value) == "1":
+            preamp = self.widgets.get("LFC_PTAMP_PRE_P")
+            if preamp is not None:
+                self._submit("LFC_PTAMP_PRE_P", preamp.spin.value())
+        self._submit(keyword, value)
 
     def _rf_panel(self) -> QGroupBox:
         box = QGroupBox("RF chain")
@@ -1584,7 +1719,10 @@ class MainWindow(QMainWindow):
         ):
             if keyword not in self.schema:
                 continue
-            widget = KeywordSpinBox(keyword, self._spec(keyword), self._wsp_submit)
+            # 0.01 per arrow click, like the IM lock boxes (Dan, 2026-07-17)
+            widget = KeywordSpinBox(
+                keyword, {**self._spec(keyword), "step": 0.01}, self._wsp_submit
+            )
             widget.spin.setValue(remembered[keyword])
             self._wsp_spins[keyword] = widget
             self.widgets[keyword] = widget
@@ -1769,7 +1907,92 @@ class MainWindow(QMainWindow):
         if hasattr(widget, "write_rejected"):
             widget.write_rejected()
 
+    #: laptop temperature strip-chart history, seconds (~2 s cadence)
+    LAPTOP_HISTORY_S = 1800
+
+    _LAPTOP_ZONE_COLORS = (ACCENT, "#c678dd", "#5b9bd5", "#c78a00")
+
+    def _on_laptop_sample(self, sample) -> None:
+        """One LaptopSample from the local health thread (gui/laptop.py)."""
+        if sample.error:
+            self._laptop_status.setText(f"(health sensors unavailable: {sample.error})")
+            self._laptop_status.show()
+            return
+        self._laptop_status.hide()
+
+        for zone in sorted(sample.zones_C):
+            if zone not in self._laptop_zone_rows:
+                label = QLabel("—")
+                label.setToolTip(
+                    f"ACPI thermal zone {zone} — amber above {TEMP_WARN_C:.0f} °C, "
+                    f"red above {TEMP_HOT_C:.0f} °C"
+                )
+                # zones stack at the top of the form, in sorted order
+                self._laptop_form.insertRow(len(self._laptop_zone_rows), f"Zone {zone}", label)
+                self._laptop_zone_rows[zone] = label
+            label = self._laptop_zone_rows[zone]
+            temp = sample.zones_C[zone]
+            label.setText(f"{temp:.1f} °C")
+            label.setStyleSheet(
+                {
+                    "hot": "color: #e05252; font-weight: bold;",
+                    "warn": "color: #c78a00; font-weight: bold;",
+                }.get(temp_state(temp), "")
+            )
+
+        details = []
+        codes = {zone: int(v) for zone, v in sample.throttle.items() if v}
+        if codes:
+            details.append("reasons " + ", ".join(f"{z}: {c}" for z, c in codes.items()))
+        passive = min(sample.passive_limit_pct.values(), default=None)
+        if passive is not None and passive < 100.0:
+            details.append(f"passive limit {passive:.0f} %")
+        if sample.throttling:
+            self._laptop_throttle_lamp.set_state("fault")
+            self._laptop_throttle.setText("THROTTLING — " + "; ".join(details))
+            self._laptop_throttle.setStyleSheet("color: #e05252; font-weight: bold;")
+        else:
+            self._laptop_throttle_lamp.set_state(True)
+            self._laptop_throttle.setText("none")
+            self._laptop_throttle.setStyleSheet("")
+        self._laptop_passive.setText("—" if passive is None else f"{passive:.0f} %")
+
+        util, perf = sample.cpu_util_pct, sample.cpu_perf_pct
+        self._laptop_cpu.setText("—" if util is None else f"{util:.0f} %")
+        self._laptop_clock.setText("—" if perf is None else f"{perf:.0f} % of base")
+
+        battery = "" if sample.battery_pct is None else f" ({sample.battery_pct:.0f} %)"
+        if sample.ac_power is False:  # unplugged: the comb GUI dies with the battery
+            self._laptop_power.setText(f"ON BATTERY{battery}")
+            self._laptop_power.setStyleSheet("color: #e05252; font-weight: bold;")
+        else:
+            self._laptop_power.setText("—" if sample.ac_power is None else f"AC{battery}")
+            self._laptop_power.setStyleSheet("")
+
+        if self._laptop_chart is None:
+            return
+        import pyqtgraph as pg
+
+        now = time.time()
+        for zone, temp in sample.zones_C.items():
+            if zone not in self._laptop_series:
+                color = self._LAPTOP_ZONE_COLORS[
+                    len(self._laptop_series) % len(self._LAPTOP_ZONE_COLORS)
+                ]
+                self._laptop_curves[zone] = self._laptop_chart.plot(
+                    pen=pg.mkPen(color, width=1), name=zone
+                )
+                self._laptop_series[zone] = ([], [])
+            times, temps = self._laptop_series[zone]
+            times.append(now)
+            temps.append(temp)
+            while times and times[0] < now - self.LAPTOP_HISTORY_S:
+                times.pop(0)
+                temps.pop(0)
+            self._laptop_curves[zone].setData([(t - now) / 60.0 for t in times], temps)
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.poller.stop()
         self.writer.stop()
+        self.laptop_poller.stop()
         super().closeEvent(event)

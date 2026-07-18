@@ -103,7 +103,7 @@ def test_state_endpoint(client):
 
 def test_schema_endpoint(client):
     body = client.get("/api/v1/schema").json()
-    assert len(body) == 86  # 77 baseline + additions in ktl/keyword-changes.md
+    assert len(body) == 89  # 77 baseline + additions in ktl/keyword-changes.md
     assert body["LFC_EDFA27_P"]["max"] == 630
     assert body["LFC_EDFA27_P"]["bound"] is True
     assert body["LFC_TEMP_TEST2"]["bound"] is True  # daq_eocb board in the example config

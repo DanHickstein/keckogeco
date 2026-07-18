@@ -8,7 +8,8 @@ config/site-info.txt
 
 # Logs and telemetry
 logs/
-ws.log
+ws.log*
+debug.log
 
 # Saved OSA spectra (GUI "Save" button)
 spectra/

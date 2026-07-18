@@ -14,12 +14,13 @@ EXAMPLE = pathlib.Path(__file__).parent.parent / "config" / "instruments.example
 # ------------------------------------------------------------------ schema
 
 
-def test_schema_loads_86_keywords():
+def test_schema_loads_89_keywords():
     # 77 baseline keywords + additions listed in ktl/keyword-changes.md
     # (LFC_WSP_TOD, LFC_WSP_CENTER, EDFA output monitors x3, EDFA13 input
-    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V, LFC_REPRATE)
+    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V, LFC_REPRATE, and the
+    # reference chain: LFC_REPRATE_REF, LFC_RBCLOCK_PHASELOCK/FREQLOCK)
     schema = load_schema()
-    assert len(schema) == 86
+    assert len(schema) == 89
     assert schema["LFC_EDFA27_P"].writable
     assert schema["LFC_EDFA27_P"].units == "mW"
     assert schema["LFC_EDFA27_P"].max == 630
@@ -248,6 +249,15 @@ def test_all_keywords_bound_with_full_config(controller):
     }
     unbound = {n for n in controller.registry.schema if n not in controller.registry.bound}
     assert unbound <= allowed_unbound
+
+
+def test_reference_chain_keywords(controller):
+    # FS725 lock health and the counter's timebase source (EXT = the
+    # shared Rb 10 MHz; INT means LFC_REPRATE silently loses its
+    # Rb discipline even though the value itself still reads)
+    assert controller.read("LFC_RBCLOCK_PHASELOCK").value is True
+    assert controller.read("LFC_RBCLOCK_FREQLOCK").value is True
+    assert controller.read("LFC_REPRATE_REF").value == "EXT"
 
 
 def test_bound_keyword_count(controller):

@@ -35,6 +35,15 @@ class PendulumCNT90(Instrument):
     def case_temperature_C(self) -> float:
         return float(self.query(":SYST:TEMP?"))
 
+    @property
+    def reference_source(self) -> str:
+        """Timebase the counter is using, e.g. ``EXT`` (rear 10 MHz input,
+        Rb-disciplined here) or ``INT``. Reported verbatim from
+        ``:ROSC:SOUR?``. A counter that silently falls back to INT reads
+        ~10 ppb (~200 Hz at 16 GHz) off with every other monitor healthy
+        (seen 2026-07-17), so this is surfaced as LFC_REPRATE_REF."""
+        return self.query(":ROSC:SOUR?").strip().upper()
+
     def run(self) -> None:
         """Continuous measurement, updating the front-panel display."""
         self.write(":INIT:CONT ON")
@@ -63,10 +72,14 @@ class PendulumCNT90(Instrument):
             ) from exc
 
     def status(self) -> dict:
-        return {"frequency_Hz": self.measure_frequency_Hz()}
+        return {
+            "frequency_Hz": self.measure_frequency_Hz(),
+            "reference_source": self.reference_source,
+        }
 
     SIM_RESPONSES: ClassVar[dict] = {
         "*IDN?": "Pendulum, CNT-90XL, 0, SIM",
         ":SYST:TEMP?": "38.0",
         "FETC?": "16000000000.0",  # a healthy 16 GHz rep rate
+        ":ROSC:SOUR?": "EXT",  # referenced to the FS725 10 MHz
     }
