@@ -66,11 +66,14 @@ def test_laptop_tab_updates(qtbot):
     window.laptop_poller.stop()
     assert "waiting" in window._laptop_status.text()
 
-    # healthy sample: zone row appears, everything plain, lamp green
+    # healthy sample: zone row appears, everything plain, lamp green;
+    # the Overview Temperatures panel mirrors the hottest zone
     window._on_laptop_sample(_sample())
     zone = window._laptop_zone_rows["THM0"]
     assert zone.text() == "75.0 °C"
     assert zone.styleSheet() == ""
+    assert window._overview_laptop_temp.text() == "75.0 °C"
+    assert window._overview_laptop_temp.styleSheet() == ""
     assert window._laptop_throttle.text() == "none"
     assert "#35d07f" in window._laptop_throttle_lamp.styleSheet()
     assert window._laptop_passive.text() == "100 %"
@@ -85,6 +88,7 @@ def test_laptop_tab_updates(qtbot):
     window._on_laptop_sample(_sample(zones_C={"THM0": 97.0}))
     assert "#e05252" in zone.styleSheet()
     assert "bold" in zone.styleSheet()
+    assert "#e05252" in window._overview_laptop_temp.styleSheet()
 
     # throttling: red lamp, reasons + passive limit in the text
     window._on_laptop_sample(_sample(throttle={"THM0": 2.0}, passive_limit_pct={"THM0": 60.0}))
@@ -103,9 +107,11 @@ def test_laptop_tab_updates(qtbot):
     assert window._laptop_power.text() == "AC (99 %)"
     assert window._laptop_power.styleSheet() == ""
 
-    # a zone showing up later gets its own row (and curve)
+    # a zone showing up later gets its own row (and curve); the Overview
+    # readout tracks the hottest zone, not the newest
     window._on_laptop_sample(_sample(zones_C={"THM0": 75.0, "THM1": 40.0}))
     assert window._laptop_zone_rows["THM1"].text() == "40.0 °C"
+    assert window._overview_laptop_temp.text() == "75.0 °C"
 
     # the strip chart accumulated every THM0 sample fed above
     if window._laptop_chart is not None:
@@ -113,10 +119,12 @@ def test_laptop_tab_updates(qtbot):
         assert len(temps) == 7
         assert temps[-1] == 75.0
 
-    # an error sample surfaces the reason instead of stale readouts
+    # an error sample surfaces the reason instead of stale readouts,
+    # and blanks the Overview mirror
     window._on_laptop_sample(LaptopSample(error="laptop health counters are Windows-only"))
     assert "Windows-only" in window._laptop_status.text()
     assert not window._laptop_status.isHidden()
+    assert window._overview_laptop_temp.text() == "—"
 
     window.poller.stop()
     window.writer.stop()
