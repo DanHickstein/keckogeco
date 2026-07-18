@@ -161,10 +161,16 @@ def extract_comb_lines(
     inner = (peaks > 0) & (peaks < nu.size - 1)
     left, mid, right = peaks[inner] - 1, peaks[inner], peaks[inner] + 1
     denom = (nu[left] - nu[mid]) * (nu[left] - nu[right]) * (nu[mid] - nu[right])
-    a = (nu[right] * (db[mid] - db[left]) + nu[mid] * (db[left] - db[right])
-         + nu[left] * (db[right] - db[mid])) / denom
-    b = (nu[right] ** 2 * (db[left] - db[mid]) + nu[mid] ** 2 * (db[right] - db[left])
-         + nu[left] ** 2 * (db[mid] - db[right])) / denom
+    a = (
+        nu[right] * (db[mid] - db[left])
+        + nu[mid] * (db[left] - db[right])
+        + nu[left] * (db[right] - db[mid])
+    ) / denom
+    b = (
+        nu[right] ** 2 * (db[left] - db[mid])
+        + nu[mid] ** 2 * (db[right] - db[left])
+        + nu[left] ** 2 * (db[mid] - db[right])
+    ) / denom
     curved = a < -1e-12
     vertex = -b[curved] / (2.0 * a[curved])
     shift = np.clip(vertex - nu[mid[curved]], -1.5 * dnu, 1.5 * dnu)
@@ -490,12 +496,20 @@ class CombFitWindow(QMainWindow):
         self._spec_plot.addLegend(offset=(10, 10))
         self._spec_curve = self._spec_plot.plot(pen=pg.mkPen(ACCENT, width=1), name="measured")
         self._peak_dots = self._spec_plot.plot(
-            pen=None, symbol="o", symbolSize=6, symbolPen=pg.mkPen(ACCENT), symbolBrush=None,
+            pen=None,
+            symbol="o",
+            symbolSize=6,
+            symbolPen=pg.mkPen(ACCENT),
+            symbolBrush=None,
             name="comb lines",
         )
         self._fit_curve = self._spec_plot.plot(
-            pen=pg.mkPen("#e8a33d", width=1), symbol="d", symbolSize=7,
-            symbolPen=pg.mkPen("#e8a33d"), symbolBrush="#e8a33d", name="IM+PM fit",
+            pen=pg.mkPen("#e8a33d", width=1),
+            symbol="d",
+            symbolSize=7,
+            symbolPen=pg.mkPen("#e8a33d"),
+            symbolBrush="#e8a33d",
+            name="IM+PM fit",
         )
 
         self._res_plot = pg.PlotWidget()
@@ -570,7 +584,8 @@ class CombFitWindow(QMainWindow):
     def _open_dialog(self):
         spectra_dir = Path(__file__).resolve().parents[2] / "spectra"
         path, _filter = QFileDialog.getOpenFileName(
-            self, "Open spectrum CSV",
+            self,
+            "Open spectrum CSV",
             str(spectra_dir if spectra_dir.is_dir() else Path.home()),
             "Spectrum CSV (*.csv);;All files (*)",
         )
@@ -654,8 +669,7 @@ class CombFitWindow(QMainWindow):
         sig = fit.sigma
         self._phase_label.setText(_format_pm(fit.phase * deg, sig["phase"] * deg, 1, "°"))
         self._twin_label.setText(
-            f"{fit.twin_phase * deg:.1f}° at {fit.twin_rms_db:.2f} dB rms "
-            f"(best {fit.rms_db:.2f})"
+            f"{fit.twin_phase * deg:.1f}° at {fit.twin_rms_db:.2f} dB rms (best {fit.rms_db:.2f})"
         )
         self._value_labels["beta"].setText(
             _format_pm(fit.beta, sig["beta"], 2, " rad") + f"  ({fit.beta / np.pi:.2f} π)"
@@ -669,9 +683,7 @@ class CombFitWindow(QMainWindow):
         )
         self._value_labels["rms"].setText(f"{fit.rms_db:.2f} dB over {lines.n.size} lines")
         carrier_nm = _C_NM_GHZ / (lines.nu0_ghz + fit.n0 * lines.frep_ghz)
-        self._value_labels["grid"].setText(
-            f"{lines.frep_ghz:.4f} GHz, carrier {carrier_nm:.3f} nm"
-        )
+        self._value_labels["grid"].setText(f"{lines.frep_ghz:.4f} GHz, carrier {carrier_nm:.3f} nm")
         self._status.setText(f"fit done — rms residual {fit.rms_db:.2f} dB")
 
 
