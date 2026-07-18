@@ -23,7 +23,9 @@ starts with a stray control character. :meth:`PritelAmp._ask` handles both.
 
 from __future__ import annotations
 
+import threading
 import time
+from collections.abc import Callable
 from typing import ClassVar
 
 import numpy as np
@@ -82,6 +84,13 @@ class PritelAmp(Instrument):
         # The real unit sends an echo line before the response; SimTransport
         # answers immediately.
         self._discard_echo = not isinstance(transport, SimTransport)
+        # A full 0 -> 3.9 A power-amp ramp is ~80 commands (~1 min), and
+        # the instrument lock is per-command, so a pump-off from another
+        # thread CAN interleave — but the ramp used to keep stepping
+        # (Dan, 2026-07-18: "not possible to turn the Pritel off while
+        # it's doing its upward ramp"). set_pump(False) sets this event;
+        # an in-flight ramp sees it, stops, and parks its stage at 0.
+        self._ramp_abort = threading.Event()
 
     def _configure(self) -> None:
         # Wake the unit and flush its greeting, like the old connect().
@@ -170,7 +179,11 @@ class PritelAmp(Instrument):
         return state == "ON"
 
     def set_pump(self, on: bool) -> None:
-        """Turn the pump on/off, re-sending until the readback confirms."""
+        """Turn the pump on/off, re-sending until the readback confirms.
+
+        Turning OFF also aborts any current ramp in flight on another
+        thread (the ramp parks its stage at 0, the down-sequence state).
+        """
         target = bool(on)
         cmd = "FA ON" if target else "FA OFF"
         if target:
@@ -178,6 +191,8 @@ class PritelAmp(Instrument):
                 "%s: ACTIVATING PUMP - seed input power must be appropriate to avoid damage",
                 self.name,
             )
+        else:
+            self._ramp_abort.set()
         deadline = time.monotonic() + self.PUMP_TIMEOUT_S
         reply = None
         while self.pump_on != target:
@@ -209,14 +224,25 @@ class PritelAmp(Instrument):
     def preamp_mA(self) -> float:
         return self._value_after_equals(self._ask("FA PREAMP?"), "preamp current")
 
-    def set_preamp_mA(self, mA: float, ramp: bool = True) -> None:
-        """Set the preamp current, ramping in RAMP_STEP_PRE_MA steps."""
+    def set_preamp_mA(
+        self, mA: float, ramp: bool = True, abort_check: Callable[[], bool] | None = None
+    ) -> None:
+        """Set the preamp current, ramping in RAMP_STEP_PRE_MA steps.
+
+        ``abort_check`` is polled before each step (the action executor's
+        abort); a concurrent ``set_pump(False)`` also stops the ramp. An
+        aborted ramp parks the preamp at 0 mA.
+        """
         mA = to_mA(mA)
         if mA > self.PREAMP_MAX_MA:
             raise ValueError(
                 f"{self.name}: preamp {mA:.0f} mA exceeds max {self.PREAMP_MAX_MA:.0f} mA"
             )
+        self._ramp_abort.clear()
         for step in self._ramp_steps(self.preamp_mA, mA, self.RAMP_STEP_PRE_MA if ramp else 0):
+            if self._ramp_aborted(abort_check, "preamp"):
+                self._ask("FA SETPRE 000")
+                return
             reply = self._ask(f"FA SETPRE {step:03.0f}")
             self.log.info("%s: %s", self.name, reply)
 
@@ -226,10 +252,15 @@ class PritelAmp(Instrument):
     def pwramp_mA(self) -> float:
         return self._value_after_equals(self._ask("FA PWRAMP?"), "power-amp current")
 
-    def set_pwramp_mA(self, mA: float, ramp: bool = True) -> None:
+    def set_pwramp_mA(
+        self, mA: float, ramp: bool = True, abort_check: Callable[[], bool] | None = None
+    ) -> None:
         """Set the power-amp current, ramping in RAMP_STEP_PWR_MA steps.
 
         The command resolution is 0.01 A, so values are rounded to 10 mA.
+        ``abort_check`` is polled before each step (the action executor's
+        abort); a concurrent ``set_pump(False)`` also stops the ramp. An
+        aborted ramp parks the power amp at 0 mA.
         """
         mA = round(to_mA(mA) / 10) * 10
         if mA > self.PWRAMP_MAX_MA:
@@ -238,9 +269,23 @@ class PritelAmp(Instrument):
             )
         if not self.pump_on and mA > 0:
             self.log.warning("%s: setting power-amp current with pump OFF has no effect", self.name)
+        self._ramp_abort.clear()
         for step in self._ramp_steps(self.pwramp_mA, mA, self.RAMP_STEP_PWR_MA if ramp else 0):
+            if self._ramp_aborted(abort_check, "power amp"):
+                self._ask("FA SETPWR 000")
+                return
             reply = self._ask(f"FA SETPWR {step / 10:03.0f}")
             self.log.info("%s: %s (output %.2f W)", self.name, reply, self.output_power_mW / 1e3)
+
+    def _ramp_aborted(self, abort_check: Callable[[], bool] | None, stage: str) -> bool:
+        """True when a running ramp should stop: pump-off from another
+        thread (_ramp_abort) or the caller's abort_check (action Abort).
+        The caller then parks the stage at 0 — the safe down-sequence
+        state, so a later pump-on can't jump straight to a high current."""
+        if not (self._ramp_abort.is_set() or (abort_check is not None and abort_check())):
+            return False
+        self.log.warning("%s: %s ramp aborted; parking the stage at 0", self.name, stage)
+        return True
 
     @staticmethod
     def _ramp_steps(start_mA: float, stop_mA: float, step_mA: float) -> list[float]:

@@ -711,6 +711,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- building
 
     def _submit(self, keyword: str, value) -> None:
+        if keyword in _CONFIRM and str(value) == "0":
+            # power-off writes jump the FIFO write queue: an emergency
+            # stop must not wait behind a slow in-flight write (the
+            # Pritel's ~1 min power-amp ramp made Turn OFF appear to do
+            # nothing; the server aborts the ramp when the OFF arrives)
+            self.statusBar().showMessage(f"writing {keyword} = {value} (immediate) ...")
+            self.writer.submit_urgent(keyword, value)
+            return
         self.statusBar().showMessage(f"writing {keyword} = {value} ...")
         self.writer.submit(keyword, value)
 

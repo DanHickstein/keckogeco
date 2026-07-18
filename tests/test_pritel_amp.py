@@ -108,6 +108,62 @@ def test_pwramp_ramp_reaches_target(amp):
     assert amp.pwramp_mA == pytest.approx(500.0)
 
 
+def test_pump_off_aborts_running_ramp(amp):
+    """set_pump(False) mid-ramp (from another thread in real life) stops
+    the stepping and parks the power amp at 0 — the operator could not
+    turn the Pritel off during the upward ramp (2026-07-18)."""
+    amp.set_pump(True)
+    # simulate "pump-off arrives after the 3rd step" via the abort hook's
+    # sibling: set_pump(False) sets _ramp_abort; here we trigger it from
+    # the sim transport so the timing is deterministic
+    original = amp.transport.write
+    steps = {"n": 0}
+
+    def write_counting(cmd):
+        original(cmd)
+        if cmd.startswith("FA SETPWR"):
+            steps["n"] += 1
+            if steps["n"] == 3:
+                amp._ramp_abort.set()  # what a concurrent set_pump(False) does
+
+    amp.transport.write = write_counting
+    amp.set_pwramp_mA(3900)
+    setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
+    # 3 steps went out, then the abort parked the stage at 0
+    assert len(setpwr) == 4
+    assert setpwr[-1] == "FA SETPWR 000"
+    assert amp.pwramp_mA == pytest.approx(0.0)
+
+
+def test_action_abort_check_stops_ramp(amp):
+    """The executor's abort (polled via abort_check) stops a ramp before
+    the next step; the stage parks at 0 and the call returns."""
+    aborted = {"now": False}
+    calls = {"n": 0}
+
+    def abort_check():
+        calls["n"] += 1
+        aborted["now"] = calls["n"] > 2
+        return aborted["now"]
+
+    amp.set_preamp_mA(600, abort_check=abort_check)
+    setpre = [c for c in amp.transport.sent if c.startswith("FA SETPRE")]
+    assert setpre[-1] == "FA SETPRE 000"
+    assert len(setpre) == 3  # two real steps, then the park-at-0
+    assert amp.preamp_mA == pytest.approx(0.0)
+
+
+def test_pump_off_sets_abort_and_next_ramp_clears_it(amp):
+    amp.set_pump(False)
+    assert amp._ramp_abort.is_set()
+    amp.set_pump(True)  # pump ON must not request an abort
+    amp.set_preamp_mA(100)  # a fresh ramp clears the stale flag and runs
+    setpre = [c for c in amp.transport.sent if c.startswith("FA SETPRE")]
+    assert setpre[-1] == "FA SETPRE 100"
+    assert not amp._ramp_abort.is_set()
+    assert amp.preamp_mA == pytest.approx(100.0)
+
+
 def test_status_dict(amp):
     status = amp.status()
     assert status["pump_on"] is False
