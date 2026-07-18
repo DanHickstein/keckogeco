@@ -98,6 +98,26 @@ def test_im_bias_scan_action(controller):
     assert payload["bias_V"] == pytest.approx(0.5)
 
 
+def test_im_lock_mode_keyword_engages_from_current_bias(controller):
+    """Locking is manual (no autolock): LFC_IM_LOCK_MODE = 1 copies the
+    manual bias into the SIM960 output offset (bumpless takeover from
+    where the operator parked the bias) and engages the PID; 0 returns
+    to manual output."""
+    servo = controller._im_servo
+    servo.manual_output_V = 1.2
+    servo.setpoint_ramping_on = True  # legacy front-panel state
+    controller.write("LFC_IM_LOCK_MODE", "1")
+    assert servo.output_mode == "PID"
+    assert servo.output_offset_V == pytest.approx(1.2)
+    assert controller.read("LFC_IM_LOCK_MODE").value is True
+    # engage must kill setpoint ramping: it only acts in PID mode and
+    # turns on-the-fly lockpoint edits into a RATE-limited crawl that
+    # looks like the value reverting (Dan, 2026-07-16)
+    assert servo.setpoint_ramping_on is False
+    controller.write("LFC_IM_LOCK_MODE", "0")
+    assert servo.output_mode == "MAN"
+
+
 def test_unknown_action_rejected(controller):
     with pytest.raises(KeyError, match="unknown action"):
         controller.executor.submit("make_coffee")

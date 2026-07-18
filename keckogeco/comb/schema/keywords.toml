@@ -93,6 +93,34 @@ type = "boolean"
 writable = false
 help = "rf freq monitor"
 
+# Addition (2026-07-16, see ktl/keyword-changes.md): the actual measured
+# rep rate, not just the boolean 16 GHz +/- 1 kHz check above.
+[LFC_REPRATE]
+type = "double"
+writable = false
+units = "Hz"
+help = "Comb repetition rate measured by the Pendulum counter (channel C, 0.1 s gate); NaN while the RF chain is off"
+
+# Additions (2026-07-17, see ktl/keyword-changes.md): reference-chain
+# health. The DRO and the counter share the FS725's 10 MHz, so any Rb
+# error cancels in LFC_REPRATE — a counter silently fallen back to its
+# internal timebase reads ~200 Hz off at 16 GHz with every other
+# monitor green, and nothing exposed it.
+[LFC_REPRATE_REF]
+type = "string"
+writable = false
+help = "Pendulum counter timebase in use (EXT = rear 10 MHz from the Rb standard, INT = free-running internal)"
+
+[LFC_RBCLOCK_PHASELOCK]
+type = "boolean"
+writable = false
+help = "FS725 Rb standard: 10 MHz output phase-locked to the Rb transition"
+
+[LFC_RBCLOCK_FREQLOCK]
+type = "boolean"
+writable = false
+help = "FS725 Rb standard: frequency lock loop closed"
+
 [LFC_CLOSE_ALL]
 type = "boolean"
 writable = true
@@ -251,8 +279,8 @@ type = "double"
 writable = true
 help = "Mini-comb amplitude lock offset bias"
 units = "V"
-min = -3.0
-max = 3.0
+min = -8.0
+max = 8.0
 format = "%.1f"
 
 [LFC_IM_RF_ATT]

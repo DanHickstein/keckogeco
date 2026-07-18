@@ -73,10 +73,25 @@ class SIM900(Instrument):
         return self._io(op)
 
     def write_slot(self, slot: int, cmd: str) -> None:
-        def op() -> None:
+        """Route one set-command to a module slot (clear -> CONN -> write),
+        then sync with a query before returning.
+
+        The sync query is load-bearing: the mainframe forwards commands to
+        the module over a slow internal serial link, and the NEXT slot
+        operation starts with a device clear — which flushes anything
+        still in that pipe. An immediately-following operation used to
+        eat the write (live on the rack 2026-07-17: ``SETP`` while locked
+        never reached the SIM960 because ``PUT /im`` reads the state right
+        back). The module answers ``*IDN?`` only after processing every
+        earlier byte of the in-order stream, so once it replies the write
+        is guaranteed delivered.
+        """
+
+        def op() -> str:
             self.transport.clear()
             self._connect_slot(slot)
             self.transport.write(cmd)
+            return self.transport.query("*IDN?")
 
         self._io(op)
 

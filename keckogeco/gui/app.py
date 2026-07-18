@@ -46,7 +46,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     window = MainWindow(client)
-    window.resize(880, 780)
+    # matches the layout's real minimum (~930x635 with the plots wired) so
+    # the window no longer snaps larger when the first poll arrives;
+    # width up to ~1000 is fine, height is the scarce direction (Dan)
+    window.resize(950, 660)
     window.show()
     return app.exec()
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
+import threading
 from typing import Protocol, runtime_checkable
 
 from .errors import InstrumentError, NotConnected
@@ -34,6 +35,28 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+#: one lock per GPIB interface ("GPIB0"): NI-488 crashed the server three
+#: times on 2026-07-16 with a native access violation (no traceback, the
+#: process just dies) once three GPIB instruments were polled from
+#: concurrent threads — the bus tested clean single-threaded. All VISA
+#: I/O on the same board is serialized process-wide, so the NI layer
+#: never sees concurrent calls for one interface. Instruments on other
+#: transports are unaffected; each thread's own driver-level RLock still
+#: comes first (never acquire the board lock, then a driver lock).
+_GPIB_BOARD_LOCKS: dict[str, threading.RLock] = {}
+_GPIB_BOARD_LOCKS_GUARD = threading.Lock()
+
+
+def _visa_io_lock(address: str) -> threading.RLock:
+    """The shared per-board lock for GPIB addresses; a private lock for
+    every other VISA resource (USB-TMC, ASRL serial)."""
+    match = re.match(r"(GPIB\d*)\s*::", address, re.IGNORECASE)
+    if not match:
+        return threading.RLock()
+    board = match.group(1).upper()
+    with _GPIB_BOARD_LOCKS_GUARD:
+        return _GPIB_BOARD_LOCKS.setdefault(board, threading.RLock())
 
 
 @runtime_checkable
@@ -87,29 +110,36 @@ class VisaTransport:
         self.timeout_ms = timeout_ms
         self.attrs = attrs
         self._resource = None
+        # shared across all transports on the same GPIB board (see
+        # _visa_io_lock); private for non-GPIB VISA resources
+        self._io_lock = _visa_io_lock(address)
 
     def open(self) -> None:
         import pyvisa
 
         if self._resource is not None:
             return
-        rm = pyvisa.ResourceManager()
-        try:
-            resource = rm.open_resource(self.address)
-        except pyvisa.errors.Error as exc:
-            raise InstrumentError(f"Could not open VISA resource {self.address}: {exc}") from exc
-        resource.timeout = self.timeout_ms
-        for key, value in self.attrs.items():
-            setattr(resource, key, value)
-        self._resource = resource
+        with self._io_lock:
+            rm = pyvisa.ResourceManager()
+            try:
+                resource = rm.open_resource(self.address)
+            except pyvisa.errors.Error as exc:
+                raise InstrumentError(
+                    f"Could not open VISA resource {self.address}: {exc}"
+                ) from exc
+            resource.timeout = self.timeout_ms
+            for key, value in self.attrs.items():
+                setattr(resource, key, value)
+            self._resource = resource
 
     def close(self) -> None:
         if self._resource is not None:
-            try:
-                self._resource.close()
-            except Exception as exc:  # noqa: BLE001 - closing must never raise
-                log.debug("Ignoring error while closing %s: %s", self.address, exc)
-            self._resource = None
+            with self._io_lock:
+                try:
+                    self._resource.close()
+                except Exception as exc:  # noqa: BLE001 - closing must never raise
+                    log.debug("Ignoring error while closing %s: %s", self.address, exc)
+                self._resource = None
 
     @property
     def is_open(self) -> bool:
@@ -129,28 +159,35 @@ class VisaTransport:
         return self._resource
 
     def write(self, cmd: str) -> None:
-        self._require_open().write(cmd)
+        with self._io_lock:
+            self._require_open().write(cmd)
 
     def read(self) -> str:
-        return self._require_open().read()
+        with self._io_lock:
+            return self._require_open().read()
 
     def query(self, cmd: str) -> str:
-        return self._require_open().query(cmd)
+        with self._io_lock:
+            return self._require_open().query(cmd)
 
     def write_bytes(self, data: bytes) -> None:
-        self._require_open().write_raw(data)
+        with self._io_lock:
+            self._require_open().write_raw(data)
 
     def read_bytes(self, n: int = 1) -> bytes:
-        return bytes(self._require_open().read_bytes(n))
+        with self._io_lock:
+            return bytes(self._require_open().read_bytes(n))
 
     def read_available(self) -> bytes:
-        resource = self._require_open()
-        pending = getattr(resource, "bytes_in_buffer", 0)
-        return bytes(resource.read_bytes(pending)) if pending else b""
+        with self._io_lock:
+            resource = self._require_open()
+            pending = getattr(resource, "bytes_in_buffer", 0)
+            return bytes(resource.read_bytes(pending)) if pending else b""
 
     def clear(self) -> None:
         """VISA device clear (used by the SIM900 to escape a module link)."""
-        self._require_open().clear()
+        with self._io_lock:
+            self._require_open().clear()
 
 
 class SerialTransport:

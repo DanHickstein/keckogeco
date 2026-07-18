@@ -172,6 +172,18 @@ driver = "agiltron_switch"
 address = "COM12"
 name = "Agiltron 2x2 switch (1 = YJ, 2 = HK)"
 
+# Thorlabs ELL12 six-position ND-filter slider: the spectral flattener's
+# output attenuator (docs/user_guide/menlo_flattener.md). Historically
+# driven from the Menlo laptop's ELLO software; once its Elliptec interface
+# board is cabled to this laptop, set the COM port here and enable it.
+# Optional keys: bus_address (Elliptec multi-drop char, default "0") and
+# slot_pulses (pins the pulses-between-slots if the value derived from the
+# unit's info reply turns out wrong on the real hardware).
+[devices.nd_slider]
+driver = "thorlabs_ell12"
+address = "COM30"
+name = "Flattener ND filter slider (ELL12)"
+
 [devices.clarity]
 driver = "clarity"
 address = "ASRL23::INSTR"

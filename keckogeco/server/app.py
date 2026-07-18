@@ -63,20 +63,32 @@ class OsaSweepRequest(BaseModel):
 
 
 class ImScanRequest(BaseModel):
-    """IM bias scan range. Bounds match the LFC_IM_BIAS keyword (±3 V,
-    the documented sweep range of the manual locking procedure)."""
+    """IM bias scan range. Bounds are the ±8 V operating limit chosen to
+    stay under the SIM960's ±10 V output spec (Dan, 2026-07-15); the
+    default sweep covers ±5 V. Settle times under ~1 s make MMON return
+    the same reading for several consecutive points."""
 
-    v_start: float = Field(-2.0, ge=-3.0, le=3.0)
-    v_stop: float = Field(1.0, ge=-3.0, le=3.0)
-    v_step: float = Field(0.02, ge=0.002, le=0.5)
-    settle_s: float = Field(0.2, ge=0.0, le=5.0)
+    v_start: float = Field(-5.0, ge=-8.0, le=8.0)
+    v_stop: float = Field(5.0, ge=-8.0, le=8.0)
+    v_step: float = Field(0.2, ge=0.002, le=0.5)
+    settle_s: float = Field(1.0, ge=0.0, le=5.0)
+
+
+class SliderRequest(BaseModel):
+    """Target slot of the flattener's ND-filter slider (Thorlabs ELL12)."""
+
+    position: int = Field(ge=1, le=6)
 
 
 class ImSettingsRequest(BaseModel):
     """Partial update of the IM servo: only the fields present are written.
-    The setpoint is the photodiode voltage the PID holds when locked."""
+    The setpoint is the photodiode voltage the PID holds when locked; the
+    PI gains are the SIM960's (P sign sets the feedback polarity; bounds
+    mirror the module's documented ranges)."""
 
     setpoint_V: float | None = Field(None, ge=-10.0, le=10.0)
+    prop_gain: float | None = Field(None, ge=-1000.0, le=1000.0)
+    intg_gain: float | None = Field(None, ge=0.01, le=5e5)
 
 
 def _json_value(value):
@@ -364,12 +376,16 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
 
     def im_live(servo) -> dict:
         """Servo readouts with the same keys as the im_scan array payload,
-        so the GUI panel can populate from either."""
+        so the GUI panel can populate from either. Gains are included here
+        (on-demand GET/PUT read-backs) but deliberately NOT in the array
+        payload — they change rarely and the array is polled at ~1 Hz."""
         return {
             "mode": servo.output_mode,
             "setpoint_V": servo.setpoint_V,
             "bias_V": servo.output_V,
             "input_V": servo.measure_input_V,
+            "prop_gain": servo.proportional_gain,
+            "intg_gain": servo.integral_gain,
         }
 
     @app.get(f"{API_PREFIX}/im", dependencies=[auth])
@@ -386,6 +402,10 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
         try:
             if body.setpoint_V is not None:
                 servo.setpoint_V = body.setpoint_V
+            if body.prop_gain is not None:
+                servo.proportional_gain = body.prop_gain
+            if body.intg_gain is not None:
+                servo.integral_gain = body.intg_gain
             return im_live(servo)
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -445,6 +465,45 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
         servo = srs_device().sim960(slot, f"SIM960@{slot}")
         try:
             return {"slot": slot, **servo.status()}
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # --- spectral-flattener ND slider (engineering-GUI surface, like the
+    # OSA endpoints: the slider was never a KTL keyword — it historically
+    # lived on the Menlo laptop's ELLO software, so it stays out of the
+    # contract). 503 while the slider is not connected to this laptop.
+
+    def slider_device():
+        try:
+            return controller.device("nd_slider")
+        except InstrumentError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get(f"{API_PREFIX}/flattener/slider", dependencies=[auth])
+    def slider_status() -> dict:
+        try:
+            return slider_device().status()
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.put(f"{API_PREFIX}/flattener/slider", dependencies=[auth])
+    def slider_move(body: SliderRequest) -> dict:
+        refuse_during_action()
+        slider = slider_device()
+        try:
+            slider.set_position(body.position)
+            return slider.status()
+        except InstrumentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post(f"{API_PREFIX}/flattener/slider/home", dependencies=[auth])
+    def slider_home() -> dict:
+        """Re-reference the slider (needed once after a power-up)."""
+        refuse_during_action()
+        slider = slider_device()
+        try:
+            slider.home()
+            return slider.status()
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

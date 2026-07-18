@@ -2,12 +2,13 @@
 
 The manual procedures behind the comb's two servo loops: the intensity
 modulator (IM) bias lock and the rubidium lock of the RIO pump laser.
-The IM lock is automated (`LFC_IM_AUTO_LOCK`, and it runs at the end of
-`LFC_MINICOMB_AUTO_SETUP`); this page documents the by-hand procedure
-that automation encodes, for commissioning, recovery, and
-troubleshooting. The Rb lock is **not** automated in `keckogeco` — the
-manual procedure and the old system's auto-lock algorithm are preserved
-here as reference.
+The IM lock is **deliberately manual** (design decision 2026-07-15,
+replacing the old `LFC_IM_AUTO_LOCK` automation): the GUI's IM Bias
+Lock tab runs the scan and *suggests* a setpoint, starting bias, and PI
+gains, but the operator enters them in the servo panel and engages the
+lock (`LFC_IM_LOCK_MODE`). The Rb lock is likewise **not** automated in
+`keckogeco` — the manual procedure and the old system's auto-lock
+algorithm are preserved here as reference.
 
 ## Flattening the EO comb and locking the IM bias
 
@@ -28,11 +29,23 @@ servo's manual output) and find a point on a reasonably linear slope of
 the transfer function where the EO comb looks flattest. Record the
 bias voltage.
 
-The GUI's **IM Bias Lock** tab automates this: it sweeps the bias and
-plots the minicomb photodiode (the servo's measure input) against it,
-restoring the pre-scan bias afterwards. The scan runs on the server's
-action executor, so Abort stops it and transitions can't run
-concurrently.
+The GUI's **IM Bias Lock** tab automates this step: it sweeps the bias
+and plots the minicomb photodiode (the servo's measure input) against
+it, restoring the pre-scan bias afterwards, and prints suggested lock
+settings (the mid-fringe crossing nearest the panel's Bias start value,
+the lockpoint there, and PI gains scaled from the measured slope). A
+purple dot marks where the servo currently sits on the curve — live at
+all times, including mid-scan — and a saved calibration scan can be
+overlaid as a dashed reference (remembered across GUI restarts, like
+the OSA reference spectrum). The scan runs on the server's action
+executor, so Abort stops it and transitions can't run concurrently.
+
+```{warning}
+The transfer function's amplitude scales with the EDFA27 power, and at
+the commissioned 450 mW the lock photodetector clips above ~5.5 V (see
+the {doc}`design description <../hardware/design>`). Scan and choose
+lock settings at the power you intend to operate at.
+```
 
 ### 4. Adjust RF attenuation and bias together
 
@@ -43,15 +56,18 @@ carrier is satisfactorily flat.
 
 ### 5. Engage the PID
 
-At the chosen operating point, record the servo **input** (the error
-signal value — this becomes the PID setpoint) and the servo **output**
-(the bias — this becomes the output offset). Then configure the SIM960:
+At the chosen operating point, enter in the servo panel (or via the
+API):
 
-- output limits ±10 V;
-- proportional gain **negative when locking on a falling slope,
+- the **lockpoint** — the photodiode voltage to hold (the scan
+  suggestion is the mid-fringe value; adjustable even while locked);
+- the **Bias start** — where the lock starts from;
+- **proportional gain negative when locking on a falling slope,
   positive on a rising slope** (e.g. −2), integral gain ~0.1;
-- setpoint and output offset from the recorded values;
-- switch to PID mode (`LFC_IM_LOCK_MODE = 1`).
+- then press **Lock**: the GUI writes the Bias start to `LFC_IM_BIAS`
+  and engages `LFC_IM_LOCK_MODE = 1`, which copies that bias into the
+  SIM960 output offset so the PID takes over bumplessly. While locked,
+  the Bias out box is read-only and follows the PID's live output.
 
 ### 6. Sanity-check the lock
 
@@ -61,9 +77,10 @@ doesn't shrink, reduce the gains and retry. **Never leave an unstable
 PID loop running while the comb is used for science.**
 
 ```{note}
-The automated `LFC_IM_AUTO_LOCK` performs exactly this sequence:
-manual mode → bias sweep → slope-sign detection (setting the PID
-polarity) → mid-fringe setpoint → PID engage → convergence check.
+The old system's `LFC_IM_AUTO_LOCK` automated this sequence (bias
+sweep → slope-sign detection → mid-fringe setpoint → PID engage).
+The rewrite retires it deliberately: the scan-and-suggest workflow
+keeps the operator's judgment in the loop, and the keyword is unbound.
 ```
 
 ## Rb lock of the RIO laser

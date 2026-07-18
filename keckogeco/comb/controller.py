@@ -60,6 +60,8 @@ class LFCController:
         # (bias_V, input_V) points streamed by the im_bias_scan action;
         # served as the im_scan array so the GUI can plot the sweep live
         self.im_scan_points: list[tuple[float, float]] = []
+        # (monotonic time, Hz) of the last gated Pendulum measurement
+        self._rep_rate_cache: tuple[float, float] | None = None
         self._started = False
 
     # ------------------------------------------------------------ lifecycle
@@ -275,6 +277,17 @@ class LFCController:
         if has("srs"):
             im_slot = int(self.config.devices["srs"].options.get("im_slot", 3))
             self._im_servo = self.device("srs").sim960(im_slot, "IM bias servo")
+            # ±8 V operating limit, under the SIM960's ±10 V output spec
+            # (Dan, 2026-07-15); matches the LFC_IM_BIAS schema and the
+            # scan/auto-lock bounds
+            self._im_servo.manual_output_min = -8.0
+            self._im_servo.manual_output_max = 8.0
+            # setpoint ramping OFF: it only acts in PID mode, so with the
+            # unit's front-panel RAMP left on (legacy state), a lockpoint
+            # change while locked crawls at RATE V/s instead of stepping —
+            # the GUI's on-the-fly lockpoint edits looked like they
+            # "reverted" (Dan, 2026-07-16). Re-asserted on every engage.
+            self._im_servo.setpoint_ramping_on = False
             bind(
                 "LFC_IM_BIAS",
                 getter=lambda: self._im_servo.manual_output_V,
@@ -320,6 +333,15 @@ class LFCController:
             )
         if has("pendulum"):
             bind("LFC_PENDULEM_FREQ_MONITOR", getter=lambda: self._rep_rate_ok() is True)
+            bind("LFC_REPRATE", getter=self._rep_rate_Hz)
+            bind("LFC_REPRATE_REF", getter=lambda: self.device("pendulum").reference_source)
+
+        # --- Rb frequency standard health (FS725, read-only). This is the
+        # 10 MHz behind both the DRO and the counter; see LFC_REPRATE_REF
+        # in the schema for why the chain needs its own keywords.
+        if has("rb_clock"):
+            bind("LFC_RBCLOCK_PHASELOCK", getter=lambda: self.device("rb_clock").phase_locked)
+            bind("LFC_RBCLOCK_FREQLOCK", getter=lambda: self.device("rb_clock").frequency_locked)
 
         # --- Agiltron 2x2 switch (enumerated: 1 = YJ path, 2 = HK path)
         if has("switch2x2"):
@@ -338,13 +360,8 @@ class LFCController:
                 setter=lambda v: self.device("clarity").set_output(bool(int(v))),
             )
 
-        # --- IM bias auto-lock (write 1 to run; enqueued like transitions)
-        if has("srs"):
-            bind(
-                "LFC_IM_AUTO_LOCK",
-                getter=lambda: self._action_result("im_auto_lock"),
-                setter=lambda v: self._submit_if_true("im_auto_lock", v),
-            )
+        # LFC_IM_AUTO_LOCK is deliberately unbound: locking is manual from
+        # the engineering GUI (Dan, 2026-07-15; see ktl/keyword-changes.md)
 
         # --- WaveShaper scalar keywords: WSP_PHASE programs 2nd-order
         # dispersion (GDD, d2 in ps/nm) and WSP_TOD 3rd-order (d3 in
@@ -400,7 +417,7 @@ class LFCController:
             bind(
                 "LFC_IM_LOCK_MODE",
                 getter=lambda: self._im_servo.output_mode == "PID",
-                setter=lambda v: setattr(self._im_servo, "output_mode", "PID" if v else "MAN"),
+                setter=lambda v: self._im_set_lock(bool(int(v))),
             )
         if has("rf_osc_psu"):
             bind(
@@ -695,6 +712,22 @@ class LFCController:
                 time.sleep(4)
         tec.set_temperature_C(target_C)
 
+    def _im_set_lock(self, engage: bool) -> None:
+        """LFC_IM_LOCK_MODE setter. Engaging locks at the operator's
+        current panel settings: the manual bias is copied into the SIM960
+        output offset so the PID starts from where the operator parked the
+        bias (bumpless takeover); setpoint and PI gains are whatever was
+        last written. Disengaging just returns to manual output."""
+        if engage:
+            # ramping would turn later lockpoint edits into a slow crawl
+            # (see _register_keywords); assert off in case the front
+            # panel re-enabled it since startup
+            self._im_servo.setpoint_ramping_on = False
+            self._im_servo.output_offset_V = self._im_servo.manual_output_V
+            self._im_servo.output_mode = "PID"
+        else:
+            self._im_servo.output_mode = "MAN"
+
     def _submit_if_true(self, action: str, value) -> None:
         """Transition keywords fire on a truthy write (modify kw=1)."""
         if value in (1, True):
@@ -761,6 +794,41 @@ class LFCController:
     #: rep rate must be within this of 16 GHz to count as detected
     REP_RATE_HZ = 16e9
     REP_RATE_TOLERANCE_HZ = 1000.0
+    #: counter gate: the CNT-90XL resolves ~12 digits/s, so 1 s buys the
+    #: full readout (~0.1 Hz at 16 GHz; the old 0.1 s gate stopped ~1 Hz)
+    REP_RATE_GATE_S = 1.0
+    #: one gated measurement serves every caller for this long — the
+    #: /state poll (~1 Hz from the GUI) and the keyword cache poller
+    #: would otherwise each re-gate, holding the shared GPIB board lock
+    #: for a full gate time per call
+    REP_RATE_CACHE_S = 5.0
+
+    def _rf_chain_on(self) -> bool:
+        """Both RF supplies (oscillator + amplifier) outputting."""
+        if "rf_osc_psu" not in self.devices or "rf_amp_psu" not in self.devices:
+            return False
+        return self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu")) and self.device(
+            "rf_amp_psu"
+        ).output_on(self.psu_channel("rf_amp_psu"))
+
+    def _rep_rate_Hz(self) -> float:
+        """Measured comb rep rate (LFC_REPRATE): Pendulum channel C.
+        NaN while the RF chain is off — with no 16 GHz drive the counter
+        has nothing to count and its FETC? would only time out. The
+        reading is cached for REP_RATE_CACHE_S (see the class constants)."""
+        if not self._rf_chain_on():
+            self._rep_rate_cache = None
+            return float("nan")
+        now = time.monotonic()
+        if self._rep_rate_cache is not None and now - self._rep_rate_cache[0] < (
+            self.REP_RATE_CACHE_S
+        ):
+            return self._rep_rate_cache[1]
+        frequency = self.device("pendulum").measure_frequency_Hz(
+            "c", meas_time_s=self.REP_RATE_GATE_S
+        )
+        self._rep_rate_cache = (now, frequency)
+        return frequency
 
     def _rep_rate_ok(self) -> bool:
         """Rep-rate factor of the comb state (Pendulum counter, channel C).
@@ -771,14 +839,11 @@ class LFCController:
         trigger, so here a bad rep rate is reported (and logged loudly) but
         acting on it is left to the operator / a future safety monitor.
         """
-        rf_on = self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu")) and self.device(
-            "rf_amp_psu"
-        ).output_on(self.psu_channel("rf_amp_psu"))
-        if not rf_on:
+        if not self._rf_chain_on():
             return False
         if "pendulum" not in self.devices:
             return True  # counter unavailable: fall back to the RF-chain inference
-        frequency = self.device("pendulum").measure_frequency_Hz("c")
+        frequency = self._rep_rate_Hz()  # shares the cached gated measurement
         ok = abs(frequency - self.REP_RATE_HZ) <= self.REP_RATE_TOLERANCE_HZ
         if not ok:
             log.error(

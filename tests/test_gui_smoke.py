@@ -99,6 +99,78 @@ class FakeClient:
             "resettable": False,
         }
 
+    def im_apply(self, **settings):
+        # read-back of the servo state (empty call = read; gains included)
+        return {
+            "mode": "MAN",
+            "setpoint_V": 0.41,
+            "bias_V": 0.5,
+            "input_V": 0.42,
+            "prop_gain": -2.0,
+            "intg_gain": 0.1,
+            **settings,
+        }
+
+
+def test_pendulum_rep_rate_display(qtbot):
+    """The Clock tab shows the measured rep rate with all the digits the
+    CNT-90XL earns, plus a delta-from-16-GHz line; NaN arrives as null
+    (RF chain off) and shows an em dash."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    display = window.widgets["LFC_REPRATE"]
+    assert display.text() == "—"
+    window._on_keywords({"LFC_REPRATE": {"value": 16000000000.12}})
+    assert "16" in display.text() and "Hz" in display.text()
+    assert "&thinsp;000" in display.text()  # digit grouping, all 13 digits
+    assert "+0.12" in display.text()  # Δ from 16 GHz
+    window._on_keywords({"LFC_REPRATE": {"value": None}})
+    assert display.text() == "—"
+    window.poller.stop()
+    window.writer.stop()
+
+
+def test_clock_tab_reference_chain(qtbot):
+    """The Clock tab surfaces the reference chain: FS725 lock lamps, and
+    a counter-timebase lamp that is green ONLY on EXT — a counter on its
+    internal timebase read ~200 Hz off 16 GHz with everything else green
+    (2026-07-17), which is exactly what these exist to catch."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    phase = window.widgets["LFC_RBCLOCK_PHASELOCK"]
+    freq = window.widgets["LFC_RBCLOCK_FREQLOCK"]
+    ref = window.widgets["LFC_REPRATE_REF"]
+
+    window._on_keywords(
+        {
+            "LFC_RBCLOCK_PHASELOCK": {"value": True},
+            "LFC_RBCLOCK_FREQLOCK": {"value": True},
+            "LFC_REPRATE_REF": {"value": "EXT"},
+        }
+    )
+    assert "#35d07f" in phase.lamp.styleSheet()  # locked -> green
+    assert "#35d07f" in freq.lamp.styleSheet()
+    assert "#35d07f" in ref.lamp.styleSheet()  # external 10 MHz -> green
+    assert ref.display.text() == "EXT"
+
+    # the failure signatures: Rb unlocked, counter on internal timebase
+    window._on_keywords(
+        {
+            "LFC_RBCLOCK_PHASELOCK": {"value": False},
+            "LFC_REPRATE_REF": {"value": "INT"},
+        }
+    )
+    assert "#3a4350" in phase.lamp.styleSheet()  # unlocked -> grey
+    assert "#3a4350" in ref.lamp.styleSheet()  # internal timebase -> grey
+    assert ref.display.text() == "INT"
+
+    window.poller.stop()
+    window.writer.stop()
+
 
 def test_mainwindow_constructs_and_updates(qtbot):
     from keckogeco.gui.mainwindow import MainWindow
@@ -246,16 +318,23 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert window.poller.array_every["im_scan"] == 1  # strip charts sample ~1 Hz
     controls = window._im_controls
     assert controls is not None
+    # the suggestion box starts with resting text, so its space is
+    # reserved and a finished scan doesn't reflow the tab
+    assert controls.recommend.text() == controls.RECOMMEND_PLACEHOLDER
     assert controls.params() == {
-        "v_start": -2.0,
-        "v_stop": 1.0,
-        "v_step": 0.02,
-        "settle_s": 0.2,
+        "v_start": -5.0,
+        "v_stop": 5.0,
+        "v_step": 0.2,
+        "settle_s": 1.0,
     }
-    # bias + RF attenuator keyword controls live in the servo panel (top)
+    # bias + RF attenuator keyword controls live in the servo panel (top);
+    # the bias box is deliberately NOT keyword-registered — the snapshot
+    # reports MOUT while the array reports the live OMON, and feeding the
+    # box from both made it flip between the two while locked
     servo = window._im_servo_panel
     assert servo is not None
-    assert window.widgets["LFC_IM_BIAS"] is not None
+    assert servo.bias is not None
+    assert "LFC_IM_BIAS" not in window.widgets
     assert window.widgets["LFC_IM_RF_ATT"] is not None
     assert len(window._im_charts) == 2  # photodiode + bias strip charts
 
@@ -269,7 +348,43 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert not controls.scan_button.isEnabled()
     assert controls.abort_button.isEnabled()
     assert "0.2000 V" in servo.input_v.text()  # last recorded point
-    assert "scanning" in servo.mode.text()
+    assert "scanning" in servo.status.text()
+    # the purple dot follows the sweep: the newest point is the position
+    dot_x, dot_y = window._im_pos_dot.getData()
+    assert list(dot_x) == [-1.98]
+    assert list(dot_y) == [0.2]
+
+    # a finished scan (running True -> False edge) shows suggested lock
+    # settings as TEXT (the operator enters them in the servo panel),
+    # picking the mid-fringe crossing nearest the Bias start box (0 V)
+    import math
+
+    sweep_x = [round(-5.0 + 0.1 * i, 3) for i in range(100)]
+    sweep_y = [0.5 * math.sin(2 * x + 1) for x in sweep_x]
+    window._on_array("im_scan", {"x": sweep_x, "y": sweep_y, "running": False, "mode": "MAN"})
+    suggestion = controls.recommend.text()
+    assert "suggest:" in suggestion
+    assert "P " in suggestion and "I 0.1" in suggestion  # slope ±1 -> P ±2.0
+    assert "bias -0.500" in suggestion  # sin(2v+1) crossing nearest 0 V
+    assert "slope" not in suggestion  # kept short deliberately
+
+    # PI gain boxes populate from an /im read-back (not the polled array)
+    window._on_call_done(
+        "IM settings",
+        {"mode": "MAN", "setpoint_V": 0.41, "prop_gain": -2.0, "intg_gain": 0.1},
+    )
+    assert servo.prop.spin.value() == -2.0
+    assert servo.intg.spin.value() == 0.1
+
+    # the reference calibration overlay restores from prefs (OSA pattern)
+    from keckogeco.gui import spectra as spectra_mod
+
+    ref_csv = tmp_path / "im_ref.csv"
+    spectra_mod.save_spectrum_csv(ref_csv, [-1.0, 1.0], [0.2, 0.8], {})
+    prefs.save_section("im_reference", {"csv": ref_csv.as_posix()})
+    assert window._im_ref_curve is None
+    window._im_restore_reference()
+    assert list(window._im_ref_curve.getData()[1]) == [0.2, 0.8]
 
     # idle payload: servo readouts + strip-chart history; scan re-enabled
     window._on_array(
@@ -285,27 +400,45 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
         },
     )
     assert controls.scan_button.isEnabled()
-    assert servo.mode.text() == "MANUAL"
+    assert servo.status.text() == "Unlocked"
+    assert servo.lock_button.text() == "Lock"
     assert "0.4200 V" in servo.input_v.text()
     assert servo.setpoint.spin.value() == 0.41
+    # the Bias out box follows the live output and stays editable
+    assert servo.bias.spin.value() == 0.5
+    assert servo.bias.isEnabled()
     assert window._im_history["pd"] == [0.42]
     assert window._im_history["bias"] == [0.5]
+    # the purple dot marks the current (bias, photodiode) on the curve
+    dot_x, dot_y = window._im_pos_dot.getData()
+    assert list(dot_x) == [0.5]
+    assert list(dot_y) == [0.42]
 
-    # locked: scan blocked (server would 409 anyway), lamp + label show it
+    # locked: scan blocked (server would 409 anyway), status row + gray
+    # read-only bias box show it; the lockpoint stays adjustable
     window._on_array(
         "im_scan",
         {"x": [], "y": [], "running": False, "mode": "PID", "input_V": 0.41, "bias_V": 0.48},
     )
     assert not controls.scan_button.isEnabled()
     assert "unlock" in controls.scan_button.toolTip()
-    assert servo.mode.text() == "LOCKED (PID)"
+    assert servo.status.text() == "Locked"
+    assert servo.lock_button.text() == "Unlock"
+    assert not servo.bias.isEnabled()
+    assert servo.setpoint.isEnabled()
 
-    # Lock / Unlock buttons write the LFC_IM_LOCK_MODE keyword
+    # the one button toggles: locked -> unlock; unlocked -> write the
+    # Bias start to LFC_IM_BIAS, then engage (FIFO write queue)
     submitted = []
     monkeypatch.setattr(window, "_submit", lambda k, v: submitted.append((k, v)))
     servo.lock_button.click()
-    servo.unlock_button.click()
-    assert submitted == [("LFC_IM_LOCK_MODE", "1"), ("LFC_IM_LOCK_MODE", "0")]
+    assert submitted == [("LFC_IM_LOCK_MODE", "0")]
+    window._on_array("im_scan", {"x": [], "y": [], "running": False, "mode": "MAN"})
+    assert servo.bias.isEnabled()
+    submitted.clear()
+    servo.bias_start.spin.setValue(-0.5)
+    servo.lock_button.click()
+    assert submitted == [("LFC_IM_BIAS", -0.5), ("LFC_IM_LOCK_MODE", "1")]
 
     # the OSA mirror at the bottom follows the same spectrum array
     window._on_arrays_available(["im_scan", "osa_spectrum"])
@@ -314,9 +447,9 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     _plot, osa_curve = window._im_osa_plot
     assert list(osa_curve.getData()[1]) == [-40.0, -20.0]
 
-    # IM action progress goes to the status bar + the IM tab label, and
-    # stays OFF the Overview comb-state row (long per-point messages
-    # squished the top layout); transitions keep the comb-state row
+    # ALL action progress goes to the status bar (the comb-state strip
+    # has no text area); IM scans additionally show in the scan panel's
+    # suggestion box while running
     window._on_state(
         {
             "state": "STANDBY",
@@ -324,9 +457,8 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
             "action": {"name": "im_bias_scan", "running": True, "step": 3, "message": "x"},
         }
     )
-    assert "im_bias_scan" in window.im_action_label.text()
+    assert "im_bias_scan" in controls.recommend.text()
     assert "im_bias_scan" in window.statusBar().currentMessage()
-    assert window.action_label.text() == ""
     window._on_state(
         {
             "state": "STANDBY",
@@ -334,8 +466,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
             "action": {"name": "set_standby", "running": True, "step": 1, "message": "y"},
         }
     )
-    assert window.im_action_label.text() == ""
-    assert "set_standby" in window.action_label.text()
+    assert "set_standby" in window.statusBar().currentMessage()
 
     window.poller.stop()
     window.writer.stop()
@@ -369,6 +500,84 @@ def test_keyword_spinbox_typed_value_survives_polls(qtbot):
     widget.write_rejected()
     widget.update_value(1.25)
     assert widget.spin.value() == 1.25
+
+
+def test_keyword_spinbox_readback_keeps_setpoint(qtbot):
+    """With a readback label the box is a setpoint: polls feed the label
+    and never move the box (the Pritel currents read 0 until emission is
+    on, and that must not erase the value about to be applied)."""
+    from keckogeco.gui.widgets import KeywordSpinBox
+
+    spec = {"units": "mA", "min": 0.0, "max": 600.0, "help": "preamp current"}
+    widget = KeywordSpinBox("LFC_PTAMP_PRE_P", spec, lambda k, v: None, readback=True)
+    qtbot.addWidget(widget)
+    widget.spin.setValue(600.0)
+
+    widget.update_value(0.0)
+    assert widget.spin.value() == 600.0  # setpoint stands
+    assert widget.readback.text() == "0.000 mA"  # measurement shown beside it
+    widget.update_value(None)
+    assert widget.readback.text() == "—"
+
+
+def test_pritel_panel_setpoints_and_interlock_lamp(qtbot):
+    """The Pritel boxes pre-fill with the commissioned bring-up currents
+    and keep them across a poll; the interlock latch row has a lamp that
+    is green only in the ready state."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    preamp = window.widgets["LFC_PTAMP_PRE_P"]
+    pwramp = window.widgets["LFC_PTAMP_I"]
+    assert preamp.spin.value() == 600.0  # mA
+    assert pwramp.spin.value() == 3.9  # A
+
+    window._on_keywords(
+        {
+            "LFC_PTAMP_PRE_P": {"value": 0.0},
+            "LFC_PTAMP_I": {"value": 0.0},
+            "LFC_PTAMP_LATCH": {"value": 1},
+        }
+    )
+    assert (preamp.spin.value(), pwramp.spin.value()) == (600.0, 3.9)
+    assert preamp.readback.text() == "0.000 mA"
+
+    latch = window.widgets["LFC_PTAMP_LATCH"]
+    assert "#35d07f" in latch.lamp.styleSheet()  # 1 = ready -> green
+    for tripped in (0, 3, 5, 4):
+        window._on_keywords({"LFC_PTAMP_LATCH": {"value": tripped}})
+        assert "#3a4350" in latch.lamp.styleSheet()  # anything else -> grey
+
+
+def test_pritel_emission_on_writes_preamp_first(qtbot, monkeypatch):
+    """Clicking Emission ON queues the preamp setpoint write before the
+    pump-on (the writer queue is FIFO). The box used to display 600 mA
+    without ever writing it, leaving the preamp at 0 and the unit's ASD
+    refusing FA ON (2026-07-15/17); OFF touches only the pump keyword."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    submitted = []
+    monkeypatch.setattr(window, "_submit", lambda k, v: submitted.append((k, v)))
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    emission = window.widgets["LFC_PTAMP_ONOFF"]
+    emission.update_value(False)
+    emission.button.click()
+    assert submitted == [("LFC_PTAMP_PRE_P", 600.0), ("LFC_PTAMP_ONOFF", "1")]
+
+    submitted.clear()
+    emission.update_value(True)
+    emission.button.click()
+    assert submitted == [("LFC_PTAMP_ONOFF", "0")]
+
+    window.poller.stop()
+    window.writer.stop()
 
 
 def test_interlock_voltage_coloring(qtbot):
@@ -406,6 +615,8 @@ def test_wsp_panel_remembers_values(qtbot, tmp_path, monkeypatch):
     assert window._wsp_spins["LFC_WSP_PHASE"].spin.value() == 2.14
     assert window._wsp_spins["LFC_WSP_TOD"].spin.value() == 0.0
     assert window._wsp_spins["LFC_WSP_CENTER"].spin.value() == 1559.8
+    # arrows step 0.01 per click on all three boxes (Dan, 2026-07-17)
+    assert all(w.spin.singleStep() == 0.01 for w in window._wsp_spins.values())
     # user edits GDD -> saved; a fresh GUI comes up with the edited trio
     window._wsp_spins["LFC_WSP_PHASE"].spin.setValue(3.1)
     window._wsp_submit("LFC_WSP_PHASE", 3.1)
@@ -446,17 +657,43 @@ def test_edfa23_current_in_mA_and_remembered(qtbot, tmp_path, monkeypatch):
         w.writer.stop()
 
 
-def test_self_destruct_countdown(qtbot):
-    """Fully armed and completely harmless."""
-    from keckogeco.gui.mainwindow import SelfDestructDialog
+def test_flattener_slider_panel(qtbot, monkeypatch):
+    """The Spectral Flattener tab builds with the slider absent (the
+    FakeClient reports no devices), marks it offline, highlights the
+    current slot from a read-back, and routes button clicks through the
+    writer thread."""
+    from keckogeco.gui.mainwindow import MainWindow
 
-    dialog = SelfDestructDialog()
-    qtbot.addWidget(dialog)
-    assert dialog.label.text() == "The system will self-destruct in 5 seconds."
-    for _ in range(5):
-        dialog._tick()
-    assert "kidding" in dialog.label.text()
-    assert "Steph" in dialog.label.text()
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    panel = window._flattener_panel
+    assert len(panel.position_buttons) == 6
+    assert "not connected" in panel.detail_label.text()  # no nd_slider device
+
+    # a read-back highlights the active slot and clears the offline note
+    window._on_call_done("flattener", {"position": 6, "positions": 6})
+    assert panel.position_label.text() == "position 6"
+    assert panel.detail_label.text() == ""
+    assert "bold" in panel.position_buttons[6].styleSheet()
+    assert panel.position_buttons[1].styleSheet() == ""
+
+    # unknown position (between slots / not homed) shows the em dash
+    window._on_call_done("flattener", {"position": None, "positions": 6})
+    assert panel.position_label.text() == "position —"
+    assert all(b.styleSheet() == "" for b in panel.position_buttons.values())
+
+    # clicks queue client calls under the "flattener" label
+    calls = []
+    monkeypatch.setattr(window.writer, "submit_call", lambda label, func: calls.append(label))
+    panel.position_buttons[3].click()
+    assert calls == ["flattener"]
+
+    # a failed call (server 503: slider offline) restores the offline note
+    window._on_write_failed("flattener", "device 'nd_slider' unavailable")
+    assert "nd_slider" in panel.detail_label.text()
+
+    window.poller.stop()
+    window.writer.stop()
 
 
 def test_osa_save_as_default(qtbot, tmp_path, monkeypatch):

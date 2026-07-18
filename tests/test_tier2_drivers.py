@@ -209,19 +209,34 @@ def test_im_bias_scan_sim():
         im_bias_scan(servo, v_start=0.0, v_stop=0.01, v_step=0.1, sim=True)
 
 
-def test_im_auto_lock_sim():
-    """The lock finds a midpoint bias on the sim's sinusoidal response."""
-    from keckogeco.comb.locking import im_auto_lock
-    from keckogeco.drivers.srs_sim900 import SIM900
+def test_recommend_lock_point():
+    """The recommendation finds a mid-fringe bias with the local slope
+    on the sim's sinusoidal transfer function and suggests PI gains
+    (P = loop gain 2 over the slope, sign included; I commissioned);
+    a flat scan is refused."""
+    import numpy as np
 
-    cfg = DeviceConfig(key="srs", driver="srs_sim900", address="ASRL21::INSTR")
-    srs = SIM900.from_config(cfg, sim=True)
-    srs.connect()
-    servo = srs.sim960(5)
-    result = im_auto_lock(servo, sim=True)
-    assert -2.0 <= result["bias_V"] <= 1.0
-    assert servo.output_mode == "PID"
-    assert servo.setpoint_V == pytest.approx(result["setpoint_V"], abs=1e-3)
-    # sim response 0.5*sin(2v+1): max 0.5, min -0.5 within the sweep
-    assert result["sweep_max_V"] == pytest.approx(0.5, abs=0.01)
-    assert result["sweep_min_V"] == pytest.approx(-0.5, abs=0.01)
+    from keckogeco.comb.locking import recommend_lock_point
+
+    voltages = np.arange(-5.0, 5.0, 0.1)
+    inputs = 0.5 * np.sin(2 * voltages + 1)
+    rec = recommend_lock_point(voltages, inputs)
+    # mid-fringe of a sinusoid: photodiode at the (max+min)/2 = 0 crossing,
+    # local slope d/dv[0.5*sin(2v+1)] = cos(2v+1) = ±1 there
+    assert rec["setpoint_V"] == pytest.approx(0.0, abs=0.06)
+    assert abs(rec["slope_V_per_V"]) == pytest.approx(1.0, abs=0.05)
+    assert abs(rec["prop_gain"]) == pytest.approx(2.0, abs=0.2)
+    assert rec["prop_gain"] * rec["slope_V_per_V"] > 0  # P carries the slope's sign
+    assert rec["intg_gain"] == pytest.approx(0.1)
+    assert rec["input_max_V"] == pytest.approx(0.5, abs=0.01)
+    assert rec["input_min_V"] == pytest.approx(-0.5, abs=0.01)
+    # near_bias picks the mid-fringe crossing closest to the previous
+    # lock start (crossings of sin(2v+1) sit at (k*pi - 1)/2)
+    assert recommend_lock_point(voltages, inputs, near_bias=1.0)["bias_V"] == pytest.approx(
+        1.07, abs=0.06
+    )
+    assert recommend_lock_point(voltages, inputs, near_bias=-3.5)["bias_V"] == pytest.approx(
+        -3.64, abs=0.06
+    )
+    with pytest.raises(ValueError, match="no modulation"):
+        recommend_lock_point(voltages, np.full_like(voltages, 3.09))

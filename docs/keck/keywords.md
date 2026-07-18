@@ -22,9 +22,9 @@ runs.
 | `LFC_SET_STANDBY` | integer | RW | Drive the comb to STANDBY: RF chain + seeded EDFAs up, Pritel power amp down. |
 | `LFC_SET_FULL_COMB` | integer | RW | Bring the comb fully up: RF chain, EDFAs, Pritel to operating current. Takes on the order of a minute. |
 | `LFC_SET_OFF` | integer | RW 🔒 | Shut the comb down in a safe, predefined order. |
-| `LFC_MINICOMB_AUTO_SETUP` | enumerated | RW 🔒 | Automatic minicomb bring-up (RF chain, seeded EDFAs with input-power gates), finishing with the IM bias auto-lock. 1 = DONE, 0 = WRONG. |
+| `LFC_MINICOMB_AUTO_SETUP` | enumerated | RW 🔒 | Automatic minicomb bring-up (RF chain, seeded EDFAs with input-power gates). The IM bias lock is engaged manually afterwards from the engineering GUI. 1 = DONE, 0 = WRONG. |
 | `LFC_CLOSE_ALL` | boolean | RW 🔒 | Emergency shutdown of every optical/RF output. |
-| `LFC_IM_AUTO_LOCK` | boolean | RW 🔒 | Run the IM bias auto-lock: sweep the bias, pick the mid-fringe point, engage the SIM960 PID. |
+| `LFC_IM_AUTO_LOCK` | boolean | — | **Unbound (proposed for retirement).** IM bias locking is manual from the engineering GUI: the operator enters the photodiode setpoint, starting bias, and PI gains, then engages `LFC_IM_LOCK_MODE`. Reads/writes answer 501. |
 
 ## Comb status
 
@@ -47,6 +47,7 @@ logs an error instead (see the change list).
 | `LFC_RFOSCI_MONITOR` | boolean | RO | RF oscillator supply within its envelope (15 V; ~0.41 A steady-state, transiently up to ~0.62 A while warming). Old polling ~20 s. |
 | `LFC_RFAMP_MONITOR` | boolean | RO | RF amplifier supply within its envelope (30 V; ~4.2 A driven, ~0.7 A idling). Old polling ~20 s. |
 | `LFC_PENDULEM_FREQ_MONITOR` | boolean | RO | Rep-rate within 16 GHz ± 1 kHz on the Pendulum counter (only meaningful with the RF chain up). |
+| `LFC_REPRATE` | double, Hz | RO | The measured repetition rate itself (Pendulum CNT-90XL channel C, 0.1 s gate); NaN/null while the RF chain is off. **New in the rewrite.** |
 | `LFC_EDFA27_INPUT_POWER_MONITOR` | double, mW | RO | EDFA27 seed input power (retyped from the baseline's "boolean": the deployed handler always returned mW). Old polling ~120 s. |
 | `LFC_EDFA23_INPUT_POWER_MONITOR` | double, mW | RO | EDFA23 seed input power (retyped, as above). Old polling ~120 s. |
 | `LFC_EDFA13_INPUT_POWER_MONITOR` | double, mW | RO | EDFA13 seed input power. **New in the rewrite.** |

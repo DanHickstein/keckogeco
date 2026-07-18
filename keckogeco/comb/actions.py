@@ -267,12 +267,10 @@ def minicomb_auto_setup(controller, ctx: ActionContext) -> None:
     else:
         ctx.step("EDFA23 skipped (not configured)")
 
-    if getattr(controller, "_im_servo", None) is not None:
-        ctx.step("running IM bias auto-lock")
-        im_auto_lock_action(controller, ctx)
-    else:
-        ctx.step("IM auto-lock skipped (no SRS mainframe configured)")
-        log.warning("minicomb setup complete without the IM bias lock (srs not configured)")
+    # The IM bias lock is engaged manually from the engineering GUI
+    # (setpoint / bias / PI gains in the servo panel, then Lock) — the
+    # old automated lock step was removed deliberately (Dan, 2026-07-15).
+    ctx.step("minicomb up; engage the IM bias lock from the GUI when needed")
 
 
 def set_standby(controller, ctx: ActionContext) -> None:
@@ -320,19 +318,6 @@ def set_off(controller, ctx: ActionContext) -> None:
     raise RuntimeError(f"cannot go to OFF from {state.value}; inspect the system first")
 
 
-def im_auto_lock_action(controller, ctx: ActionContext) -> None:
-    """Run the IM bias auto-lock on the configured SIM960 servo."""
-    from .locking import im_auto_lock
-
-    servo = getattr(controller, "_im_servo", None)
-    if servo is None:
-        raise RuntimeError("no SRS mainframe configured; cannot run the IM bias lock")
-    if ctx._status.total_steps == 0:
-        ctx.step("IM bias auto-lock", total=6)
-    result = im_auto_lock(servo, sim=controller.sim, progress=ctx.step)
-    log.info("IM lock engaged: %s", result)
-
-
 def im_bias_scan_action(
     controller,
     ctx: ActionContext,
@@ -359,6 +344,10 @@ def im_bias_scan_action(
         f"IM bias scan {v_start:+.3f} .. {v_stop:+.3f} V, {n_points} points",
         total=n_points + 2,
     )
+    # stale hardware limits (e.g. ±3 V from the old commissioned lock)
+    # would silently clamp the sweep: pin the ±8 V operating limit first
+    servo.output_upper_limit_V = 8.0
+    servo.output_lower_limit_V = -8.0
     previous_V = servo.manual_output_V
 
     def point(_index: int, bias_V: float, input_V: float) -> None:
@@ -391,6 +380,5 @@ ACTIONS = {
     "set_off": set_off,
     "minicomb_auto_setup": minicomb_auto_setup,
     "close_all": close_all,
-    "im_auto_lock": im_auto_lock_action,
     "im_bias_scan": im_bias_scan_action,
 }

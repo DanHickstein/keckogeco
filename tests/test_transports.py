@@ -52,3 +52,26 @@ def test_socket_transport_rejects_bad_address():
 
     with pytest.raises(InstrumentError, match="host:port"):
         SocketTransport("no-port-here").open()
+
+
+def test_gpib_transports_share_one_board_lock():
+    """All VISA transports on one GPIB board share a single I/O lock:
+    NI-488 crashed the server with native access violations under
+    concurrent multi-instrument polling (2026-07-16), so calls into the
+    NI layer are serialized per board. Other VISA resources (USB-TMC,
+    ASRL) keep private locks."""
+    from keckogeco.drivers.transports import VisaTransport
+
+    srs = VisaTransport("GPIB0::2::INSTR")
+    osa = VisaTransport("GPIB0::30::INSTR")
+    cnt = VisaTransport("gpib0::10::INSTR")  # VISA is case-insensitive
+    other_board = VisaTransport("GPIB1::5::INSTR")
+    usb = VisaTransport("USB0::0x0957::0x2807::MY62003852::INSTR")
+    asrl = VisaTransport("ASRL13::INSTR")
+
+    assert srs._io_lock is osa._io_lock
+    assert srs._io_lock is cnt._io_lock
+    assert other_board._io_lock is not srs._io_lock
+    assert usb._io_lock is not srs._io_lock
+    assert asrl._io_lock is not srs._io_lock
+    assert usb._io_lock is not asrl._io_lock

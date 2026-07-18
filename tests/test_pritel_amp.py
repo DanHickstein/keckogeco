@@ -3,7 +3,29 @@
 import pytest
 
 from keckogeco.config import DeviceConfig
+from keckogeco.drivers.errors import ConnectionLost
 from keckogeco.drivers.pritel_amp import PritelAmp, to_mA
+from keckogeco.drivers.transports import SimTransport
+
+
+class FlakyTransport(SimTransport):
+    """SimTransport whose next ``fail_next`` queries time out silently."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fail_next = 0
+        self.close_calls = 0
+
+    def query(self, cmd):
+        if self.fail_next > 0:
+            self.fail_next -= 1
+            self.sent.append(cmd)
+            raise TimeoutError("VI_ERROR_TMO (simulated)")
+        return super().query(cmd)
+
+    def close(self):
+        self.close_calls += 1
+        super().close()
 
 
 @pytest.fixture
@@ -90,3 +112,33 @@ def test_status_dict(amp):
     status = amp.status()
     assert status["pump_on"] is False
     assert set(status) >= {"preamp_mA", "pwramp_mA", "input_power_mW", "output_power_mW"}
+
+
+@pytest.fixture
+def flaky_amp():
+    transport = FlakyTransport(PritelAmp.sim_responses(), address="SIM::flaky")
+    inst = PritelAmp(transport, "ptamp")
+    inst.connect()
+    transport.sent.clear()
+    return inst
+
+
+def test_dropped_command_resent_on_open_port(flaky_amp):
+    """One silent drop recovers by re-sending, without close/reopen."""
+    flaky_amp.transport.fail_next = 1
+    assert flaky_amp.input_power_mW == pytest.approx(1.0)
+    assert flaky_amp.transport.sent == ["FA INPUT?", "FA INPUT?"]
+    assert flaky_amp.transport.close_calls == 0
+
+
+def test_two_drops_escalate_to_reconnect(flaky_amp):
+    """Resend failing too falls back to the base reconnect-once path."""
+    flaky_amp.transport.fail_next = 2
+    assert flaky_amp.input_power_mW == pytest.approx(1.0)
+    assert flaky_amp.transport.close_calls == 1  # reconnect happened
+
+
+def test_persistent_silence_raises_connection_lost(flaky_amp):
+    flaky_amp.transport.fail_next = 99
+    with pytest.raises(ConnectionLost):
+        _ = flaky_amp.input_power_mW

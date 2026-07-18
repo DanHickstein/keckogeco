@@ -14,12 +14,13 @@ EXAMPLE = pathlib.Path(__file__).parent.parent / "config" / "instruments.example
 # ------------------------------------------------------------------ schema
 
 
-def test_schema_loads_85_keywords():
+def test_schema_loads_89_keywords():
     # 77 baseline keywords + additions listed in ktl/keyword-changes.md
     # (LFC_WSP_TOD, LFC_WSP_CENTER, EDFA output monitors x3, EDFA13 input
-    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V)
+    # monitor, LFC_PTAMP_IN, LFC_PTAMP_INTERLOCK_V, LFC_REPRATE, and the
+    # reference chain: LFC_REPRATE_REF, LFC_RBCLOCK_PHASELOCK/FREQLOCK)
     schema = load_schema()
-    assert len(schema) == 85
+    assert len(schema) == 89
     assert schema["LFC_EDFA27_P"].writable
     assert schema["LFC_EDFA27_P"].units == "mW"
     assert schema["LFC_EDFA27_P"].max == 630
@@ -200,6 +201,26 @@ def test_controller_presets_and_monitors(controller):
     assert len(temps) == 8
 
 
+def test_controller_rep_rate_keyword(controller):
+    # RF chain off: NaN (nothing to count; the GUI shows an em dash) —
+    # never an error, so the snapshot poll stays cheap with the RF down
+    import math
+
+    assert math.isnan(controller.read("LFC_REPRATE").value)
+    controller.write("LFC_RFOSCI_ONOFF", "1")
+    controller.write("LFC_RFAMP_ONOFF", "1")
+    assert controller.read("LFC_REPRATE").value == pytest.approx(16e9)
+    # full-resolution gate (12 digits/s on the CNT-90XL), and one gated
+    # measurement serves every caller inside the cache window — the
+    # /state poll and the keyword poller must not re-gate per call
+    sent = controller.device("pendulum").transport.sent
+    assert ":ACQ:APER 1.0" in sent
+    inits = sent.count(":INIT")
+    controller.read("LFC_REPRATE")
+    controller.state_summary()
+    assert controller.device("pendulum").transport.sent.count(":INIT") == inits
+
+
 def test_controller_im_rf_att_and_lock_mode(controller):
     controller.write("LFC_IM_RF_ATT", "0.72")
     assert controller.read("LFC_IM_RF_ATT").value == pytest.approx(0.72)
@@ -216,6 +237,9 @@ def test_all_keywords_bound_with_full_config(controller):
         "LFC_TEMP_TEST2",  # daq_eocb (EO comb board DAQ) not in example config
         "LFC_T_EOCB_IN",
         "LFC_T_EOCB_OUT",
+        # IM bias locking is deliberately manual; the auto-lock keyword is
+        # unbound and proposed for retirement (ktl/keyword-changes.md)
+        "LFC_IM_AUTO_LOCK",
         # VOA keys stay unit-serial-based until each unit's wavelength is
         # identified on-site; the wavelength keywords bind only after a
         # config block is renamed to voa1310/voa1550/voa2000
@@ -225,6 +249,15 @@ def test_all_keywords_bound_with_full_config(controller):
     }
     unbound = {n for n in controller.registry.schema if n not in controller.registry.bound}
     assert unbound <= allowed_unbound
+
+
+def test_reference_chain_keywords(controller):
+    # FS725 lock health and the counter's timebase source (EXT = the
+    # shared Rb 10 MHz; INT means LFC_REPRATE silently loses its
+    # Rb discipline even though the value itself still reads)
+    assert controller.read("LFC_RBCLOCK_PHASELOCK").value is True
+    assert controller.read("LFC_RBCLOCK_FREQLOCK").value is True
+    assert controller.read("LFC_REPRATE_REF").value == "EXT"
 
 
 def test_bound_keyword_count(controller):

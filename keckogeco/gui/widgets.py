@@ -25,11 +25,27 @@ from PyQt6.QtWidgets import (
 __all__ = [
     "KeywordDisplay",
     "KeywordSpinBox",
+    "LampDisplay",
     "OnOffButton",
+    "PrecisionDisplay",
     "SelectAllSpinBox",
     "StatusLamp",
     "ThermoArray",
+    "format_value",
 ]
+
+
+def format_value(value, units: str = "") -> str:
+    """Render a keyword value the way the GUI's readouts show it."""
+    if value is None:  # server reports unknown (e.g. VOA not homed) as null
+        return "—"
+    if isinstance(value, bool):
+        text = "ON" if value else "OFF"
+    elif isinstance(value, float):
+        text = f"{value:.3f}"
+    else:
+        text = str(value)
+    return f"{text} {units}".strip()
 
 
 class SelectAllSpinBox(QDoubleSpinBox):
@@ -69,6 +85,52 @@ class StatusLamp(QLabel):
         self.setToolTip(f"{self._label}: {state_name}")
 
 
+class PrecisionDisplay(QLabel):
+    """Large digit-grouped readout for a high-resolution keyword (the
+    Pendulum rep rate: a 0.1 s gate on the CNT-90XL resolves ~12 digits
+    at 16 GHz, and every one of them deserves to be visible).
+
+    Shows the full value with thin-space digit grouping in a big
+    monospace face; ``reference`` adds a small second line with the
+    offset from that value (e.g. Δ from 16 GHz). NaN/None (RF chain
+    off, counter unavailable) shows an em dash.
+    """
+
+    def __init__(
+        self,
+        keyword: str,
+        spec: dict,
+        decimals: int = 2,
+        reference: float | None = None,
+        reference_label: str = "",
+    ):
+        super().__init__("—")
+        self.keyword = keyword
+        self.units = spec.get("units", "")
+        self.decimals = decimals
+        self.reference = reference
+        self.reference_label = reference_label
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setToolTip(spec.get("help") or keyword)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setStyleSheet("font-family: Consolas, 'Courier New', monospace;")
+
+    def update_value(self, value) -> None:
+        if value is None or (isinstance(value, float) and not math.isfinite(value)):
+            self.setText("—")
+            return
+        value = float(value)
+        grouped = f"{value:,.{self.decimals}f}".replace(",", "&thinsp;")
+        text = f'<span style="font-size: 26px; color: #4fd1c5;">{grouped} {self.units}</span>'
+        if self.reference is not None:
+            delta = value - self.reference
+            text += (
+                f'<br><span style="font-size: 12px; color: #8b96a5;">'
+                f"{self.reference_label}: {delta:+,.{self.decimals}f} {self.units}</span>"
+            )
+        self.setText(text)
+
+
 class KeywordDisplay(QLabel):
     """Read-only value display for one keyword."""
 
@@ -80,16 +142,32 @@ class KeywordDisplay(QLabel):
         self.setToolTip(spec.get("help") or keyword)
 
     def update_value(self, value) -> None:
-        if value is None:  # server reports unknown (e.g. VOA not homed) as null
-            self.setText("—")
-            return
-        if isinstance(value, bool):
-            text = "ON" if value else "OFF"
-        elif isinstance(value, float):
-            text = f"{value:.3f}"
-        else:
-            text = str(value)
-        self.setText(f"{text} {self.units}".strip())
+        self.setText(format_value(value, self.units))
+
+
+class LampDisplay(QWidget):
+    """Status lamp + read-only value for a keyword with no on/off button.
+
+    Gives a status row (e.g. the interlock latch) the same lamp-then-value
+    shape as the ``OnOffButton`` rows beside it. ``ok`` maps the keyword
+    value to the lamp state: green when it returns True, grey otherwise.
+    """
+
+    def __init__(self, keyword: str, spec: dict, ok: Callable[[object], bool], label: str = ""):
+        super().__init__()
+        self.keyword = keyword
+        self._ok = ok
+        self.lamp = StatusLamp(label or keyword)
+        self.display = KeywordDisplay(keyword, spec)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.lamp)
+        layout.addWidget(self.display)
+
+    def update_value(self, value) -> None:
+        self.display.update_value(value)
+        self.lamp.set_state(None if value is None else bool(self._ok(value)))
 
 
 class ThermoArray(QWidget):
@@ -158,14 +236,30 @@ class KeywordSpinBox(QWidget):
     value is held for a grace period instead of being snapped back by the
     next poll, so a slow (or refused) write doesn't look like the box ate
     the input — after the grace the poll value wins again.
+
+    ``readback`` splits setpoint from measurement instead: the (narrower)
+    box keeps what the operator — or a commissioned default — put there,
+    and the live value is shown as text beside it. Used where the box is a
+    value to apply rather than a value to watch (the Pritel currents read
+    back 0 until emission is on, so a poll-tracking box would erase the
+    setpoint the operator is about to send).
     """
 
     #: seconds a submitted value is protected from poll snap-back
     PENDING_GRACE_S = 10.0
+    #: max spin width (px) when a readback label shares the row
+    READBACK_SPIN_WIDTH = 120
 
-    def __init__(self, keyword: str, spec: dict, submit: Callable[[str, object], None]):
+    def __init__(
+        self,
+        keyword: str,
+        spec: dict,
+        submit: Callable[[str, object], None],
+        readback: bool = False,
+    ):
         super().__init__()
         self.keyword = keyword
+        self.units = spec.get("units", "")
         self._submit = submit
         self._editing = False
         self._pending_until = 0.0
@@ -176,8 +270,14 @@ class KeywordSpinBox(QWidget):
             spec.get("min") if spec.get("min") is not None else -1e9,
             spec.get("max") if spec.get("max") is not None else 1e9,
         )
-        if spec.get("units"):
-            self.spin.setSuffix(f" {spec['units']}")
+        if spec.get("step") is not None:  # arrow/wheel increment
+            self.spin.setSingleStep(spec["step"])
+        # Qt sizes a spin box for its range's widest text — keywords with
+        # no schema limits get ±1e9 and a comically wide box that used to
+        # set the whole window's minimum width. Real values fit in this.
+        self.spin.setMaximumWidth(130)
+        if self.units:
+            self.spin.setSuffix(f" {self.units}")
         self.spin.setToolTip(spec.get("help") or keyword)
         self.spin.editingFinished.connect(self._apply)
         # mark "editing" as soon as the user changes the value by any means
@@ -186,6 +286,14 @@ class KeywordSpinBox(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.spin)
+
+        self.readback: QLabel | None = None
+        if readback:
+            self.spin.setMaximumWidth(self.READBACK_SPIN_WIDTH)
+            self.readback = QLabel("—")
+            self.readback.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.readback.setToolTip(f"value measured by the instrument ({keyword})")
+            layout.addWidget(self.readback)
 
     def _on_user_change(self, _value) -> None:
         if self.spin.hasFocus():
@@ -203,6 +311,11 @@ class KeywordSpinBox(QWidget):
         self._pending_until = 0.0
 
     def update_value(self, value) -> None:
+        if self.readback is not None:
+            # setpoint/measurement split: the poll only feeds the label,
+            # never the box
+            self.readback.setText(format_value(value, self.units))
+            return
         if value is None:  # unknown (e.g. VOA not homed): keep what's shown
             return
         if self._editing or self.spin.hasFocus():
