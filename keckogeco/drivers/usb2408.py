@@ -47,8 +47,11 @@ DEFAULT_POSITIONS = {
         "RF amplifier",
         "Main phase modulators",
         "Filter cavity",
-        "Board glycol out",
+        # in/out corrected 2026-07-18: the June-2023 doc had them
+        # reversed (the "inlet" read ~35 °C, the "outlet" the ~15 °C
+        # facility supply) — see ktl/keyword-changes.md
         "Board glycol in",
+        "Board glycol out",
         "Compression stage",
         "Rubidium (Rb) cell D2-210",
     ],

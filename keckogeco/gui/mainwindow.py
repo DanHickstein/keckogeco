@@ -106,8 +106,10 @@ _THERMO_PANELS = (
             (1, "RF amplifier", "RF amplifier", 48.0),
             (2, "Phase mods", "Main phase modulators", 32.7),
             (3, "Filter cavity", "Filter cavity", 28.0),
-            (4, "Glycol out", "Board glycol out", 15.6),
-            (5, "Glycol in", "Board glycol in", 34.9),
+            # ch4/ch5 in-out labels corrected 2026-07-18 (the June-2023
+            # doc had them reversed; baselines stay with their channels)
+            (4, "Glycol in", "Board glycol in", 15.6),
+            (5, "Glycol out", "Board glycol out", 34.9),
             (6, "Compression", "Compression stage", 23.1),
             (7, "Rb cell", "Rubidium (Rb) cell D2-210", 24.2),
         ],

@@ -27,11 +27,16 @@ All values °C.
 
 All values °C.
 
-| Date | Condition | RF osc (0) | RF amp (1) | Phase mods (2) | Filter cavity (3) | Glycol out (4) | Glycol in (5) | Compression (6) | Rb cell (7) |
+| Date | Condition | RF osc (0) | RF amp (1) | Phase mods (2) | Filter cavity (3) | Glycol in (4) [^glycol-swap] | Glycol out (5) | Compression (6) | Rb cell (7) |
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-07-14 | Rack door open, Pritel off | 40.3 | 48.0 | 32.7 | 28.0 | 15.6 | 34.9 | 23.1 | 24.2 |
 | 2026-07-18 | Rack door closed (overnight), Pritel off, EDFA27 on | 40.6 | 48.5 | 33.1 | 28.3 | 15.8 | 34.7 | 23.7 | 24.5 |
 | _(planned)_ | Rack door closed, EDFA27 + Pritel on | | | | | | | | |
+
+[^glycol-swap]: ch4/ch5 in–out labels corrected 2026-07-18 — the
+    June-2023 channel doc had them reversed (the "inlet" read ~35 °C,
+    the "outlet" the ~15 °C facility supply). Values in all rows are
+    per-channel and unaffected. See `ktl/keyword-changes.md`.
 
 ## Notes
 
