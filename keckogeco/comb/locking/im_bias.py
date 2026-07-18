@@ -31,8 +31,8 @@ log = logging.getLogger(__name__)
 BIAS_LIMIT_V = 8.0
 
 #: commissioned loop tuning (live on the rack 2026-07-15: P −2.0 with a
-#: slope of −1 V/V, I 0.1): the P recommendation keeps |P × slope| at
-#: this loop gain, the I recommendation is used as-is
+#: slope of −1 V/V, I 0.1): the P recommendation keeps abs(P × slope)
+#: at this loop gain, the I recommendation is used as-is
 LOOP_GAIN = 2.0
 INTG_GAIN = 0.1
 
