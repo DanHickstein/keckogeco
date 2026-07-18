@@ -117,6 +117,13 @@ _THERMO_PANELS = (
 #: deviation from a channel's baseline that turns its readout red/blue
 _TEMP_TOLERANCE_C = 3.0
 
+#: readout styles for the laptop's absolute temperature bands
+#: (temp_state in gui/laptop.py; "ok" stays plain)
+_LAPTOP_TEMP_STYLES = {
+    "hot": "color: #e05252; font-weight: bold;",
+    "warn": "color: #c78a00; font-weight: bold;",
+}
+
 # keywords whose writes toggle real optical/RF power -> confirm dialog
 _CONFIRM = {
     "LFC_EDFA27_ONOFF",
@@ -1326,6 +1333,32 @@ class MainWindow(QMainWindow):
             column.addWidget(array)
             column.addStretch(1)
             row.addLayout(column, stretch=1)
+
+        # the laptop lives in the same warm room: its hottest ACPI zone,
+        # fed by the local health thread (details on the Laptop tab) and
+        # colored by the absolute bands, not the rack's ±3 C baselines
+        column = QVBoxLayout()
+        header = QLabel("Laptop")
+        header.setStyleSheet("font-weight: bold;")
+        column.addWidget(header)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        name = QLabel("CPU zone")
+        self._overview_laptop_temp = QLabel("—")
+        self._overview_laptop_temp.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        tip = (
+            "hottest ACPI thermal zone of this laptop (details on the Laptop "
+            f"tab) — amber above {TEMP_WARN_C:.0f} °C, red above {TEMP_HOT_C:.0f} °C"
+        )
+        name.setToolTip(tip)
+        self._overview_laptop_temp.setToolTip(tip)
+        grid.addWidget(name, 0, 0)
+        grid.addWidget(self._overview_laptop_temp, 0, 1)
+        column.addLayout(grid)
+        column.addStretch(1)
+        row.addLayout(column)
         return box
 
     def _osa_panel(self) -> QGroupBox:
@@ -2036,8 +2069,21 @@ class MainWindow(QMainWindow):
         if sample.error:
             self._laptop_status.setText(f"(health sensors unavailable: {sample.error})")
             self._laptop_status.show()
+            self._overview_laptop_temp.setText("—")
+            self._overview_laptop_temp.setStyleSheet("")
             return
         self._laptop_status.hide()
+
+        # Overview's Temperatures panel mirrors the hottest zone
+        if sample.zones_C:
+            hottest = max(sample.zones_C.values())
+            self._overview_laptop_temp.setText(f"{hottest:.1f} °C")
+            self._overview_laptop_temp.setStyleSheet(
+                _LAPTOP_TEMP_STYLES.get(temp_state(hottest), "")
+            )
+        else:
+            self._overview_laptop_temp.setText("—")
+            self._overview_laptop_temp.setStyleSheet("")
 
         for zone in sorted(sample.zones_C):
             if zone not in self._laptop_zone_rows:
@@ -2052,12 +2098,7 @@ class MainWindow(QMainWindow):
             label = self._laptop_zone_rows[zone]
             temp = sample.zones_C[zone]
             label.setText(f"{temp:.1f} °C")
-            label.setStyleSheet(
-                {
-                    "hot": "color: #e05252; font-weight: bold;",
-                    "warn": "color: #c78a00; font-weight: bold;",
-                }.get(temp_state(temp), "")
-            )
+            label.setStyleSheet(_LAPTOP_TEMP_STYLES.get(temp_state(temp), ""))
 
         details = []
         codes = {zone: int(v) for zone, v in sample.throttle.items() if v}
