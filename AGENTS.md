@@ -162,6 +162,21 @@ comes with a delay.
   interface panel A4, "Minicomb photodiode → SRS PID"), so bias scans read
   power via `MMON` — **no DAQ involved**; the USB-2408s only read
   thermocouples. Slot number lives in the `srs` block's `im_slot` option.
+- **The Pritel refuses `FA ON` while its STORED power-amp setpoint is too
+  high for the measured seed** (rack-probed 2026-07-18: 3.9 A stored →
+  refused, ≤ 1.0 A → fine, at the commissioned seed; the ASD reply is
+  "PowerAmp pump current is disabled"). `FA PWRAMP?` reads the ACTUAL
+  current (0 while off), never the stored value, so the trap is
+  invisible — an abnormal shutdown (ASD trip, crash) leaves the last
+  operating current stored and every later pump-on fails with all
+  monitors healthy. `set_pump(True)` therefore sends `FA SETPWR 000`
+  before `FA ON`; do not remove it (the sim models the refusal).
+  **The pump can also come back ON with no `FA ON` at all** — observed
+  2026-07-18: minutes after a confirmed `FA OFF`, following an Arduino
+  interlock latch reset, the pump was live again with nothing in the
+  log. So `set_pump(False)` zeroes the stored setpoint too: whatever
+  re-enables the pump must find 0 A. Treat "Reset latch" as a possible
+  pump-enable when the front-panel/pump state allows it.
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.

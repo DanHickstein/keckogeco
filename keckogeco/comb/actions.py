@@ -96,6 +96,12 @@ class ActionContext:
         if self._abort.wait(timeout=seconds):
             raise ActionAborted("aborted during settle wait")
 
+    def aborting(self) -> bool:
+        """Non-raising abort poll, for handing into long driver calls
+        (e.g. the Pritel current ramps) so Abort acts mid-call instead of
+        after the ~1 min ramp completes."""
+        return self._abort.is_set()
+
 
 class ActionExecutor:
     """Single-slot background runner for comb actions."""
@@ -164,10 +170,10 @@ class ActionExecutor:
 def _pritel_down(controller, ctx: ActionContext) -> None:
     ptamp = controller.device("ptamp")
     ctx.step("Pritel power amp -> 0 A")
-    ptamp.set_pwramp_mA(0)
+    ptamp.set_pwramp_mA(0, abort_check=ctx.aborting)
     ctx.sleep(0.5)
     ctx.step("Pritel preamp -> 0 mA")
-    ptamp.set_preamp_mA(0)
+    ptamp.set_preamp_mA(0, abort_check=ctx.aborting)
     ctx.sleep(0.5)
     ctx.step("Pritel pump OFF")
     ptamp.set_pump(False)
@@ -180,13 +186,13 @@ def _pritel_up(controller, ctx: ActionContext) -> None:
     ctx.sleep(0.5)
     ptamp = controller.device("ptamp")
     ctx.step("Pritel preamp -> 600 mA")
-    ptamp.set_preamp_mA(600)
+    ptamp.set_preamp_mA(600, abort_check=ctx.aborting)
     ctx.sleep(0.5)
     ctx.step("Pritel pump ON")
     ptamp.set_pump(True)
     ctx.sleep(0.5)
     ctx.step("Pritel power amp -> 3.9 A (ramped)")
-    ptamp.set_pwramp_mA(3900)
+    ptamp.set_pwramp_mA(3900, abort_check=ctx.aborting)
     ctx.step("waiting 10 s for the amplifier to settle")
     ctx.sleep(10)
 

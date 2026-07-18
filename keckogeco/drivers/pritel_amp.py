@@ -8,8 +8,10 @@ interlock; see ``arduino_relay``).
 Ported from ``Hardware/PritelAmp.py``. Device behaviors preserved:
 
 * **Current ramping.** Large current changes are applied in steps
-  (default 100 mA for the preamp, 50 mA for the power amp) so the output
-  power changes gradually. This is commissioning-tested behavior — keep it.
+  (default 100 mA for the preamp, 200 mA for the power amp with a 1 s
+  dwell per step) so the output power changes gradually. The power-amp
+  step was coarsened from the commissioned 50 mA — ~80 commands, ~1 min
+  per bring-up — with Dan's sign-off (2026-07-18).
 * **Hard limits raise** (600 mA preamp, 5800 mA power amp) rather than
   clamping: an out-of-range request is a caller bug, not a device quirk.
 * Power-amp setpoints are rounded to 10 mA (the ``FA SETPWR`` command has
@@ -23,7 +25,9 @@ starts with a stray control character. :meth:`PritelAmp._ask` handles both.
 
 from __future__ import annotations
 
+import threading
 import time
+from collections.abc import Callable
 from typing import ClassVar
 
 import numpy as np
@@ -71,9 +75,14 @@ class PritelAmp(Instrument):
     PREAMP_MAX_MA: ClassVar[float] = 600.0
     PWRAMP_MAX_MA: ClassVar[float] = 5800.0
 
-    #: ramp step sizes; 0 disables ramping for that stage
+    #: ramp step sizes; 0 disables ramping for that stage. The power-amp
+    #: step was 50 mA (commissioned) — coarsened to 200 mA with a dwell,
+    #: Dan's sign-off 2026-07-18: the ~1 min bring-up was excessive.
     RAMP_STEP_PRE_MA: ClassVar[float] = 100.0
-    RAMP_STEP_PWR_MA: ClassVar[float] = 50.0
+    RAMP_STEP_PWR_MA: ClassVar[float] = 200.0
+    #: seconds to dwell between power-amp ramp steps (on top of the ~0.7 s
+    #: of command round-trips per step); abort-aware, skipped in sim
+    RAMP_SETTLE_S: ClassVar[float] = 1.0
 
     PUMP_TIMEOUT_S: ClassVar[float] = 5.0
 
@@ -82,6 +91,13 @@ class PritelAmp(Instrument):
         # The real unit sends an echo line before the response; SimTransport
         # answers immediately.
         self._discard_echo = not isinstance(transport, SimTransport)
+        # A full 0 -> 3.9 A power-amp ramp is ~80 commands (~1 min), and
+        # the instrument lock is per-command, so a pump-off from another
+        # thread CAN interleave — but the ramp used to keep stepping
+        # (Dan, 2026-07-18: "not possible to turn the Pritel off while
+        # it's doing its upward ramp"). set_pump(False) sets this event;
+        # an in-flight ramp sees it, stops, and parks its stage at 0.
+        self._ramp_abort = threading.Event()
 
     def _configure(self) -> None:
         # Wake the unit and flush its greeting, like the old connect().
@@ -170,7 +186,16 @@ class PritelAmp(Instrument):
         return state == "ON"
 
     def set_pump(self, on: bool) -> None:
-        """Turn the pump on/off, re-sending until the readback confirms."""
+        """Turn the pump on/off, re-sending until the readback confirms.
+
+        Turning ON first zeroes the unit's stored power-amp setpoint
+        (the unit refuses FA ON when it is too high for the seed, and
+        the stored value is unreadable). Turning OFF zeroes it too —
+        the pump can be re-enabled without any FA ON (latch reset,
+        2026-07-18), and it must come back at 0 A — and also aborts any
+        current ramp in flight on another thread (the ramp parks its
+        stage at 0, the down-sequence state).
+        """
         target = bool(on)
         cmd = "FA ON" if target else "FA OFF"
         if target:
@@ -178,6 +203,26 @@ class PritelAmp(Instrument):
                 "%s: ACTIVATING PUMP - seed input power must be appropriate to avoid damage",
                 self.name,
             )
+            # The unit refuses FA ON while its STORED power-amp setpoint
+            # is too high for the measured seed (rack-probed 2026-07-18:
+            # 3.9 A stored -> refused, <= 1.0 A -> fine, at the 2.3 V
+            # lockpoint seed). An abnormal shutdown (ASD trip, crash)
+            # leaves the last operating current stored — and FA PWRAMP?
+            # reads the ACTUAL current (0 while off), so the trap is
+            # invisible to any monitor. Zero the stored setpoint before
+            # enabling: pump-on always starts at 0 A, callers ramp up.
+            if not self.pump_on:
+                self._ask("FA SETPWR 000")
+        else:
+            self._ramp_abort.set()
+            # Zero the stored setpoint BEFORE disabling: the pump can
+            # come back on without any FA ON (observed 2026-07-18: a
+            # latch reset ~4 min after a confirmed FA OFF, pump live
+            # again with no enabling command in the log), and whatever
+            # re-enables it must find 0 A stored, not the last operating
+            # current. This also cuts the output immediately — the right
+            # direction for an OFF command.
+            self._ask("FA SETPWR 000")
         deadline = time.monotonic() + self.PUMP_TIMEOUT_S
         reply = None
         while self.pump_on != target:
@@ -209,14 +254,25 @@ class PritelAmp(Instrument):
     def preamp_mA(self) -> float:
         return self._value_after_equals(self._ask("FA PREAMP?"), "preamp current")
 
-    def set_preamp_mA(self, mA: float, ramp: bool = True) -> None:
-        """Set the preamp current, ramping in RAMP_STEP_PRE_MA steps."""
+    def set_preamp_mA(
+        self, mA: float, ramp: bool = True, abort_check: Callable[[], bool] | None = None
+    ) -> None:
+        """Set the preamp current, ramping in RAMP_STEP_PRE_MA steps.
+
+        ``abort_check`` is polled before each step (the action executor's
+        abort); a concurrent ``set_pump(False)`` also stops the ramp. An
+        aborted ramp parks the preamp at 0 mA.
+        """
         mA = to_mA(mA)
         if mA > self.PREAMP_MAX_MA:
             raise ValueError(
                 f"{self.name}: preamp {mA:.0f} mA exceeds max {self.PREAMP_MAX_MA:.0f} mA"
             )
+        self._ramp_abort.clear()
         for step in self._ramp_steps(self.preamp_mA, mA, self.RAMP_STEP_PRE_MA if ramp else 0):
+            if self._ramp_aborted(abort_check, "preamp"):
+                self._ask("FA SETPRE 000")
+                return
             reply = self._ask(f"FA SETPRE {step:03.0f}")
             self.log.info("%s: %s", self.name, reply)
 
@@ -226,10 +282,17 @@ class PritelAmp(Instrument):
     def pwramp_mA(self) -> float:
         return self._value_after_equals(self._ask("FA PWRAMP?"), "power-amp current")
 
-    def set_pwramp_mA(self, mA: float, ramp: bool = True) -> None:
+    def set_pwramp_mA(
+        self, mA: float, ramp: bool = True, abort_check: Callable[[], bool] | None = None
+    ) -> None:
         """Set the power-amp current, ramping in RAMP_STEP_PWR_MA steps.
 
         The command resolution is 0.01 A, so values are rounded to 10 mA.
+        Steps dwell RAMP_SETTLE_S between moves (real hardware only).
+        ``abort_check`` is polled before each step (the action executor's
+        abort); a concurrent ``set_pump(False)`` also stops the ramp — it
+        cuts a dwell short too. An aborted ramp parks the power amp at
+        0 mA.
         """
         mA = round(to_mA(mA) / 10) * 10
         if mA > self.PWRAMP_MAX_MA:
@@ -238,9 +301,28 @@ class PritelAmp(Instrument):
             )
         if not self.pump_on and mA > 0:
             self.log.warning("%s: setting power-amp current with pump OFF has no effect", self.name)
-        for step in self._ramp_steps(self.pwramp_mA, mA, self.RAMP_STEP_PWR_MA if ramp else 0):
+        self._ramp_abort.clear()
+        steps = self._ramp_steps(self.pwramp_mA, mA, self.RAMP_STEP_PWR_MA if ramp else 0)
+        for index, step in enumerate(steps):
+            if index and ramp and self._discard_echo:
+                # dwell between steps (real hardware only); a pump-off
+                # during the dwell wakes it early and the check below parks
+                self._ramp_abort.wait(timeout=self.RAMP_SETTLE_S)
+            if self._ramp_aborted(abort_check, "power amp"):
+                self._ask("FA SETPWR 000")
+                return
             reply = self._ask(f"FA SETPWR {step / 10:03.0f}")
             self.log.info("%s: %s (output %.2f W)", self.name, reply, self.output_power_mW / 1e3)
+
+    def _ramp_aborted(self, abort_check: Callable[[], bool] | None, stage: str) -> bool:
+        """True when a running ramp should stop: pump-off from another
+        thread (_ramp_abort) or the caller's abort_check (action Abort).
+        The caller then parks the stage at 0 — the safe down-sequence
+        state, so a later pump-on can't jump straight to a high current."""
+        if not (self._ramp_abort.is_set() or (abort_check is not None and abort_check())):
+            return False
+        self.log.warning("%s: %s ramp aborted; parking the stage at 0", self.name, stage)
+        return True
 
     @staticmethod
     def _ramp_steps(start_mA: float, stop_mA: float, step_mA: float) -> list[float]:
@@ -285,6 +367,12 @@ class PritelAmp(Instrument):
 
         def set_pump(target):
             def _set(_):
+                # model the real unit's enable-time refusal (2026-07-18):
+                # FA ON is accepted but not acted on while the stored
+                # power-amp setpoint is too high for the seed (cutoff
+                # here 2 A — between the probed 1.0 A ok / 3.9 A refused)
+                if target == "ON" and state["pwr"] > 2000:
+                    return "Pump Enabled"
                 state["pump"] = target
                 return f"Pump {target}"
 

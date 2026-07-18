@@ -63,6 +63,64 @@ def test_reconnect_fails_raises_connection_lost():
     assert not inst.connected  # left closed after giving up
 
 
+class NativeCrashTransport(SimTransport):
+    """First query raises a ctypes-style SEH error; counts every call that
+    would re-enter the (crashed) native layer."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.native_calls_after_crash = 0
+        self._crashed = False
+
+    def query(self, cmd):
+        if not self._crashed:
+            self._crashed = True
+            raise OSError("exception: access violation reading 0x0000029C3AFD79EF")
+        self.native_calls_after_crash += 1
+        return super().query(cmd)
+
+    def open(self):
+        if self._crashed:
+            self.native_calls_after_crash += 1
+        super().open()
+
+    def close(self):
+        if self._crashed:
+            self.native_calls_after_crash += 1
+        super().close()
+
+
+def test_native_crash_is_never_retried_and_poisons_device():
+    """A native-layer crash (SEH access violation surfaced by ctypes) must
+    not trigger the reconnect: on 2026-07-17 the reconnect's close/reopen
+    hung inside the crashed ni4882 with the GPIB board lock held, wedging
+    the poller and starving the whole server. The device fails fast and
+    stays failed until the process restarts."""
+    transport = NativeCrashTransport(responses={"Q?": "42"})
+    inst = Fake(transport)
+    inst.connect()
+    with pytest.raises(ConnectionLost, match="native I/O layer"):
+        inst.query("Q?")
+    # no close/open/retry went back into the crashed layer
+    assert transport.native_calls_after_crash == 0
+    # all further I/O — and reconnect attempts — refuse immediately
+    with pytest.raises(ConnectionLost, match="restart the server"):
+        inst.query("Q?")
+    with pytest.raises(ConnectionLost, match="restart the server"):
+        inst.connect()
+    assert transport.native_calls_after_crash == 0
+
+
+def test_ordinary_errors_still_reconnect():
+    """The poisoning is only for native crashes: a plain timeout keeps the
+    ported reconnect-once behavior."""
+    transport = FlakyTransport(fail_count=1, responses={"Q?": "42"})
+    inst = Fake(transport)
+    inst.connect()
+    assert inst.query("Q?") == "42"
+    assert inst._poisoned is None
+
+
 def test_from_config_sim_mode_uses_sim_responses():
     cfg = DeviceConfig(key="fake1", driver="fake", address="ASRL99::INSTR")
     inst = Fake.from_config(cfg, sim=True)

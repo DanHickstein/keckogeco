@@ -9,6 +9,7 @@ run from any machine that reaches the server.
 from __future__ import annotations
 
 import logging
+import threading
 
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -56,7 +57,11 @@ class KeckogecoClient:
         response = self.session.put(
             f"{self.base_url}/api/v1/keywords/{name}",
             json={"value": value},
-            timeout=max(self.timeout, 30.0),  # ramped writes can be slow
+            # ramped writes can be slow: the Pritel's 0 -> 3.9 A power-amp
+            # ramp is ~20 steps with a 1 s dwell (~35 s; was ~1 min before
+            # the 2026-07-18 step change). A shorter timeout made the GUI
+            # report WRITE FAILED on a write that then succeeded.
+            timeout=max(self.timeout, 120.0),
         )
         if response.status_code >= 400:
             detail = response.json().get("detail", response.text)
@@ -231,6 +236,22 @@ class WriteThread(QThread):
 
     def submit(self, name: str, value) -> None:
         self._queue.append(("write", name, value))
+
+    def submit_urgent(self, name: str, value) -> None:
+        """Run this write immediately on its own thread, jumping the FIFO
+        queue. For power-off writes: an emergency stop must not wait
+        behind a slow in-flight write (the Pritel's ~1 min power-amp
+        ramp made Turn OFF appear to do nothing — 2026-07-18). Results
+        come back on the same write_ok / write_failed signals."""
+
+        def run() -> None:
+            try:
+                result = self.client.write(name, value)
+                self.write_ok.emit(name, result.get("value"))
+            except Exception as exc:  # noqa: BLE001
+                self.write_failed.emit(name, str(exc))
+
+        threading.Thread(target=run, name=f"urgent-write-{name}", daemon=True).start()
 
     def submit_call(self, label: str, func) -> None:
         """Queue ``func(client)``; its return value is emitted as

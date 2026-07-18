@@ -31,6 +31,21 @@ from .transports import SerialTransport, SimTransport, SocketTransport, Transpor
 
 __all__ = ["Instrument"]
 
+#: exception-text markers of a crash in the native I/O layer (ctypes turns
+#: a Windows SEH fault inside a driver DLL into OSError("exception: access
+#: violation reading 0x...")). After one of these the layer's internal
+#: state is undefined: the 2026-07-17 ni4882 access violation survived the
+#: except clause, but the reconnect's close/reopen then hung forever inside
+#: the crashed DLL — with the shared GPIB board lock held, which wedged the
+#: poller and starved the whole server. These errors are never retried.
+_NATIVE_CRASH_MARKERS = ("access violation", "stack overflow")
+
+
+def _is_native_crash(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _NATIVE_CRASH_MARKERS)
+
+
 # DeviceConfig "transport" option value -> transport class. Drivers pick a
 # default via DEFAULT_TRANSPORT; a config block can override with
 # transport = "serial" etc.
@@ -109,6 +124,10 @@ class Instrument:
         self.name = name or type(self).__name__
         self.lock = threading.RLock()
         self.log = logging.getLogger(f"keckogeco.drivers.{self.name}")
+        #: set to the error text after a native I/O-layer crash; all
+        #: further I/O on this instrument is refused until the process
+        #: restarts (see _NATIVE_CRASH_MARKERS)
+        self._poisoned: str | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -161,6 +180,11 @@ class Instrument:
     def connect(self) -> None:
         """Open the transport and run the driver's ``_configure()`` hook."""
         with self.lock:
+            if self._poisoned is not None:
+                raise ConnectionLost(
+                    f"{self.name}: disabled after a native I/O crash "
+                    f"({self._poisoned}); restart the server to recover"
+                )
             if self.transport.is_open:
                 return
             self.transport.open()
@@ -206,6 +230,11 @@ class Instrument:
         operations can report which step failed.
         """
         with self.lock:
+            if self._poisoned is not None:
+                raise ConnectionLost(
+                    f"{self.name}: disabled after a native I/O crash "
+                    f"({self._poisoned}); restart the server to recover"
+                )
             if not self.transport.is_open:
                 self.connect()
             try:
@@ -214,6 +243,21 @@ class Instrument:
             # must trigger the one reconnect attempt
             except Exception as first_error:  # noqa: BLE001
                 desc = (what() if callable(what) else what) or "I/O"
+                if _is_native_crash(first_error):
+                    # the DLL's internal state (and any locks it holds) is
+                    # undefined — one more call through it can hang forever
+                    # with our board lock held. Fail fast and stay failed.
+                    self._poisoned = str(first_error)
+                    self.log.critical(
+                        "%s: %s crashed in the native I/O layer (%s); disabling "
+                        "this device — restart the server to recover it",
+                        self.name,
+                        desc,
+                        first_error,
+                    )
+                    raise ConnectionLost(
+                        f"{self.name}: {desc} crashed the native I/O layer: {first_error}"
+                    ) from first_error
                 self.log.warning(
                     "%s: %s failed (%s); reconnecting once", self.name, desc, first_error
                 )
