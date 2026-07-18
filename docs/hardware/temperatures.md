@@ -18,13 +18,10 @@ All values °C.
 | Date | Condition | Side baffle (0) | WaveShaper (1) | Rb clock (2) | Pritel (3) | Glycol out (4) | Glycol in (5) | PSU shelf (6) | Laptop CPU |
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-07-14 | Rack door **open**, Pritel off [^laptop-loc] | 28.7 | 26.4 | 27.0 | 26.0 | 19.6 | 14.1 | 26.0 | ~75 |
-| 2026-07-18 | Rack door **closed** (overnight), Pritel off | — [^pending] | — | — | — | — | — | — | 84 |
+| 2026-07-18 | Rack door **closed** (overnight), Pritel off, EDFA27 on | 34.3 | 34.3 | 34.3 | 32.3 | 26.1 | 17.0 | 33.7 | 84 |
 | _(planned)_ | Rack door closed, EDFA27 + Pritel **on** — record tonight after equilibration | | | | | | | | |
 
 [^laptop-loc]: The laptop sat outside the rack for this row.
-[^pending]: Server was down at recording time (wedged since 2026-07-17
-    18:00, see the log); fill in after restart while the door-closed /
-    Pritel-off condition still holds.
 
 ## Optical table (EOCB, DAQ 205F82F)
 
@@ -33,7 +30,7 @@ All values °C.
 | Date | Condition | RF osc (0) | RF amp (1) | Phase mods (2) | Filter cavity (3) | Glycol out (4) | Glycol in (5) | Compression (6) | Rb cell (7) |
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-07-14 | Rack door open, Pritel off | 40.3 | 48.0 | 32.7 | 28.0 | 15.6 | 34.9 | 23.1 | 24.2 |
-| 2026-07-18 | Rack door closed (overnight), Pritel off | — | — | — | — | — | — | — | — |
+| 2026-07-18 | Rack door closed (overnight), Pritel off, EDFA27 on | 40.6 | 48.5 | 33.1 | 28.3 | 15.8 | 34.7 | 23.7 | 24.5 |
 | _(planned)_ | Rack door closed, EDFA27 + Pritel on | | | | | | | | |
 
 ## Notes
