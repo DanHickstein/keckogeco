@@ -104,8 +104,20 @@ def test_pwramp_ramp_reaches_target(amp):
     amp.set_pump(True)
     amp.set_pwramp_mA(500)
     setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
-    assert len(setpwr) >= 5  # 0 -> 500 at 50 mA steps
+    assert len(setpwr) == 3  # 0 -> 500 at 200 mA steps (linspace incl. start)
     assert amp.pwramp_mA == pytest.approx(500.0)
+
+
+def test_pwramp_full_rampup_step_count(amp):
+    """The commissioned 50 mA step made a 0 -> 3.9 A bring-up ~80 commands
+    (~1 min); at the 2026-07-18 200 mA step it is 20 (~35 s with the 1 s
+    dwell, which sim skips)."""
+    amp.set_pump(True)
+    amp.set_pwramp_mA(3900)
+    setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
+    assert len(setpwr) == 20
+    assert setpwr[-1] == "FA SETPWR 390"
+    assert amp.pwramp_mA == pytest.approx(3900.0)
 
 
 def test_pump_off_aborts_running_ramp(amp):

@@ -8,8 +8,10 @@ interlock; see ``arduino_relay``).
 Ported from ``Hardware/PritelAmp.py``. Device behaviors preserved:
 
 * **Current ramping.** Large current changes are applied in steps
-  (default 100 mA for the preamp, 50 mA for the power amp) so the output
-  power changes gradually. This is commissioning-tested behavior — keep it.
+  (default 100 mA for the preamp, 200 mA for the power amp with a 1 s
+  dwell per step) so the output power changes gradually. The power-amp
+  step was coarsened from the commissioned 50 mA — ~80 commands, ~1 min
+  per bring-up — with Dan's sign-off (2026-07-18).
 * **Hard limits raise** (600 mA preamp, 5800 mA power amp) rather than
   clamping: an out-of-range request is a caller bug, not a device quirk.
 * Power-amp setpoints are rounded to 10 mA (the ``FA SETPWR`` command has
@@ -73,9 +75,14 @@ class PritelAmp(Instrument):
     PREAMP_MAX_MA: ClassVar[float] = 600.0
     PWRAMP_MAX_MA: ClassVar[float] = 5800.0
 
-    #: ramp step sizes; 0 disables ramping for that stage
+    #: ramp step sizes; 0 disables ramping for that stage. The power-amp
+    #: step was 50 mA (commissioned) — coarsened to 200 mA with a dwell,
+    #: Dan's sign-off 2026-07-18: the ~1 min bring-up was excessive.
     RAMP_STEP_PRE_MA: ClassVar[float] = 100.0
-    RAMP_STEP_PWR_MA: ClassVar[float] = 50.0
+    RAMP_STEP_PWR_MA: ClassVar[float] = 200.0
+    #: seconds to dwell between power-amp ramp steps (on top of the ~0.7 s
+    #: of command round-trips per step); abort-aware, skipped in sim
+    RAMP_SETTLE_S: ClassVar[float] = 1.0
 
     PUMP_TIMEOUT_S: ClassVar[float] = 5.0
 
@@ -258,9 +265,11 @@ class PritelAmp(Instrument):
         """Set the power-amp current, ramping in RAMP_STEP_PWR_MA steps.
 
         The command resolution is 0.01 A, so values are rounded to 10 mA.
+        Steps dwell RAMP_SETTLE_S between moves (real hardware only).
         ``abort_check`` is polled before each step (the action executor's
-        abort); a concurrent ``set_pump(False)`` also stops the ramp. An
-        aborted ramp parks the power amp at 0 mA.
+        abort); a concurrent ``set_pump(False)`` also stops the ramp — it
+        cuts a dwell short too. An aborted ramp parks the power amp at
+        0 mA.
         """
         mA = round(to_mA(mA) / 10) * 10
         if mA > self.PWRAMP_MAX_MA:
@@ -270,7 +279,12 @@ class PritelAmp(Instrument):
         if not self.pump_on and mA > 0:
             self.log.warning("%s: setting power-amp current with pump OFF has no effect", self.name)
         self._ramp_abort.clear()
-        for step in self._ramp_steps(self.pwramp_mA, mA, self.RAMP_STEP_PWR_MA if ramp else 0):
+        steps = self._ramp_steps(self.pwramp_mA, mA, self.RAMP_STEP_PWR_MA if ramp else 0)
+        for index, step in enumerate(steps):
+            if index and ramp and self._discard_echo:
+                # dwell between steps (real hardware only); a pump-off
+                # during the dwell wakes it early and the check below parks
+                self._ramp_abort.wait(timeout=self.RAMP_SETTLE_S)
             if self._ramp_aborted(abort_check, "power amp"):
                 self._ask("FA SETPWR 000")
                 return

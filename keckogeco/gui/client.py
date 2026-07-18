@@ -58,8 +58,9 @@ class KeckogecoClient:
             f"{self.base_url}/api/v1/keywords/{name}",
             json={"value": value},
             # ramped writes can be slow: the Pritel's 0 -> 3.9 A power-amp
-            # ramp is ~80 serial commands (~1 min). A shorter timeout made
-            # the GUI report WRITE FAILED on a write that then succeeded.
+            # ramp is ~20 steps with a 1 s dwell (~35 s; was ~1 min before
+            # the 2026-07-18 step change). A shorter timeout made the GUI
+            # report WRITE FAILED on a write that then succeeded.
             timeout=max(self.timeout, 120.0),
         )
         if response.status_code >= 400:
