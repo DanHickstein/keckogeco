@@ -427,6 +427,19 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAP
                 )
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # never sweep under the Pritel (issue #43): the sweep crosses
+        # fringe nulls that starve the amplifier's seed, and no bound
+        # monitor would show it (the ASD is the last line of defense)
+        try:
+            if controller.device("ptamp").pump_on:
+                raise HTTPException(
+                    status_code=409,
+                    detail="the Pritel amplifier is ON; turn it off before scanning "
+                    "(the sweep crosses bias points that starve the amplifier's seed)",
+                )
+        except InstrumentError as exc:
+            # not configured / offline: can't verify, don't block the scan
+            log.warning("IM scan: cannot verify the Pritel is off (%s)", exc)
         try:
             return controller.executor.submit(
                 "im_bias_scan",

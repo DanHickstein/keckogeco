@@ -502,6 +502,68 @@ def test_keyword_spinbox_typed_value_survives_polls(qtbot):
     assert widget.spin.value() == 1.25
 
 
+def test_keyword_spinbox_live_applies_arrow_steps(qtbot):
+    """``live=True`` (the IM servo boxes, issue #41): arrow/wheel steps
+    submit after a short pause instead of waiting for Enter/focus-out.
+    (Focus can't be exercised offscreen, so the edit state + debounce
+    start are driven directly, as _on_user_change would on a step.)"""
+    from keckogeco.gui.widgets import KeywordSpinBox
+
+    submitted = []
+    spec = {"units": "V", "min": -8.0, "max": 8.0, "step": 0.01}
+    widget = KeywordSpinBox("LFC_IM_BIAS", spec, lambda k, v: submitted.append((k, v)), live=True)
+    qtbot.addWidget(widget)
+    # typing must not submit per keystroke: keyboard tracking is off, so
+    # keystrokes never reach valueChanged (only Enter/focus-out do)
+    assert not widget.spin.keyboardTracking()
+    widget.spin.setValue(1.25)
+    widget._editing = True
+    widget._debounce.start()
+    qtbot.waitUntil(lambda: submitted == [("LFC_IM_BIAS", 1.25)], timeout=2000)
+    # editingFinished right after the debounce fired must not double-submit
+    widget._apply()
+    assert submitted == [("LFC_IM_BIAS", 1.25)]
+    # the submitted value is protected from poll snap-back like any write
+    widget.update_value(0.0)
+    assert widget.spin.value() == 1.25
+
+
+def test_im_scan_blocked_while_pritel_on(qtbot, tmp_path, monkeypatch):
+    """Issue #43: starting a bias scan with the Pritel pumping pops a
+    dialog and never reaches the server (which would refuse it too)."""
+    pytest.importorskip("pyqtgraph")
+    from PyQt6.QtWidgets import QMessageBox
+
+    from keckogeco.gui import prefs
+    from keckogeco.gui.mainwindow import MainWindow
+
+    monkeypatch.setattr(prefs, "GUI_CONFIG_PATH", tmp_path / "gui.toml")
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    window._on_arrays_available(["im_scan"])
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kw: warnings.append(args))
+    calls = []
+    monkeypatch.setattr(window.writer, "submit_call", lambda label, fn: calls.append(label))
+
+    window._on_keywords({"LFC_PTAMP_ONOFF": {"value": True, "timestamp": 0}})
+    window._im_scan_start()
+    assert len(warnings) == 1 and "Pritel" in warnings[0][2]
+    assert calls == []
+
+    window._on_keywords({"LFC_PTAMP_ONOFF": {"value": False, "timestamp": 0}})
+    window._im_scan_start()
+    assert calls == ["IM scan"]
+
+    # a server-side refusal (stale snapshot race) also pops a dialog
+    window._on_write_failed("IM scan", "the Pritel amplifier is ON; ...")
+    assert len(warnings) == 2
+
+    window.poller.stop()
+    window.writer.stop()
+
+
 def test_keyword_spinbox_readback_keeps_setpoint(qtbot):
     """With a readback label the box is a setpoint: polls feed the label
     and never move the box (the Pritel currents read 0 until emission is

@@ -199,6 +199,17 @@ def test_im_servo_status_any_slot(client):
     assert client.get("/api/v1/im/servo/9").status_code == 400
 
 
+def test_im_scan_refused_while_pritel_on(client):
+    """Issue #43: the sweep crosses fringe nulls that starve the Pritel's
+    seed, so a scan is refused outright while the pump is on."""
+    client.put("/api/v1/keywords/LFC_PTAMP_ONOFF", json={"value": "1"})
+    response = client.post("/api/v1/im/scan", json={"settle_s": 0.0})
+    assert response.status_code == 409
+    assert "Pritel" in response.json()["detail"]
+    client.put("/api/v1/keywords/LFC_PTAMP_ONOFF", json={"value": "0"})
+    assert client.post("/api/v1/im/scan", json={"settle_s": 0.0}).status_code == 200
+
+
 def test_im_scan_validation(client):
     # inverted range -> 400 from the handler's cross-field check
     response = client.post("/api/v1/im/scan", json={"v_start": 1.0, "v_stop": -1.0})
