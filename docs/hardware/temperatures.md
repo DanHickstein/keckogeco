@@ -40,6 +40,15 @@ All values °C.
 
 ## Notes
 
+- The ~19 °C glycol rise across the optical table (in ~15.6 →
+  out ~34.7 °C, vs the rack loop's ~5 °C) is expected, not a fault
+  (Dan, 2026-07-18): the RF amplifier's heat load is large for a
+  breadboard cooling loop, and the ~1/4" copper tubing weaving through
+  the board limits flow. Watch for *changes* against these baselines:
+  glycol-out creeping up at constant load suggests flow degrading;
+  component channels rising while glycol-out drops suggests thermal
+  contact failing.
+
 - The 2026-07-14 row is the GUI baseline set
   (`gui/mainwindow._THERMO_PANELS`), recorded on the live rack with the
   system in its normal state and averaged over five `/keywords`
