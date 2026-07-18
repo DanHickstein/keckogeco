@@ -188,8 +188,13 @@ class PritelAmp(Instrument):
     def set_pump(self, on: bool) -> None:
         """Turn the pump on/off, re-sending until the readback confirms.
 
-        Turning OFF also aborts any current ramp in flight on another
-        thread (the ramp parks its stage at 0, the down-sequence state).
+        Turning ON first zeroes the unit's stored power-amp setpoint
+        (the unit refuses FA ON when it is too high for the seed, and
+        the stored value is unreadable). Turning OFF zeroes it too —
+        the pump can be re-enabled without any FA ON (latch reset,
+        2026-07-18), and it must come back at 0 A — and also aborts any
+        current ramp in flight on another thread (the ramp parks its
+        stage at 0, the down-sequence state).
         """
         target = bool(on)
         cmd = "FA ON" if target else "FA OFF"
@@ -210,6 +215,14 @@ class PritelAmp(Instrument):
                 self._ask("FA SETPWR 000")
         else:
             self._ramp_abort.set()
+            # Zero the stored setpoint BEFORE disabling: the pump can
+            # come back on without any FA ON (observed 2026-07-18: a
+            # latch reset ~4 min after a confirmed FA OFF, pump live
+            # again with no enabling command in the log), and whatever
+            # re-enables it must find 0 A stored, not the last operating
+            # current. This also cuts the output immediately — the right
+            # direction for an OFF command.
+            self._ask("FA SETPWR 000")
         deadline = time.monotonic() + self.PUMP_TIMEOUT_S
         reply = None
         while self.pump_on != target:

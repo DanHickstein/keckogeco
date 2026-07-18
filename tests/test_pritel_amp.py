@@ -59,6 +59,20 @@ def test_pump_on_off(amp):
     assert amp.pump_on is False
 
 
+def test_pump_off_zeroes_stored_setpoint(amp):
+    """OFF must leave 0 A stored: the pump can be re-enabled with no
+    FA ON at all (latch reset, observed 2026-07-18), and whatever brings
+    it back must find zero current, not the last operating value."""
+    amp.set_pump(True)
+    amp.set_pwramp_mA(1000)
+    amp.set_pump(False)
+    sent = amp.transport.sent
+    off_index = len(sent) - 1 - sent[::-1].index("FA OFF")
+    zero_index = len(sent) - 1 - sent[::-1].index("FA SETPWR 000")
+    assert zero_index < off_index  # zeroed before the disable
+    assert amp.pwramp_mA == pytest.approx(0.0)
+
+
 def test_preamp_ramps_in_steps(amp):
     amp.set_preamp_mA(300)
     setpre = [c for c in amp.transport.sent if c.startswith("FA SETPRE")]
@@ -131,14 +145,16 @@ def test_pump_on_zeroes_stale_stored_setpoint(amp):
     nothing shows it. set_pump(True) must zero the stored setpoint
     before enabling; the sim refuses FA ON above 2 A to keep this
     honest."""
-    amp.set_pump(True)
-    amp.set_pwramp_mA(3900)
-    amp.set_pump(False)  # setpoint stays stored, like an abnormal stop
+    amp.set_pump(False)
+    amp.set_pwramp_mA(3900)  # pump off: stores a high setpoint (the trap)
     amp.set_pump(True)  # would time out refused without the zeroing
     assert amp.pump_on is True
     sent = amp.transport.sent
+    last_390 = len(sent) - 1 - sent[::-1].index("FA SETPWR 390")
     last_on = len(sent) - 1 - sent[::-1].index("FA ON")
-    assert "FA SETPWR 000" in sent[:last_on]  # zeroed before enabling
+    zeroes = [i for i, c in enumerate(sent) if c == "FA SETPWR 000"]
+    # a zero landed after the stale 3.9 A store and before the enable
+    assert any(last_390 < i < last_on for i in zeroes)
     assert amp.pwramp_mA == pytest.approx(0.0)
 
 

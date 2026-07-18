@@ -171,6 +171,12 @@ comes with a delay.
   operating current stored and every later pump-on fails with all
   monitors healthy. `set_pump(True)` therefore sends `FA SETPWR 000`
   before `FA ON`; do not remove it (the sim models the refusal).
+  **The pump can also come back ON with no `FA ON` at all** — observed
+  2026-07-18: minutes after a confirmed `FA OFF`, following an Arduino
+  interlock latch reset, the pump was live again with nothing in the
+  log. So `set_pump(False)` zeroes the stored setpoint too: whatever
+  re-enables the pump must find 0 A. Treat "Reset latch" as a possible
+  pump-enable when the front-panel/pump state allows it.
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.
