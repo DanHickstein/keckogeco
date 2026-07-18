@@ -189,7 +189,6 @@ class OsaControls(QWidget):
             self.defaults["sensitivity_dBm"],
         )
         self.resolution = QComboBox()
-        self.resolution.setToolTip("resolution bandwidth")
         self._set_resolutions(self.RESOLUTIONS_NM)
         self.resolution.activated.connect(
             lambda index: self._submit_settings(resolution_nm=self.resolution.itemData(index))
@@ -202,9 +201,14 @@ class OsaControls(QWidget):
 
         sweep = QHBoxLayout()
         self._sweep_buttons: dict[str, QPushButton] = {}
-        for text, mode in (("Single", "single"), ("Cont.", "continuous"), ("Stop", "stop")):
+        for text, tooltip, mode in (
+            ("Single", "trigger one sweep, then hold it on screen", "single"),
+            ("Cont.", "sweep continuously (the live view)", "continuous"),
+            ("Stop", "", "stop"),
+        ):
             button = QPushButton(text)
-            button.setToolTip(f"{mode} sweep")
+            if tooltip:
+                button.setToolTip(tooltip)
             button.clicked.connect(lambda _checked, m=mode: self._submit_sweep(m))
             self._sweep_buttons[mode] = button
             sweep.addWidget(button)
@@ -214,7 +218,10 @@ class OsaControls(QWidget):
         self._default_button = QPushButton("Default")
         self._default_button.clicked.connect(self.apply_defaults)
         save = QPushButton("Save as default")
-        save.setToolTip("store the current settings as the default OSA configuration")
+        save.setToolTip(
+            "remember the current settings as the default view "
+            "(applied every time the GUI connects)"
+        )
         save.clicked.connect(self._save_as_default)
         config.addWidget(self._default_button)
         config.addWidget(save)
@@ -357,11 +364,6 @@ class ImServoPanel(QWidget):
         grid.addLayout(status_row, 0, 0, 1, 4)
 
         self.bias = bias_widget
-        if bias_widget is not None:
-            bias_widget.setToolTip(
-                "bias applied to the IM — editable while unlocked; while locked "
-                "it is read-only and follows the PID's live output"
-            )
         self.input_v = QLabel("—")
         self.input_v.setToolTip("servo measure input — the minicomb photodiode voltage")
         self.setpoint = setpoint_widget
@@ -621,8 +623,8 @@ class FlattenerSliderPanel(QWidget):
         for slot, atten in self.ATTENUATIONS.items():
             button = QPushButton(f"{slot}\n{atten}")
             button.setMaximumWidth(64)  # six of these must not set the window width
-            suffix = " — the 0 dB reference" if slot == 6 else ""
-            button.setToolTip(f"move the slider to position {slot} ({atten}{suffix})")
+            if slot == 6:  # the button text already says slot + attenuation
+                button.setToolTip("the 0 dB reference position")
             button.clicked.connect(lambda _checked, s=slot: set_position(s))
             self.position_buttons[slot] = button
             slots.addWidget(button)
@@ -643,7 +645,7 @@ class FlattenerSliderPanel(QWidget):
         home_button.clicked.connect(lambda: home())
         status_row.addWidget(home_button)
         refresh_button = QPushButton("Refresh")
-        refresh_button.setToolTip("re-read the slider position")
+        refresh_button.setToolTip("re-read the slider position (it is not polled)")
         refresh_button.clicked.connect(lambda: refresh())
         status_row.addWidget(refresh_button)
         outer.addLayout(status_row)
@@ -673,6 +675,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("keckogeco — LFC engineering GUI")
         self.widgets: dict[str, object] = {}  # keyword -> widget
         self._action_status_shown = ""  # last action message sent to the status bar
+        self._keyword_snapshot: dict = {}  # last /keywords poll (pre-flight checks)
 
         self.schema = client.schema()
         try:
@@ -714,6 +717,11 @@ class MainWindow(QMainWindow):
     def _spec(self, keyword: str) -> dict:
         return self.schema.get(keyword, {})
 
+    # Row tooltips are curated here, never inherited from the schema: the
+    # legacy help strings ("set on or off rfosc powersup") read as noise
+    # in a GUI whose rows already carry labels, and a control with nothing
+    # non-obvious to say gets no tooltip at all (issue #37).
+
     def _add_spin(
         self,
         form: QFormLayout,
@@ -722,13 +730,15 @@ class MainWindow(QMainWindow):
         submit=None,
         readback: bool = False,
         default: float | None = None,
+        tooltip: str = "",
     ) -> None:
         """Add a setpoint box. ``readback`` shows the measured value beside
         it (the box then holds the setpoint only); ``default`` pre-fills the
         box — display only, a value is never auto-applied to hardware."""
         if keyword not in self.schema:
             return
-        widget = KeywordSpinBox(keyword, self._spec(keyword), submit or self._submit, readback)
+        spec = {**self._spec(keyword), "help": tooltip}
+        widget = KeywordSpinBox(keyword, spec, submit or self._submit, readback)
         if default is not None:
             widget.spin.blockSignals(True)
             widget.spin.setValue(default)
@@ -736,26 +746,30 @@ class MainWindow(QMainWindow):
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
-    def _add_display(self, form: QFormLayout, label: str, keyword: str) -> None:
+    def _add_display(self, form: QFormLayout, label: str, keyword: str, tooltip: str = "") -> None:
         if keyword not in self.schema:
             return
-        widget = KeywordDisplay(keyword, self._spec(keyword))
+        widget = KeywordDisplay(keyword, {**self._spec(keyword), "help": tooltip})
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
-    def _add_lamp_display(self, form: QFormLayout, label: str, keyword: str, ok) -> None:
+    def _add_lamp_display(
+        self, form: QFormLayout, label: str, keyword: str, ok, tooltip: str = ""
+    ) -> None:
         if keyword not in self.schema:
             return
-        widget = LampDisplay(keyword, self._spec(keyword), ok, label=label)
+        widget = LampDisplay(keyword, {**self._spec(keyword), "help": tooltip}, ok, label=label)
         self.widgets[keyword] = widget
         form.addRow(label, widget)
 
-    def _add_onoff(self, form: QFormLayout, label: str, keyword: str, submit=None) -> None:
+    def _add_onoff(
+        self, form: QFormLayout, label: str, keyword: str, submit=None, tooltip: str = ""
+    ) -> None:
         if keyword not in self.schema:
             return
         widget = OnOffButton(
             keyword,
-            self._spec(keyword),
+            {**self._spec(keyword), "help": tooltip},
             submit or self._submit,
             confirm=keyword in _CONFIRM,
             label=label,
@@ -1002,8 +1016,20 @@ class MainWindow(QMainWindow):
     def _rb_clock_panel(self) -> QGroupBox:
         box = QGroupBox(self._title_with_port("Rb frequency standard — SRS FS725", "rb_clock"))
         form = QFormLayout(box)
-        self._add_lamp_display(form, "Phase lock", "LFC_RBCLOCK_PHASELOCK", ok=bool)
-        self._add_lamp_display(form, "Frequency lock", "LFC_RBCLOCK_FREQLOCK", ok=bool)
+        self._add_lamp_display(
+            form,
+            "Phase lock",
+            "LFC_RBCLOCK_PHASELOCK",
+            ok=bool,
+            tooltip="the 10 MHz output is phase-locked to the Rb transition",
+        )
+        self._add_lamp_display(
+            form,
+            "Frequency lock",
+            "LFC_RBCLOCK_FREQLOCK",
+            ok=bool,
+            tooltip="the Rb frequency-lock loop is closed",
+        )
         return box
 
     def _pendulum_panel(self) -> QGroupBox:
@@ -1028,6 +1054,8 @@ class MainWindow(QMainWindow):
             "Timebase",
             "LFC_REPRATE_REF",
             ok=lambda v: str(v).strip().upper() == "EXT",
+            tooltip="green only on EXT — the Rb-disciplined rear 10 MHz input; "
+            "INT means the counter free-runs and the reading can't be trusted",
         )
         layout.addLayout(form)
         return box
@@ -1075,12 +1103,15 @@ class MainWindow(QMainWindow):
             # the Windows style gives push buttons a ~140 px minimum;
             # four of those would set the whole window's width
             button.setMaximumWidth(84)
-            button.setToolTip(f"Run the {text} transition sequence")
+            button.setToolTip(
+                f"step through the commissioned {text} power sequence "
+                "(asks first; progress shows in the status bar)"
+            )
             button.clicked.connect(lambda _checked, a=action, t=text: self._start_action(a, t))
             outer.addWidget(button)
         abort = QPushButton("Abort")
         abort.setMaximumWidth(84)
-        abort.setToolTip("Abort the running transition")
+        abort.setToolTip("abort the running sequence (transitions and bias scans)")
         abort.clicked.connect(self._abort_action)
         outer.addWidget(abort)
         return box
@@ -1168,9 +1199,21 @@ class MainWindow(QMainWindow):
         form = QFormLayout(box)
         # lamp on the top row, like the Emission rows of the panels beside it
         self._add_lamp_display(
-            form, "Latch", "LFC_PTAMP_LATCH", ok=lambda v: int(v) == self._LATCH_READY
+            form,
+            "Latch",
+            "LFC_PTAMP_LATCH",
+            ok=lambda v: int(v) == self._LATCH_READY,
+            tooltip="Pritel interlock latch — green means ready to amplify; "
+            "after a trip, bring the photodiode voltage back in the window "
+            "and press Reset",
         )
-        self._add_display(form, "Voltage", "LFC_PTAMP_INTERLOCK_V")
+        self._add_display(
+            form,
+            "Voltage",
+            "LFC_PTAMP_INTERLOCK_V",
+            tooltip="interlock photodiode voltage (Arduino ADC) — green while "
+            "inside the trip window below",
+        )
         # trip window fetched once at startup (thresholds are quasi-static);
         # the live voltage is colored green/red against it in _on_keywords
         self._interlock_window: tuple[float, float] | None = None
@@ -1196,8 +1239,21 @@ class MainWindow(QMainWindow):
         # "Emission" (not "Pump") to match the EDFA panels: one enable for
         # the whole box — it gates the power amp; the preamp is driven by
         # its current setpoint alone.
-        self._add_onoff(form, "Emission", "LFC_PTAMP_ONOFF", submit=self._pritel_emission_submit)
-        self._add_display(form, "Power after preamp", "LFC_PTAMP_IN")
+        self._add_onoff(
+            form,
+            "Emission",
+            "LFC_PTAMP_ONOFF",
+            submit=self._pritel_emission_submit,
+            tooltip="gates the power amp; ON writes the Preamp setpoint first "
+            "(the unit refuses to pump with the preamp at 0 mA)",
+        )
+        self._add_display(
+            form,
+            "Power after preamp",
+            "LFC_PTAMP_IN",
+            tooltip="power entering the power-amp stage (FA INPUT?) — mostly "
+            "preamp ASE, so it does not prove good seed light",
+        )
         # both currents read back 0 until emission is on, so these boxes
         # hold the setpoint (pre-filled with the commissioned bring-up
         # values) and show the measured current beside it
@@ -1226,10 +1282,20 @@ class MainWindow(QMainWindow):
     def _rf_panel(self) -> QGroupBox:
         box = QGroupBox("RF chain")
         form = QFormLayout(box)
-        self._add_onoff(form, "Oscillator PSU", "LFC_RFOSCI_ONOFF")
+        self._add_onoff(
+            form,
+            "Oscillator PSU",
+            "LFC_RFOSCI_ONOFF",
+            tooltip="power to the 16 GHz oscillator (Instek GPD-4303S channel 2)",
+        )
         self._add_display(form, "Osc current", "LFC_RFOSCI_I")
         self._add_display(form, "Osc voltage", "LFC_RFOSCI_V")
-        self._add_onoff(form, "Amplifier PSU", "LFC_RFAMP_ONOFF")
+        self._add_onoff(
+            form,
+            "Amplifier PSU",
+            "LFC_RFAMP_ONOFF",
+            tooltip="power to the RF amplifier (Instek GPP-1326 channel 1)",
+        )
         self._add_display(form, "Amp current", "LFC_RFAMP_I")
         self._add_display(form, "Amp voltage", "LFC_RFAMP_V")
         return box
@@ -1367,10 +1433,13 @@ class MainWindow(QMainWindow):
 
         # --- top: lock controls + photodiode / bias strip charts
         # every editable box steps 0.01 per arrow click (Dan, 2026-07-16)
-        def keyword_spin(keyword: str) -> KeywordSpinBox | None:
+        # and applies arrow steps live (issue #41: stepping the bias did
+        # nothing until focus left the box)
+        def keyword_spin(keyword: str, help_text: str = "") -> KeywordSpinBox | None:
             if keyword not in self.schema:
                 return None
-            widget = KeywordSpinBox(keyword, {**self._spec(keyword), "step": 0.01}, self._submit)
+            spec = {**self._spec(keyword), "step": 0.01, "help": help_text}
+            widget = KeywordSpinBox(keyword, spec, self._submit, live=True)
             self.widgets[keyword] = widget
             return widget
 
@@ -1385,6 +1454,7 @@ class MainWindow(QMainWindow):
                 "(adjustable while locked)",
             },
             lambda _f, value: self._im_apply(setpoint_V=value),
+            live=True,
         )
         prop = KeywordSpinBox(
             "prop_gain",
@@ -1396,6 +1466,7 @@ class MainWindow(QMainWindow):
                 "polarity and must match the fringe slope's sign",
             },
             lambda _f, value: self._im_apply(prop_gain=value),
+            live=True,
         )
         intg = KeywordSpinBox(
             "intg_gain",
@@ -1406,6 +1477,7 @@ class MainWindow(QMainWindow):
                 "help": "SIM960 integral gain (1/s)",
             },
             lambda _f, value: self._im_apply(intg_gain=value),
+            live=True,
         )
         self._im_bias_start = KeywordSpinBox(
             "bias_start",
@@ -1418,11 +1490,16 @@ class MainWindow(QMainWindow):
                 "before engaging (remembered across GUI restarts)",
             },
             lambda _f, value: prefs.save_section("im_lock", {"bias_start": value}),
+            live=True,
         )
         saved_start = prefs.load_section("im_lock").get("bias_start")
         if saved_start is not None:
             self._im_bias_start.update_value(saved_start)
-        bias = keyword_spin("LFC_IM_BIAS")
+        bias = keyword_spin(
+            "LFC_IM_BIAS",
+            "bias applied to the IM — editable while unlocked; while locked "
+            "it is read-only and follows the PID's live output",
+        )
         # the Bias out box is fed exclusively by the im_scan array (OMON,
         # the live output). The keyword snapshot reports MOUT — the manual
         # setting, which differs from OMON while the PID drives the
@@ -1431,7 +1508,11 @@ class MainWindow(QMainWindow):
         self._im_servo_panel = ImServoPanel(
             self._im_set_lock,
             bias_widget=bias,
-            rf_att_widget=keyword_spin("LFC_IM_RF_ATT"),
+            rf_att_widget=keyword_spin(
+                "LFC_IM_RF_ATT",
+                "drive voltage of the mini-comb RF attenuator (VCA) — iterate "
+                "against the bias while flattening the mini-comb",
+            ),
             setpoint_widget=setpoint,
             prop_widget=prop,
             intg_widget=intg,
@@ -1488,6 +1569,17 @@ class MainWindow(QMainWindow):
         self.writer.submit_call("IM settings", lambda c: c.im_apply(**settings))
 
     def _im_scan_start(self) -> None:
+        # never sweep under the Pritel (issue #43): the sweep crosses
+        # fringe nulls that starve the amplifier's seed. The server
+        # refuses too; this check gives the operator a dialog up front.
+        if self._keyword_snapshot.get("LFC_PTAMP_ONOFF", {}).get("value"):
+            QMessageBox.warning(
+                self,
+                "Pritel is on",
+                "Turn off the Pritel amplifier before scanning the IM bias.\n\n"
+                "The sweep crosses bias points that starve the amplifier's seed.",
+            )
+            return
         params = self._im_controls.params()
         self.writer.submit_call("IM scan", lambda c: c.im_scan(**params))
 
@@ -1721,7 +1813,14 @@ class MainWindow(QMainWindow):
                 continue
             # 0.01 per arrow click, like the IM lock boxes (Dan, 2026-07-17)
             widget = KeywordSpinBox(
-                keyword, {**self._spec(keyword), "step": 0.01}, self._wsp_submit
+                keyword,
+                {
+                    **self._spec(keyword),
+                    "step": 0.01,
+                    "help": "the three boxes program the WaveShaper together "
+                    "as one phase profile (remembered across GUI restarts)",
+                },
+                self._wsp_submit,
             )
             widget.spin.setValue(remembered[keyword])
             self._wsp_spins[keyword] = widget
@@ -1771,8 +1870,9 @@ class MainWindow(QMainWindow):
         # keyword: a duplicate spin box here would stop getting updates)
         box = QGroupBox("TECs")
         form = QFormLayout(box)
-        self._add_spin(form, "PPLN temp", "LFC_PPLN_T")
-        self._add_spin(form, "Waveguide temp", "LFC_WGD_T")
+        ramp_note = "applied in 0.5 °C steps to avoid thermal shock to the crystal"
+        self._add_spin(form, "PPLN temp", "LFC_PPLN_T", tooltip=ramp_note)
+        self._add_spin(form, "Waveguide temp", "LFC_WGD_T", tooltip=ramp_note)
         return box
 
     def _shutter_panel(self) -> QGroupBox:
@@ -1794,12 +1894,19 @@ class MainWindow(QMainWindow):
         ]:
             if keyword not in self.schema:
                 continue
-            self._add_spin(form, serial, keyword)
+            self._add_spin(
+                form,
+                serial,
+                keyword,
+                tooltip="attenuation reads unknown (—) until the first set "
+                "after power-up homes the unit",
+            )
         return box
 
     # --------------------------------------------------------------- slots
 
     def _on_keywords(self, snapshot: dict) -> None:
+        self._keyword_snapshot = snapshot
         for keyword, payload in snapshot.items():
             widget = self.widgets.get(keyword)
             if widget is not None and hasattr(widget, "update_value"):
@@ -1900,6 +2007,10 @@ class MainWindow(QMainWindow):
 
     def _on_write_failed(self, keyword: str, error: str) -> None:
         self.statusBar().showMessage(f"WRITE FAILED {keyword}: {error}", 10000)
+        if keyword == "IM scan":
+            # the server's refusal (Pritel on, lock engaged, ...) deserves
+            # a dialog, not just a status-bar line the operator may miss
+            QMessageBox.warning(self, "Scan refused", error)
         if keyword == "flattener":
             self._flattener_panel.set_offline(error)
         # let the next poll snap the box back to the instrument's value

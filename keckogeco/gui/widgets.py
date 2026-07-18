@@ -111,7 +111,8 @@ class PrecisionDisplay(QLabel):
         self.reference = reference
         self.reference_label = reference_label
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setToolTip(spec.get("help") or keyword)
+        if spec.get("help"):  # no tooltip beats a raw keyword name
+            self.setToolTip(spec["help"])
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setStyleSheet("font-family: Consolas, 'Courier New', monospace;")
 
@@ -139,7 +140,8 @@ class KeywordDisplay(QLabel):
         self.keyword = keyword
         self.units = spec.get("units", "")
         self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.setToolTip(spec.get("help") or keyword)
+        if spec.get("help"):
+            self.setToolTip(spec["help"])
 
     def update_value(self, value) -> None:
         self.setText(format_value(value, self.units))
@@ -237,6 +239,13 @@ class KeywordSpinBox(QWidget):
     next poll, so a slow (or refused) write doesn't look like the box ate
     the input — after the grace the poll value wins again.
 
+    ``live`` additionally submits arrow/wheel steps after a short pause
+    (issue #41: the IM bias felt dead — stepping the arrows changed the
+    display but nothing was written until focus left the box). Typed
+    edits still wait for Enter/focus-out: keyboard tracking is off in
+    this mode, so keystrokes never emit ``valueChanged``, and rapid
+    arrow clicks coalesce into one write.
+
     ``readback`` splits setpoint from measurement instead: the (narrower)
     box keeps what the operator — or a commissioned default — put there,
     and the live value is shown as text beside it. Used where the box is a
@@ -249,6 +258,8 @@ class KeywordSpinBox(QWidget):
     PENDING_GRACE_S = 10.0
     #: max spin width (px) when a readback label shares the row
     READBACK_SPIN_WIDTH = 120
+    #: ms of arrow-click inactivity before a live box submits
+    LIVE_APPLY_DELAY_MS = 400
 
     def __init__(
         self,
@@ -256,6 +267,7 @@ class KeywordSpinBox(QWidget):
         spec: dict,
         submit: Callable[[str, object], None],
         readback: bool = False,
+        live: bool = False,
     ):
         super().__init__()
         self.keyword = keyword
@@ -263,8 +275,18 @@ class KeywordSpinBox(QWidget):
         self._submit = submit
         self._editing = False
         self._pending_until = 0.0
+        self._debounce: QTimer | None = None
+        if live:
+            self._debounce = QTimer(self)
+            self._debounce.setSingleShot(True)
+            self._debounce.setInterval(self.LIVE_APPLY_DELAY_MS)
+            self._debounce.timeout.connect(self._apply)
 
         self.spin = SelectAllSpinBox()
+        if live:
+            # keystrokes must not emit valueChanged (each would submit a
+            # half-typed number); arrows/wheel/PageUp still do
+            self.spin.setKeyboardTracking(False)
         self.spin.setDecimals(3)
         self.spin.setRange(
             spec.get("min") if spec.get("min") is not None else -1e9,
@@ -278,7 +300,8 @@ class KeywordSpinBox(QWidget):
         self.spin.setMaximumWidth(130)
         if self.units:
             self.spin.setSuffix(f" {self.units}")
-        self.spin.setToolTip(spec.get("help") or keyword)
+        if spec.get("help"):
+            self.spin.setToolTip(spec["help"])
         self.spin.editingFinished.connect(self._apply)
         # mark "editing" as soon as the user changes the value by any means
         self.spin.valueChanged.connect(self._on_user_change)
@@ -298,10 +321,14 @@ class KeywordSpinBox(QWidget):
     def _on_user_change(self, _value) -> None:
         if self.spin.hasFocus():
             self._editing = True
+            if self._debounce is not None:
+                self._debounce.start()  # restart on every step: clicks coalesce
 
     def _apply(self) -> None:
         if self._editing:
             self._editing = False
+            if self._debounce is not None:
+                self._debounce.stop()  # editingFinished beat the timer
             self._pending_until = time.monotonic() + self.PENDING_GRACE_S
             self._submit(self.keyword, self.spin.value())
 
@@ -351,7 +378,8 @@ class OnOffButton(QWidget):
 
         self.lamp = StatusLamp(label or keyword)
         self.button = QPushButton("—")
-        self.button.setToolTip(spec.get("help") or keyword)
+        if spec.get("help"):
+            self.button.setToolTip(spec["help"])
         self.button.clicked.connect(self._toggle)
 
         layout = QHBoxLayout(self)
