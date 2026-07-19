@@ -612,11 +612,13 @@ def test_pritel_panel_setpoints_and_interlock_lamp(qtbot):
         assert "#3a4350" in latch.lamp.styleSheet()  # anything else -> grey
 
 
-def test_pritel_emission_on_writes_preamp_first(qtbot, monkeypatch):
-    """Clicking Emission ON queues the preamp setpoint write before the
-    pump-on (the writer queue is FIFO). The box used to display 600 mA
-    without ever writing it, leaving the preamp at 0 and the unit's ASD
-    refusing FA ON (2026-07-15/17); OFF touches only the pump keyword."""
+def test_pritel_emission_one_click_bringup(qtbot, monkeypatch):
+    """Clicking Emission ON runs the full bring-up in the commissioned
+    order (FIFO writer queue): preamp setpoint, pump ON, then the Power
+    amp box value — re-applying what pump-on's setpoint-zeroing discards
+    (Dan, 2026-07-18). OFF touches only the pump keyword. The confirm
+    dialog quotes the current the ramp will reach; answering No sends
+    nothing."""
     from PyQt6.QtWidgets import QMessageBox
 
     from keckogeco.gui.mainwindow import MainWindow
@@ -625,11 +627,34 @@ def test_pritel_emission_on_writes_preamp_first(qtbot, monkeypatch):
     qtbot.addWidget(window)
     submitted = []
     monkeypatch.setattr(window, "_submit", lambda k, v: submitted.append((k, v)))
-    monkeypatch.setattr(
-        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
-    )
+    questions = []
+
+    def fake_question(_parent, _title, text, *args, **kwargs):
+        questions.append(text)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
     emission = window.widgets["LFC_PTAMP_ONOFF"]
     emission.update_value(False)
+    emission.button.click()
+    assert submitted == [
+        ("LFC_PTAMP_PRE_P", 600.0),
+        ("LFC_PTAMP_ONOFF", "1"),
+        ("LFC_PTAMP_I", 3.9),
+    ]
+    assert "turn on the Pritel" in questions[-1]
+    assert "ramped to 3.9 amps" in questions[-1]
+
+    # the dialog tracks the box: 1.0 A entered -> 1.0 quoted and written
+    submitted.clear()
+    window.widgets["LFC_PTAMP_I"].spin.setValue(1.0)
+    emission.button.click()
+    assert "ramped to 1.0 amps" in questions[-1]
+    assert submitted[-1] == ("LFC_PTAMP_I", 1.0)
+
+    # a 0 A box skips the pointless power-amp write
+    submitted.clear()
+    window.widgets["LFC_PTAMP_I"].spin.setValue(0.0)
     emission.button.click()
     assert submitted == [("LFC_PTAMP_PRE_P", 600.0), ("LFC_PTAMP_ONOFF", "1")]
 
@@ -637,6 +662,16 @@ def test_pritel_emission_on_writes_preamp_first(qtbot, monkeypatch):
     emission.update_value(True)
     emission.button.click()
     assert submitted == [("LFC_PTAMP_ONOFF", "0")]
+    assert "turn OFF the Pritel" in questions[-1]
+
+    # answering No sends nothing
+    submitted.clear()
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
+    )
+    emission.update_value(False)
+    emission.button.click()
+    assert submitted == []
 
     window.poller.stop()
     window.writer.stop()

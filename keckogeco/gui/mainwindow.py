@@ -780,7 +780,13 @@ class MainWindow(QMainWindow):
         form.addRow(label, widget)
 
     def _add_onoff(
-        self, form: QFormLayout, label: str, keyword: str, submit=None, tooltip: str = ""
+        self,
+        form: QFormLayout,
+        label: str,
+        keyword: str,
+        submit=None,
+        tooltip: str = "",
+        confirm_message=None,
     ) -> None:
         if keyword not in self.schema:
             return
@@ -790,6 +796,7 @@ class MainWindow(QMainWindow):
             submit or self._submit,
             confirm=keyword in _CONFIRM,
             label=label,
+            confirm_message=confirm_message,
         )
         self.widgets[keyword] = widget
         form.addRow(label, widget)
@@ -1261,8 +1268,10 @@ class MainWindow(QMainWindow):
             "Emission",
             "LFC_PTAMP_ONOFF",
             submit=self._pritel_emission_submit,
-            tooltip="gates the power amp; ON writes the Preamp setpoint first "
-            "(the unit refuses to pump with the preamp at 0 mA)",
+            tooltip="one-click bring-up: applies the Preamp setpoint, turns "
+            "the pump ON, then ramps the power amp to the Power amp box "
+            "value (the confirm dialog quotes it)",
+            confirm_message=self._pritel_confirm_text,
         )
         self._add_display(
             form,
@@ -1283,17 +1292,40 @@ class MainWindow(QMainWindow):
         self._add_display(form, "Output", "LFC_PTAMP_OUT")
         return box
 
+    def _pritel_confirm_text(self, target: bool) -> str:
+        """Confirm-dialog text for the Emission button (Dan, 2026-07-18):
+        turning ON must state the current the bring-up will ramp to."""
+        if not target:
+            return "Really turn OFF the Pritel pump?"
+        pwramp = self.widgets.get("LFC_PTAMP_I")
+        amps = pwramp.spin.value() if pwramp is not None else 0.0
+        return (
+            "Are you sure you want to turn on the Pritel?\n\n"
+            f"The current will be ramped to {amps:.1f} amps."
+        )
+
     def _pritel_emission_submit(self, keyword: str, value) -> None:
-        """Emission ON writes the preamp box's setpoint first. The unit's
-        ASD refuses pump-on while the preamp is at 0 mA, and the box shows
-        the bring-up default without ever having written it — clicking ON
-        with the displayed value unapplied caused the 2026-07-15/17 "pump
-        did not turn ON" refusals. The writer queue is FIFO, so the preamp
-        write lands before the pump-on; if it fails, the ASD still blocks."""
+        """Emission ON is the one-click bring-up (Dan, 2026-07-18), in
+        the commissioned _pritel_up order via the FIFO writer queue:
+
+        1. the Preamp box setpoint (the unit's ASD refuses pump-on at
+           0 mA, and the box shows a default without ever writing it —
+           the 2026-07-15/17 refusal trap);
+        2. pump ON (which zeroes the unit's stored power-amp setpoint —
+           the other refusal trap — so the pump always enables at 0 A);
+        3. the Power amp box value, ramped (re-applying what the zeroing
+           discarded; skipped at 0). The confirm dialog quotes it.
+
+        OFF touches only the pump keyword and jumps the queue (urgent)."""
         if str(value) == "1":
             preamp = self.widgets.get("LFC_PTAMP_PRE_P")
             if preamp is not None:
                 self._submit("LFC_PTAMP_PRE_P", preamp.spin.value())
+            self._submit(keyword, value)
+            pwramp = self.widgets.get("LFC_PTAMP_I")
+            if pwramp is not None and pwramp.spin.value() > 0:
+                self._submit("LFC_PTAMP_I", pwramp.spin.value())
+            return
         self._submit(keyword, value)
 
     def _rf_panel(self) -> QGroupBox:
@@ -1323,6 +1355,16 @@ class MainWindow(QMainWindow):
         stay bound server-side for KTL; here the full arrays cover them)."""
         box = QGroupBox("Temperatures")
         row = QHBoxLayout(box)
+        # the laptop lives in the rack, so its hottest ACPI zone shows as
+        # an extra row of the Rack column (a third column cost too much
+        # width — Dan, 2026-07-18). Fed by the local health thread
+        # (details on the Laptop tab), colored by the absolute bands,
+        # not the rack's ±3 C baselines. Created before the loop so the
+        # label exists (for _on_laptop_sample) even without a rack board.
+        self._overview_laptop_temp = QLabel("—")
+        self._overview_laptop_temp.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         for keyword, title, channels in _THERMO_PANELS:
             if keyword not in self.schema:
                 continue
@@ -1333,34 +1375,23 @@ class MainWindow(QMainWindow):
             array = ThermoArray(keyword, channels, _TEMP_TOLERANCE_C)
             self.widgets[keyword] = array
             column.addWidget(array)
+            if keyword == "LFC_TEMP_TEST1":  # the rack board's column
+                grid = QGridLayout()
+                grid.setHorizontalSpacing(18)
+                name = QLabel("Laptop CPU")
+                tip = (
+                    "hottest ACPI thermal zone of this laptop (details on the "
+                    f"Laptop tab) — amber above {TEMP_WARN_C:.0f} °C, red above "
+                    f"{TEMP_HOT_C:.0f} °C"
+                )
+                name.setToolTip(tip)
+                self._overview_laptop_temp.setToolTip(tip)
+                grid.addWidget(name, 0, 0)
+                grid.addWidget(self._overview_laptop_temp, 0, 1)
+                grid.setColumnStretch(2, 1)  # hug the left pair like the array
+                column.addLayout(grid)
             column.addStretch(1)
             row.addLayout(column, stretch=1)
-
-        # the laptop lives in the same warm room: its hottest ACPI zone,
-        # fed by the local health thread (details on the Laptop tab) and
-        # colored by the absolute bands, not the rack's ±3 C baselines
-        column = QVBoxLayout()
-        header = QLabel("Laptop")
-        header.setStyleSheet("font-weight: bold;")
-        column.addWidget(header)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(18)
-        name = QLabel("CPU zone")
-        self._overview_laptop_temp = QLabel("—")
-        self._overview_laptop_temp.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        tip = (
-            "hottest ACPI thermal zone of this laptop (details on the Laptop "
-            f"tab) — amber above {TEMP_WARN_C:.0f} °C, red above {TEMP_HOT_C:.0f} °C"
-        )
-        name.setToolTip(tip)
-        self._overview_laptop_temp.setToolTip(tip)
-        grid.addWidget(name, 0, 0)
-        grid.addWidget(self._overview_laptop_temp, 0, 1)
-        column.addLayout(grid)
-        column.addStretch(1)
-        row.addLayout(column)
         return box
 
     def _osa_panel(self) -> QGroupBox:
