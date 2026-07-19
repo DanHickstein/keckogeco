@@ -360,6 +360,9 @@ class OnOffButton(QWidget):
 
     ``confirm`` adds an are-you-sure dialog — used for anything that
     switches optical power (EDFAs, Pritel pump, RF chain).
+    ``confirm_message`` customizes its text: a callable taking the
+    target state, evaluated at click time so it can quote live values
+    (the Pritel dialog names the current the bring-up will ramp to).
     """
 
     def __init__(
@@ -369,11 +372,13 @@ class OnOffButton(QWidget):
         submit: Callable[[str, object], None],
         confirm: bool = False,
         label: str = "",
+        confirm_message: Callable[[bool], str] | None = None,
     ):
         super().__init__()
         self.keyword = keyword
         self._submit = submit
         self._confirm = confirm
+        self._confirm_message = confirm_message
         self._state: bool | None = None
 
         self.lamp = StatusLamp(label or keyword)
@@ -391,10 +396,15 @@ class OnOffButton(QWidget):
         target = not bool(self._state)
         if self._confirm:
             verb = "turn ON" if target else "turn OFF"
+            message = (
+                self._confirm_message(target)
+                if self._confirm_message is not None
+                else f"Really {verb} {self.keyword}?"
+            )
             answer = QMessageBox.question(
                 self,
                 "Confirm",
-                f"Really {verb} {self.keyword}?",
+                message,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
