@@ -306,8 +306,12 @@ class LFCController:
             for kw, channel in daq_map.items():
                 bind(kw, getter=lambda ch=channel: self.device("daq").temperature_C(ch))
         if has("daq_eocb"):
-            bind("LFC_T_EOCB_OUT", getter=lambda: self.device("daq_eocb").temperature_C(4))
-            bind("LFC_T_EOCB_IN", getter=lambda: self.device("daq_eocb").temperature_C(5))
+            # ch4 = inlet, ch5 = outlet: the June-2023 channel doc had
+            # these reversed — as-labeled the "inlet" read ~35 °C and the
+            # "outlet" the ~15 °C facility supply (2026-07-18, Dan; see
+            # ktl/keyword-changes.md)
+            bind("LFC_T_EOCB_IN", getter=lambda: self.device("daq_eocb").temperature_C(4))
+            bind("LFC_T_EOCB_OUT", getter=lambda: self.device("daq_eocb").temperature_C(5))
 
         # --- VOAs, HK shutter, pendulum rep-rate monitor
         # Which physical VOA is which wavelength is not yet known; config
