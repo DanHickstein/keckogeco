@@ -19,7 +19,7 @@ All values °C.
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-07-14 | Rack door **open**, Pritel off [^laptop-loc] | 28.7 | 26.4 | 27.0 | 26.0 | 19.6 | 14.1 | 26.0 | ~75 |
 | 2026-07-18 | Rack door **closed** (overnight), Pritel off, EDFA27 on | 34.3 | 34.3 | 34.3 | 32.3 | 26.1 | 17.0 | 33.7 | 84 |
-| _(planned)_ | Rack door closed, EDFA27 + Pritel **on** — record tonight after equilibration | | | | | | | | |
+| 2026-07-19 | Rack door closed, EDFA27 + Pritel **on** (overnight — the operating condition) | 35.4 | 36.5 | 35.3 | 34.0 | 26.7 | 17.5 | 34.3 | 91 |
 
 [^laptop-loc]: The laptop sat outside the rack for this row.
 
@@ -31,7 +31,7 @@ All values °C.
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-07-14 | Rack door open, Pritel off | 40.3 | 48.0 | 32.7 | 28.0 | 15.6 | 34.9 | 23.1 | 24.2 |
 | 2026-07-18 | Rack door closed (overnight), Pritel off, EDFA27 on | 40.6 | 48.5 | 33.1 | 28.3 | 15.8 | 34.7 | 23.7 | 24.5 |
-| _(planned)_ | Rack door closed, EDFA27 + Pritel on | | | | | | | | |
+| 2026-07-19 | Rack door closed, EDFA27 + Pritel on (overnight — the operating condition) | 40.8 | 48.4 | 33.3 | 28.5 | 15.9 | 34.2 | 24.3 | 24.8 |
 
 [^glycol-swap]: ch4/ch5 in–out labels corrected 2026-07-18 — the
     June-2023 channel doc had them reversed (the "inlet" read ~35 °C,
@@ -49,10 +49,11 @@ All values °C.
   component channels rising while glycol-out drops suggests thermal
   contact failing.
 
-- The 2026-07-14 row is the GUI baseline set
-  (`gui/mainwindow._THERMO_PANELS`), recorded on the live rack with the
-  system in its normal state and averaged over five `/keywords`
-  snapshots.
+- **The 2026-07-19 row is the GUI baseline set**
+  (`gui/mainwindow._THERMO_PANELS`) — the operating condition, per Dan.
+  Each channel's GUI tooltip carries all three recorded conditions
+  ("open / closed / +Pritel"). The 2026-07-14 row was the original
+  baseline set (averaged over five `/keywords` snapshots).
 - To capture a row: let the system sit in the condition for several
   hours (overnight is best), then read `LFC_TEMP_TEST1` (rack) and
   `LFC_TEMP_TEST2` (table) from `GET /api/v1/keywords`, or copy the

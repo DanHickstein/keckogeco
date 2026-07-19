@@ -187,18 +187,22 @@ def test_mainwindow_constructs_and_updates(qtbot):
     assert "150" in window.widgets["LFC_EDFA27_P"].spin.text()
 
     # every thermocouple channel renders from the LFC_TEMP_TEST arrays,
-    # colored against its normal-operation baseline (±3 C band)
+    # colored against its normal-operation baseline (±3 C band; the
+    # baselines are the 2026-07-19 door-closed + Pritel-on condition)
     rack = {ch: cell for ch, _base, cell in window.widgets["LFC_TEMP_TEST1"]._cells}
     assert len(rack) == 7  # ch7 (permanently unconnected) is not shown
     assert rack[0].text() == "28.50 °C"
-    assert rack[0].styleSheet() == ""  # at its baseline -> plain
-    assert "#e05252" in rack[6].styleSheet()  # 41.9 vs 26.0 baseline -> red
+    # 28.5 was normal with the door open; vs the 35.4 operating baseline
+    # it reads cold -> blue bold
+    assert "#5b9bd5" in rack[0].styleSheet()
+    assert "bold" in rack[0].styleSheet()
+    assert "#e05252" in rack[6].styleSheet()  # 41.9 vs 34.3 baseline -> red
     assert "bold" in rack[6].styleSheet()
     table = {ch: cell for ch, _base, cell in window.widgets["LFC_TEMP_TEST2"]._cells}
     assert len(table) == 8
     assert table[1].text() == "48.10 °C"
-    assert table[1].styleSheet() == ""  # RF amp: 48 C is its normal baseline
-    assert "#5b9bd5" in table[4].styleSheet()  # 11.0 vs 15.6 baseline -> blue
+    assert table[1].styleSheet() == ""  # RF amp: ~48 C is its normal baseline
+    assert "#5b9bd5" in table[4].styleSheet()  # 11.0 vs 15.9 baseline -> blue
     assert "bold" in table[4].styleSheet()
 
     # a board going away (keyword drops to null) blanks its readouts

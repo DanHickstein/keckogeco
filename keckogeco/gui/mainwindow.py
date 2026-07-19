@@ -79,39 +79,82 @@ _STATE_DISPLAY = {"FAULT": "ENGINEERING MODE"}
 # tooltip. The rack board's ch7 is permanently unconnected and left out.
 # Values arrive as the LFC_TEMP_TEST1/2 array keywords, so every channel
 # is shown — not just the seven with individual LFC_T_* keywords.
-# Each channel's last value is its normal-operation baseline, recorded on
-# the live rack 2026-07-14 (system in its normal state; five /keywords
-# snapshots averaged). Readings more than ±_TEMP_TOLERANCE_C from the
-# baseline are colored bold red (hot) / bold blue (cold) — a per-channel
-# band, because "normal" spans 14 °C glycol to a 48 °C RF amplifier.
+# Each channel's last value is its normal-operation baseline: the
+# 2026-07-19 operating condition (rack door CLOSED, EDFA27 + Pritel ON,
+# overnight-equilibrated — Dan: "make these the new default temps");
+# the tooltip carries all three recorded conditions ("open / closed /
+# +Pritel", the docs/hardware/temperatures.md rows). Readings more than
+# ±_TEMP_TOLERANCE_C from the baseline are colored bold red (hot) /
+# bold blue (cold) — a per-channel band, because "normal" spans 16 °C
+# glycol to a 48 °C RF amplifier.
 _THERMO_PANELS = (
     (
         "LFC_TEMP_TEST1",
         "Rack",
         [
-            (0, "Side baffle", "Rack side baffle (middle side rack)", 28.7),
-            (1, "WaveShaper", "Waveshaper (upper rack)", 26.4),
-            (2, "Rb clock", "Rb clock (middle rack)", 27.0),
-            (3, "Pritel", "Pritel (middle upper rack)", 26.0),
-            (4, "Glycol out", "Rack glycol out", 19.6),
-            (5, "Glycol in", "Rack glycol in", 14.1),
-            (6, "PSU shelf", "Power supply shelf (bottom rack)", 26.0),
+            (
+                0,
+                "Side baffle",
+                "Rack side baffle (middle side rack); open 28.7 / closed 34.3 / +Pritel 35.4 °C",
+                35.4,
+            ),
+            (
+                1,
+                "WaveShaper",
+                "Waveshaper (upper rack); open 26.4 / closed 34.3 / +Pritel 36.5 °C",
+                36.5,
+            ),
+            (
+                2,
+                "Rb clock",
+                "Rb clock (middle rack); open 27.0 / closed 34.3 / +Pritel 35.3 °C",
+                35.3,
+            ),
+            (
+                3,
+                "Pritel",
+                "Pritel (middle upper rack); open 26.0 / closed 32.3 / +Pritel 34.0 °C",
+                34.0,
+            ),
+            (4, "Glycol out", "Rack glycol out; open 19.6 / closed 26.1 / +Pritel 26.7 °C", 26.7),
+            (5, "Glycol in", "Rack glycol in; open 14.1 / closed 17.0 / +Pritel 17.5 °C", 17.5),
+            (
+                6,
+                "PSU shelf",
+                "Power supply shelf (bottom rack); open 26.0 / closed 33.7 / +Pritel 34.3 °C",
+                34.3,
+            ),
         ],
     ),
     (
         "LFC_TEMP_TEST2",
         "Optical table (EOCB)",
         [
-            (0, "RF oscillator", "RF oscillator", 40.3),
-            (1, "RF amplifier", "RF amplifier", 48.0),
-            (2, "Phase mods", "Main phase modulators", 32.7),
-            (3, "Filter cavity", "Filter cavity", 28.0),
+            (0, "RF oscillator", "RF oscillator; open 40.3 / closed 40.6 / +Pritel 40.8 °C", 40.8),
+            (1, "RF amplifier", "RF amplifier; open 48.0 / closed 48.5 / +Pritel 48.4 °C", 48.4),
+            (
+                2,
+                "Phase mods",
+                "Main phase modulators; open 32.7 / closed 33.1 / +Pritel 33.3 °C",
+                33.3,
+            ),
+            (3, "Filter cavity", "Filter cavity; open 28.0 / closed 28.3 / +Pritel 28.5 °C", 28.5),
             # ch4/ch5 in-out labels corrected 2026-07-18 (the June-2023
             # doc had them reversed; baselines stay with their channels)
-            (4, "Glycol in", "Board glycol in", 15.6),
-            (5, "Glycol out", "Board glycol out", 34.9),
-            (6, "Compression", "Compression stage", 23.1),
-            (7, "Rb cell", "Rubidium (Rb) cell D2-210", 24.2),
+            (4, "Glycol in", "Board glycol in; open 15.6 / closed 15.8 / +Pritel 15.9 °C", 15.9),
+            (5, "Glycol out", "Board glycol out; open 34.9 / closed 34.7 / +Pritel 34.2 °C", 34.2),
+            (
+                6,
+                "Compression",
+                "Compression stage; open 23.1 / closed 23.7 / +Pritel 24.3 °C",
+                24.3,
+            ),
+            (
+                7,
+                "Rb cell",
+                "Rubidium (Rb) cell D2-210; open 24.2 / closed 24.5 / +Pritel 24.8 °C",
+                24.8,
+            ),
         ],
     ),
 )
@@ -1381,8 +1424,9 @@ class MainWindow(QMainWindow):
                 name = QLabel("Laptop CPU")
                 tip = (
                     "hottest ACPI thermal zone of this laptop (details on the "
-                    f"Laptop tab) — amber above {TEMP_WARN_C:.0f} °C, red above "
-                    f"{TEMP_HOT_C:.0f} °C"
+                    "Laptop tab); open ~75 (laptop outside the rack) / closed "
+                    f"84 / +Pritel 91 °C — amber above {TEMP_WARN_C:.0f} °C, "
+                    f"red above {TEMP_HOT_C:.0f} °C"
                 )
                 name.setToolTip(tip)
                 self._overview_laptop_temp.setToolTip(tip)
