@@ -21,6 +21,10 @@ def test_default_transport_is_serial():
 
     assert isinstance(inst.transport, SerialTransport)
     assert inst.transport.baud_rate == 9600
+    # opening with DTR asserted auto-resets the Uno, tripping the
+    # interlock latch on every server start — must stay suppressed
+    assert inst.transport.dtr is False
+    assert inst.transport.rts is False
 
 
 def test_relay_status_parsing(relay):

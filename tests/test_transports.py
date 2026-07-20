@@ -54,6 +54,75 @@ def test_socket_transport_rejects_bad_address():
         SocketTransport("no-port-here").open()
 
 
+class _FakeSerialException(Exception):
+    pass
+
+
+def _fake_serial_module(events):
+    """Stand-in pyserial that records the line state at open time."""
+    import types
+
+    class FakeSerial:
+        def __init__(self, port=None, **kwargs):
+            self._dtr = True  # pyserial default: lines asserted at open
+            self._rts = True
+            self.port = port
+            self.is_open = False
+            if port is not None:
+                self.open()
+
+        @property
+        def dtr(self):
+            return self._dtr
+
+        @dtr.setter
+        def dtr(self, value):
+            self._dtr = value
+
+        @property
+        def rts(self):
+            return self._rts
+
+        @rts.setter
+        def rts(self, value):
+            self._rts = value
+
+        def open(self):
+            self.is_open = True
+            events.append(("open", self._dtr, self._rts))
+
+        def close(self):
+            self.is_open = False
+
+    module = types.ModuleType("serial")
+    module.Serial = FakeSerial
+    module.SerialException = _FakeSerialException
+    return module
+
+
+def test_serial_transport_dtr_suppressed_before_open(monkeypatch):
+    """dtr/rts options must be applied BEFORE the OS handle opens: a
+    default open asserts DTR, and on an Arduino that edge resets the MCU
+    (rebooting the Pritel interlock into its tripped state, rack-probed
+    2026-07-20). Setting the lines after open would be too late."""
+    import sys
+
+    from keckogeco.drivers.transports import SerialTransport
+
+    events = []
+    monkeypatch.setitem(sys.modules, "serial", _fake_serial_module(events))
+
+    suppressed = SerialTransport("COM4", dtr=False, rts=False)
+    suppressed.open()
+    assert events == [("open", False, False)]
+
+    events.clear()
+    default = SerialTransport("COM4")
+    assert default.dtr is None and default.rts is None
+    default.open()
+    assert events == [("open", True, True)]
+
+
 def test_gpib_transports_share_one_board_lock():
     """All VISA transports on one GPIB board share a single I/O lock:
     NI-488 crashed the server with native access violations under

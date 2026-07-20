@@ -11,6 +11,15 @@ baud; commands are single words; replies are one or more text lines that
 arrive over ~0.2 s (no terminator discipline), so queries drain whatever
 bytes arrived and retry on silence. The interactive stdin confirmations of
 the old threshold setters are replaced by ``force=True``.
+
+The board is an Arduino Uno, and a port open that asserts DTR auto-resets
+it (DTR is capacitor-coupled to the MCU reset pin). The firmware boots
+latched-tripped — killing the Pritel pump through the hardware enable
+line — with thresholds reverted to compiled defaults and the YJ shutter
+back at "passing". The transport therefore holds DTR/RTS de-asserted
+(rack-verified 2026-07-20: latch, thresholds, and shutter state survive
+server restarts). The latch still trips on a genuine power cycle, which
+is the fail-safe the firmware intends.
 """
 
 from __future__ import annotations
@@ -74,9 +83,17 @@ class ArduinoRelay(Instrument):
     """Arduino relay/YJ-shutter controller on a plain COM port."""
 
     DEFAULT_TRANSPORT: ClassVar[str] = "serial"
-    TRANSPORT_DEFAULTS: ClassVar[dict] = {"baud_rate": 9600, "timeout_s": 1.0}
+    #: DTR/RTS held de-asserted so opening the port does not reset the
+    #: board (see module docstring); a config block can override
+    TRANSPORT_DEFAULTS: ClassVar[dict] = {
+        "baud_rate": 9600,
+        "timeout_s": 1.0,
+        "dtr": False,
+        "rts": False,
+    }
 
-    #: the Arduino resets when the port opens and needs time to boot
+    #: post-reset firmware boot time; only waited for when an open can
+    #: reset the board (config override re-asserting DTR)
     BOOT_DELAY_S: ClassVar[float] = 2.0
     #: replies dribble out with no terminator; wait this long before draining
     RESPONSE_DELAY_S: ClassVar[float] = 0.2
@@ -87,7 +104,11 @@ class ArduinoRelay(Instrument):
         self._sim = isinstance(transport, SimTransport)
 
     def _configure(self) -> None:
-        if not self._sim:
+        if self._sim:
+            return
+        # a DTR-suppressed open (the default) does not reset the board,
+        # so there is no boot to wait out
+        if getattr(self.transport, "dtr", None) is not False:
             time.sleep(self.BOOT_DELAY_S)
 
     def _ask(self, cmd: str) -> str:

@@ -195,6 +195,13 @@ class SerialTransport:
 
     Used by drivers whose devices are not VISA-friendly (Arduino relay,
     TC-720, hk_shutter) or that need binary framing.
+
+    ``dtr``/``rts`` pin the modem-control lines to a fixed state *before*
+    the OS opens the port. A default open asserts DTR, and on an Arduino
+    that edge is capacitor-coupled to the MCU reset pin — every server
+    start rebooted the interlock firmware into its latched-tripped boot
+    state (rack-probed 2026-07-20). ``None`` keeps pyserial's default
+    (lines asserted at open), which some handshaking devices need.
     """
 
     def __init__(
@@ -203,11 +210,15 @@ class SerialTransport:
         baud_rate: int = 9600,
         timeout_s: float = 1.0,
         terminator: str = "\r\n",
+        dtr: bool | None = None,
+        rts: bool | None = None,
     ):
         self.address = address
         self.baud_rate = baud_rate
         self.timeout_s = timeout_s
         self.terminator = terminator
+        self.dtr = dtr
+        self.rts = rts
         self._port = None
 
     def open(self) -> None:
@@ -216,12 +227,20 @@ class SerialTransport:
         if self._port is not None:
             return
         try:
-            self._port = serial.Serial(
-                port=self.address,
+            port = serial.Serial(
                 baudrate=self.baud_rate,
                 timeout=self.timeout_s,
                 write_timeout=self.timeout_s,
             )
+            # line states must be set before .open() — setting them after
+            # would be too late, the open itself produces the DTR edge
+            if self.dtr is not None:
+                port.dtr = self.dtr
+            if self.rts is not None:
+                port.rts = self.rts
+            port.port = self.address
+            port.open()
+            self._port = port
         except serial.SerialException as exc:
             raise InstrumentError(f"Could not open serial port {self.address}: {exc}") from exc
 
