@@ -1,20 +1,20 @@
 # keckogeco
+Greetings! You've arrived at the software repository for the 
+**Keck Observatory GHz Electro-Optic Comb (KECKOGECO)**, situated
+at the lonely crossroads of astronomy, precision metrology, and nanophotonics --
+where the search for a distant Earth meets the GPIB bus.
 
-**Keck Observatory GHz Electro-Optic Comb** — control system for the 
-near-IR laser frequency comb (LFC) deployed at the W. M. Keck Observatory.
+Read the documentation: <https://danhickstein.github.io/keckogeco/> (danhickstein.github.io/keckogeco)
 
-`keckogeco` runs on the comb's Windows control laptop, where it owns the
+`keckogeco` runs on the comb's Windows control laptop, where it controls the
 ~20 rack instruments (amplifiers, lasers, waveshapers, TEC controllers,
 power supplies, diagnostics) and exposes them three ways:
 
-- a **PyQt engineering GUI** with full control of every subsystem,
-- an **HTTP/REST API** (FastAPI) that also serves a lightweight **web status
-  page**, and
-- through that API, the Keck-side **KTL keyword service** (`comb`) via a DFW
+- an **Instrument Server HTTP/REST API** (FastAPI) that owns the instruments, logs data, and provides an interface through http,
+- an **Engineering GUI (PyQt)** with full control of every subsystem,
+- a **KTL keyword service** (`comb`) via a DFW
   dispatcher running on the observatory's Linux hosts (see `ktl/`).
 
-This package is adapted from the original Caltech
-[KeckLFC](https://github.com/kester2015/KeckLFC) control code.
 
 ## Install
 
@@ -45,14 +45,6 @@ python -m keckogeco.server.app --sim
 python -m keckogeco.gui.app
 ```
 
-Simulated instruments return canned values only — this is for exercising the
-GUI/API plumbing, not for modeling comb physics.
-
-## Documentation
-
-Built with Sphinx and published at
-<https://danhickstein.github.io/keckogeco/> (HTML) with a PDF artifact on each
-release.
 
 ## Repository layout
 
@@ -68,12 +60,20 @@ release.
 
 ## Contributing / project status
 
-Remaining work is tracked in the
-[GitHub issues](https://github.com/danhickstein/keckogeco/issues).
-[AGENTS.md](AGENTS.md) records the settled architecture decisions and the
+If you have a suggestion or question, please open a new
+[GitHub issue](https://github.com/danhickstein/keckogeco/issues).
+
+[AGENTS.md](AGENTS.md) records architecture decisions and the
 hardware behaviors learned on the real rack — read it before changing
 drivers or the KTL keyword surface (AI coding assistants load it
 automatically).
+
+## Credits
+
+This package is adapted from the original Caltech
+[KeckLFC](https://github.com/kester2015/KeckLFC) control code, which was
+developed by Maodong Gao, Jinhao Ge, Yoo Jung Kim, and Steph Leifer.
+
 
 ## License
 
