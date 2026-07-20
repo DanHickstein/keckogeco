@@ -144,9 +144,11 @@ def test_pump_on_zeroes_stale_stored_setpoint(amp):
     the seed, and FA PWRAMP? reads the ACTUAL current (0 while off) so
     nothing shows it. set_pump(True) must zero the stored setpoint
     before enabling; the sim refuses FA ON above 2 A to keep this
-    honest."""
+    honest. (The driver no longer programs current with the pump off,
+    so plant the stale store the way a crash leaves it: directly in
+    the unit.)"""
     amp.set_pump(False)
-    amp.set_pwramp_mA(3900)  # pump off: stores a high setpoint (the trap)
+    amp.transport.query("FA SETPWR 390")  # the crash's leftover store
     amp.set_pump(True)  # would time out refused without the zeroing
     assert amp.pump_on is True
     sent = amp.transport.sent
@@ -156,6 +158,26 @@ def test_pump_on_zeroes_stale_stored_setpoint(amp):
     # a zero landed after the stale 3.9 A store and before the enable
     assert any(last_390 < i < last_on for i in zeroes)
     assert amp.pwramp_mA == pytest.approx(0.0)
+
+
+def test_pwramp_skipped_while_pump_off(amp):
+    """A nonzero power-amp set with the pump OFF sends nothing: the GUI's
+    setpoint box submits on focus-out, and that stray write used to run
+    the full ~35 s no-op ramp before every one-click bring-up
+    (2026-07-20). The value could never matter anyway - pump-on zeroes
+    the unit's stored setpoint."""
+    assert amp.pump_on is False
+    amp.set_pwramp_mA(3900)
+    assert not [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
+
+
+def test_pwramp_zero_allowed_while_pump_off(amp):
+    """Setting 0 with the pump OFF still goes through: zeroing the stored
+    setpoint is always safe (it is what defuses the FA ON refusal trap)."""
+    assert amp.pump_on is False
+    amp.set_pwramp_mA(0)
+    setpwr = [c for c in amp.transport.sent if c.startswith("FA SETPWR")]
+    assert setpwr == ["FA SETPWR 000"]
 
 
 def test_pump_off_aborts_running_ramp(amp):
