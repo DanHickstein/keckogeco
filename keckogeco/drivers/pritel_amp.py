@@ -293,6 +293,14 @@ class PritelAmp(Instrument):
         abort); a concurrent ``set_pump(False)`` also stops the ramp — it
         cuts a dwell short too. An aborted ramp parks the power amp at
         0 mA.
+
+        With the pump OFF, a nonzero set is skipped outright (one warning,
+        no commands): the current would not flow, and ``set_pump(True)``
+        zeroes the stored setpoint anyway (the FA ON refusal trap), so the
+        value could never survive into the pump-on. The GUI's setpoint box
+        submits on focus-out, which used to run the full ~35 s no-op ramp
+        before every one-click bring-up (2026-07-20). Setting 0 still goes
+        through — zeroing the stored setpoint while off is always safe.
         """
         mA = round(to_mA(mA) / 10) * 10
         if mA > self.PWRAMP_MAX_MA:
@@ -300,7 +308,14 @@ class PritelAmp(Instrument):
                 f"{self.name}: power amp {mA:.0f} mA exceeds max {self.PWRAMP_MAX_MA:.0f} mA"
             )
         if not self.pump_on and mA > 0:
-            self.log.warning("%s: setting power-amp current with pump OFF has no effect", self.name)
+            self.log.warning(
+                "%s: pump is OFF - skipping power-amp set to %.0f mA (it would "
+                "have no effect, and pump-on zeroes the stored setpoint; set "
+                "the current after the pump is ON)",
+                self.name,
+                mA,
+            )
+            return
         self._ramp_abort.clear()
         steps = self._ramp_steps(self.pwramp_mA, mA, self.RAMP_STEP_PWR_MA if ramp else 0)
         for index, step in enumerate(steps):
