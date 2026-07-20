@@ -177,6 +177,19 @@ comes with a delay.
   log. So `set_pump(False)` zeroes the stored setpoint too: whatever
   re-enables the pump must find 0 A. Treat "Reset latch" as a possible
   pump-enable when the front-panel/pump state allows it.
+- **The Arduino interlock (Uno, COM4) auto-resets on any port open that
+  asserts DTR** (DTR is capacitor-coupled to the MCU reset pin). The
+  firmware boots latched-tripped — cutting the Pritel pump in hardware —
+  with thresholds reverted to compiled defaults (317/690) and the YJ
+  shutter dropped to "passing". This is why killing/restarting the server
+  used to trip the interlock. `SerialTransport` grew `dtr`/`rts` options
+  and the driver holds both de-asserted (rack-verified 2026-07-20: latch,
+  thresholds, and reply latency all survive reopens; boot-tripped on real
+  power loss is preserved — that fail-safe is deliberate firmware design).
+  `discovery.py` still probes COM ports with DTR asserted, so a discovery
+  run WILL reboot the board and trip the latch: reset it afterward, and
+  zero the Pritel stored setpoint first (a latch reset can re-enable the
+  pump; see above).
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.
