@@ -95,14 +95,14 @@ _THERMO_PANELS = (
             (
                 0,
                 "Side baffle",
-                "Rack side baffle (middle side rack); open 28.7 / closed 34.3 / +Pritel 35.4 °C",
-                35.4,
+                "Rack side baffle (middle side rack); open 28.7 / closed 34.3 / +Pritel 35.3 °C",
+                35.3,
             ),
             (
                 1,
                 "WaveShaper",
-                "Waveshaper (upper rack); open 26.4 / closed 34.3 / +Pritel 36.5 °C",
-                36.5,
+                "Waveshaper (upper rack); open 26.4 / closed 34.3 / +Pritel 36.4 °C",
+                36.4,
             ),
             (
                 2,
@@ -113,16 +113,16 @@ _THERMO_PANELS = (
             (
                 3,
                 "Pritel",
-                "Pritel (middle upper rack); open 26.0 / closed 32.3 / +Pritel 34.0 °C",
-                34.0,
+                "Pritel (middle upper rack); open 26.0 / closed 32.3 / +Pritel 33.9 °C",
+                33.9,
             ),
             (4, "Glycol out", "Rack glycol out; open 19.6 / closed 26.1 / +Pritel 26.7 °C", 26.7),
-            (5, "Glycol in", "Rack glycol in; open 14.1 / closed 17.0 / +Pritel 17.5 °C", 17.5),
+            (5, "Glycol in", "Rack glycol in; open 14.1 / closed 17.0 / +Pritel 17.4 °C", 17.4),
             (
                 6,
                 "PSU shelf",
-                "Power supply shelf (bottom rack); open 26.0 / closed 33.7 / +Pritel 34.3 °C",
-                34.3,
+                "Power supply shelf (bottom rack); open 26.0 / closed 33.7 / +Pritel 34.4 °C",
+                34.4,
             ),
         ],
     ),
@@ -130,19 +130,19 @@ _THERMO_PANELS = (
         "LFC_TEMP_TEST2",
         "Optical table (EOCB)",
         [
-            (0, "RF oscillator", "RF oscillator; open 40.3 / closed 40.6 / +Pritel 40.8 °C", 40.8),
-            (1, "RF amplifier", "RF amplifier; open 48.0 / closed 48.5 / +Pritel 48.4 °C", 48.4),
+            (0, "RF oscillator", "RF oscillator; open 40.3 / closed 40.6 / +Pritel 40.6 °C", 40.6),
+            (1, "RF amplifier", "RF amplifier; open 48.0 / closed 48.5 / +Pritel 48.2 °C", 48.2),
             (
                 2,
                 "Phase mods",
-                "Main phase modulators; open 32.7 / closed 33.1 / +Pritel 33.3 °C",
-                33.3,
+                "Main phase modulators; open 32.7 / closed 33.1 / +Pritel 33.0 °C",
+                33.0,
             ),
-            (3, "Filter cavity", "Filter cavity; open 28.0 / closed 28.3 / +Pritel 28.5 °C", 28.5),
+            (3, "Filter cavity", "Filter cavity; open 28.0 / closed 28.3 / +Pritel 28.4 °C", 28.4),
             # ch4/ch5 in-out labels corrected 2026-07-18 (the June-2023
             # doc had them reversed; baselines stay with their channels)
             (4, "Glycol in", "Board glycol in; open 15.6 / closed 15.8 / +Pritel 15.9 °C", 15.9),
-            (5, "Glycol out", "Board glycol out; open 34.9 / closed 34.7 / +Pritel 34.2 °C", 34.2),
+            (5, "Glycol out", "Board glycol out; open 34.9 / closed 34.7 / +Pritel 35.2 °C", 35.2),
             (
                 6,
                 "Compression",
@@ -152,8 +152,8 @@ _THERMO_PANELS = (
             (
                 7,
                 "Rb cell",
-                "Rubidium (Rb) cell D2-210; open 24.2 / closed 24.5 / +Pritel 24.8 °C",
-                24.8,
+                "Rubidium (Rb) cell D2-210; open 24.2 / closed 24.5 / +Pritel 24.7 °C",
+                24.7,
             ),
         ],
     ),
@@ -1425,7 +1425,7 @@ class MainWindow(QMainWindow):
                 tip = (
                     "hottest ACPI thermal zone of this laptop (details on the "
                     "Laptop tab); open ~75 (laptop outside the rack) / closed "
-                    f"84 / +Pritel 91 °C — amber above {TEMP_WARN_C:.0f} °C, "
+                    f"84 / +Pritel 92 °C — amber above {TEMP_WARN_C:.0f} °C, "
                     f"red above {TEMP_HOT_C:.0f} °C"
                 )
                 name.setToolTip(tip)
