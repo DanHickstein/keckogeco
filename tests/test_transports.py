@@ -188,24 +188,17 @@ def test_serial_timeout_probing_api(monkeypatch):
     assert transport._port.timeout == pytest.approx(25.0)
 
 
-def test_gpib_transports_share_one_board_lock():
-    """All VISA transports on one GPIB board share a single I/O lock:
-    NI-488 crashed the server with native access violations under
-    concurrent multi-instrument polling (2026-07-16), so calls into the
-    NI layer are serialized per board. Other VISA resources (USB-TMC,
-    ASRL) keep private locks."""
+def test_visa_transports_have_private_locks():
+    """Every VISA transport gets its own I/O lock. The per-GPIB-board
+    shared lock (2026-07-16, ni4882 AVs under concurrent multi-instrument
+    polling) was removed once the OSA became the bus's only instrument —
+    its driver RLock already serializes board I/O. If a second GPIB
+    instrument ever returns, restore the per-board lock."""
     from keckogeco.drivers.transports import VisaTransport
 
-    srs = VisaTransport("GPIB0::2::INSTR")
     osa = VisaTransport("GPIB0::30::INSTR")
-    cnt = VisaTransport("gpib0::10::INSTR")  # VISA is case-insensitive
-    other_board = VisaTransport("GPIB1::5::INSTR")
+    other = VisaTransport("GPIB0::2::INSTR")
     usb = VisaTransport("USB0::0x0957::0x2807::MY62003852::INSTR")
-    asrl = VisaTransport("ASRL13::INSTR")
 
-    assert srs._io_lock is osa._io_lock
-    assert srs._io_lock is cnt._io_lock
-    assert other_board._io_lock is not srs._io_lock
-    assert usb._io_lock is not srs._io_lock
-    assert asrl._io_lock is not srs._io_lock
-    assert usb._io_lock is not asrl._io_lock
+    assert osa._io_lock is not other._io_lock
+    assert osa._io_lock is not usb._io_lock

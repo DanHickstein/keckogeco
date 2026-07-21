@@ -37,29 +37,6 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-#: one lock per GPIB interface ("GPIB0"): NI-488 crashed the server three
-#: times on 2026-07-16 with a native access violation (no traceback, the
-#: process just dies) once three GPIB instruments were polled from
-#: concurrent threads — the bus tested clean single-threaded. All VISA
-#: I/O on the same board is serialized process-wide, so the NI layer
-#: never sees concurrent calls for one interface. Instruments on other
-#: transports are unaffected; each thread's own driver-level RLock still
-#: comes first (never acquire the board lock, then a driver lock).
-_GPIB_BOARD_LOCKS: dict[str, threading.RLock] = {}
-_GPIB_BOARD_LOCKS_GUARD = threading.Lock()
-
-
-def _visa_io_lock(address: str) -> threading.RLock:
-    """The shared per-board lock for GPIB addresses; a private lock for
-    every other VISA resource (USB-TMC, ASRL serial)."""
-    match = re.match(r"(GPIB\d*)\s*::", address, re.IGNORECASE)
-    if not match:
-        return threading.RLock()
-    board = match.group(1).upper()
-    with _GPIB_BOARD_LOCKS_GUARD:
-        return _GPIB_BOARD_LOCKS.setdefault(board, threading.RLock())
-
-
 @runtime_checkable
 class Transport(Protocol):
     """Minimal byte/str pipe to one instrument."""
@@ -111,9 +88,15 @@ class VisaTransport:
         self.timeout_ms = timeout_ms
         self.attrs = attrs
         self._resource = None
-        # shared across all transports on the same GPIB board (see
-        # _visa_io_lock); private for non-GPIB VISA resources
-        self._io_lock = _visa_io_lock(address)
+        # Private per-resource lock. GPIB instruments used to share one
+        # lock per board: concurrent multi-instrument polling crashed
+        # ni4882 with native access violations (2026-07-16), and the
+        # shared lock let one wedged instrument starve its bus-mates
+        # (2026-07-20). With the SIM900 and Pendulum moved off GPIB the
+        # OSA is alone on the bus and its driver RLock already serializes
+        # board I/O — but if a second GPIB instrument ever returns, bring
+        # the per-board lock back (git: sim900-rs232 branch removed it).
+        self._io_lock = threading.RLock()
 
     def open(self) -> None:
         import pyvisa

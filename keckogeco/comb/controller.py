@@ -721,7 +721,10 @@ class LFCController:
         current panel settings: the manual bias is copied into the SIM960
         output offset so the PID starts from where the operator parked the
         bias (bumpless takeover); setpoint and PI gains are whatever was
-        last written. Disengaging just returns to manual output."""
+        last written. Disengaging is bumpless too: the live PID output is
+        parked into the manual bias before switching to manual, so the
+        output holds where the lock left it instead of snapping back to
+        the stale MOUT value."""
         if engage:
             # ramping would turn later lockpoint edits into a slow crawl
             # (see _register_keywords); assert off in case the front
@@ -730,6 +733,12 @@ class LFCController:
             self._im_servo.output_offset_V = self._im_servo.manual_output_V
             self._im_servo.output_mode = "PID"
         else:
+            bias = self._im_servo.output_V
+            bias = min(
+                max(bias, self._im_servo.manual_output_min),
+                self._im_servo.manual_output_max,
+            )
+            self._im_servo.manual_output_V = bias
             self._im_servo.output_mode = "MAN"
 
     def _submit_if_true(self, action: str, value) -> None:
@@ -803,8 +812,8 @@ class LFCController:
     REP_RATE_GATE_S = 1.0
     #: one gated measurement serves every caller for this long — the
     #: /state poll (~1 Hz from the GUI) and the keyword cache poller
-    #: would otherwise each re-gate, holding the shared GPIB board lock
-    #: for a full gate time per call
+    #: would otherwise each re-gate, tying up the counter for a full
+    #: gate time per call
     REP_RATE_CACHE_S = 5.0
 
     def _rf_chain_on(self) -> bool:

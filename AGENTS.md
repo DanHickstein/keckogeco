@@ -60,7 +60,9 @@ comes with a delay.
   operator-entered values only: photodiode setpoint + PI gains via
   `PUT /im`, starting bias via `LFC_IM_BIAS`, engage via
   `LFC_IM_LOCK_MODE` (engaging copies the manual bias into the SIM960
-  output offset for a bumpless start). The GUI scan panel only
+  output offset for a bumpless start; disengaging parks the live PID
+  output into the manual bias so unlock holds the voltage the lock was
+  at, 2026-07-21). The GUI scan panel only
   *suggests* values (text); the operator types them into the servo
   panel. `LFC_IM_AUTO_LOCK` is unbound (retirement proposed in
   `ktl/keyword-changes.md`); the minicomb transition no longer locks.
@@ -173,6 +175,15 @@ comes with a delay.
   driver, `module_inventory`, and slot I/O all work unchanged. The SIM960s
   keep settings through a mainframe power cycle — slot 3 came back with the
   IM lock still engaged and holding. GPIB now carries only the OSA.
+- **The shared per-GPIB-board VISA lock was removed (2026-07-21)** along
+  with the SIM900/Pendulum GPIB exodus: with one instrument on the bus its
+  driver `RLock` already serializes board I/O, and the shared lock was how
+  one wedged instrument starved its bus-mates (2026-07-20 GUI freeze). The
+  per-instrument **native-crash poisoning in `drivers/base.py` stays** — the
+  OSA (GPIB) and the Pendulum/Keysights (USB-TMC) still run through the
+  ni4882/NI-VISA stack that produced the access violations. If a second
+  GPIB instrument ever returns (e.g. SIM900 DIP flipped back), restore the
+  per-board lock — concurrent multi-instrument GPIB polling AVs ni4882.
 - **The Pritel refuses `FA ON` while its STORED power-amp setpoint is too
   high for the measured seed** (rack-probed 2026-07-18: 3.9 A stored →
   refused, ≤ 1.0 A → fine, at the commissioned seed; the ASD reply is
@@ -231,13 +242,3 @@ windows. New drivers follow the existing module pattern — read
 `drivers/instek_psu.py` or `drivers/oz_voa.py` as templates, and give config
 metadata keys a home in `DISCOVERY_KEYS`/`CONTROLLER_KEYS` so they don't leak
 into transport kwargs.
-
-## Status snapshot (2026-07-12)
-
-Working end-to-end in sim: server + PyQt GUI + actions + IM auto-lock;
-61/77 keywords bound. First real-rack run: 7/14 discovered devices passed
-immediately (EDFA27 live at 450 mW, both Insteks, Pritel, Rb clock locked,
-hk_shutter, Arduino interlock). Pending on the rack: GPIB is down until an
-NI-488.2 downgrade (blocks SIM900/IM lock, Pendulum, Agilent OSA), TC-720s
-silent (power?), one Keysight FG wedged. Remaining work is tracked in the
-GitHub issues.
