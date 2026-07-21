@@ -14,6 +14,29 @@ def srs():
     return inst
 
 
+def test_transport_defaults_by_transport():
+    """transport = "serial" in the config block selects the rear COMPUTER
+    port defaults (115.2k to match the rear DIP switches, break-as-device-
+    clear); the GPIB/VISA defaults are unchanged."""
+    gpib = DeviceConfig(key="srs", driver="srs_sim900", address="GPIB0::2::INSTR")
+    assert SIM900.transport_defaults(gpib) == SIM900.TRANSPORT_DEFAULTS
+
+    serial_cfg = DeviceConfig(
+        key="srs",
+        driver="srs_sim900",
+        address="COM23",
+        options={"transport": "serial", "im_slot": 3},
+    )
+    defaults = SIM900.transport_defaults(serial_cfg)
+    assert defaults["break_on_clear"] is True
+    assert defaults["baud_rate"] == 115_200
+
+    inst = SIM900.from_config(serial_cfg)
+    assert inst.transport.break_on_clear is True
+    assert inst.transport.baud_rate == 115_200
+    assert inst.transport.terminator == "\r\n"
+
+
 def test_slot_routing_sends_conn(srs):
     servo = srs.sim960(5)
     _ = servo.setpoint_V

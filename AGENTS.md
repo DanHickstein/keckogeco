@@ -162,6 +162,17 @@ comes with a delay.
   interface panel A4, "Minicomb photodiode → SRS PID"), so bias scans read
   power via `MMON` — **no DAQ involved**; the USB-2408s only read
   thermocouples. Slot number lives in the `srs` block's `im_slot` option.
+- **The SIM900 host interface is RS-232 (COM23), not GPIB, since 2026-07-21.**
+  A rear-panel DIP switch selects the host interface and is read **only at
+  power-up**; the rightmost 5 switches double as GPIB address / RS-232 baud
+  select (set to 115.2k — the config `baud_rate` must match, because a
+  Device Clear reverts the unit to the DIP rate). Plug into the DB-9 female
+  labeled **COMPUTER**, not the identical EAVESDROP jack next to it. Over
+  RS-232 a serial `<break>` IS the Device Clear the driver uses to escape a
+  CONN'd slot (`SerialTransport(break_on_clear=True)`); rack-verified: the
+  driver, `module_inventory`, and slot I/O all work unchanged. The SIM960s
+  keep settings through a mainframe power cycle — slot 3 came back with the
+  IM lock still engaged and holding. GPIB now carries only the OSA.
 - **The Pritel refuses `FA ON` while its STORED power-amp setpoint is too
   high for the measured seed** (rack-probed 2026-07-18: 3.9 A stored →
   refused, ≤ 1.0 A → fine, at the commissioned seed; the ASD reply is

@@ -68,8 +68,19 @@ def _fake_serial_module(events):
             self._rts = True
             self.port = port
             self.is_open = False
+            self.timeout = kwargs.get("timeout")
+            self.write_timeout = kwargs.get("write_timeout")
             if port is not None:
                 self.open()
+
+        def send_break(self, duration=0.25):
+            events.append(("break", duration))
+
+        def reset_input_buffer(self):
+            events.append("flush_in")
+
+        def reset_output_buffer(self):
+            events.append("flush_out")
 
         @property
         def dtr(self):
@@ -121,6 +132,60 @@ def test_serial_transport_dtr_suppressed_before_open(monkeypatch):
     assert default.dtr is None and default.rts is None
     default.open()
     assert events == [("open", True, True)]
+
+
+def test_serial_clear_flushes_only_by_default(monkeypatch):
+    import sys
+
+    from keckogeco.drivers.transports import SerialTransport
+
+    events = []
+    monkeypatch.setitem(sys.modules, "serial", _fake_serial_module(events))
+
+    plain = SerialTransport("COM8")
+    plain.open()
+    events.clear()
+    plain.clear()
+    assert events == ["flush_in", "flush_out"]
+
+
+def test_serial_clear_sends_break_when_enabled(monkeypatch):
+    """break_on_clear turns clear() into the SIM900's RS-232 Device Clear:
+    flush, then a <break> long enough for one character frame at any
+    DIP-selectable baud, then flush the input again."""
+    import sys
+
+    from keckogeco.drivers.transports import SerialTransport
+
+    events = []
+    monkeypatch.setitem(sys.modules, "serial", _fake_serial_module(events))
+
+    sim900 = SerialTransport("COM23", break_on_clear=True)
+    sim900.open()
+    events.clear()
+    sim900.clear()
+    assert events == ["flush_in", "flush_out", ("break", SerialTransport.BREAK_S), "flush_in"]
+
+
+def test_serial_timeout_probing_api(monkeypatch):
+    """SerialTransport exposes the same timeout_ms/set_timeout_ms pair as
+    VisaTransport, so SIM900.module_inventory can shorten the timeout to
+    sweep empty slots on either transport."""
+    import sys
+
+    from keckogeco.drivers.transports import SerialTransport
+
+    events = []
+    monkeypatch.setitem(sys.modules, "serial", _fake_serial_module(events))
+
+    transport = SerialTransport("COM23", timeout_s=25.0)
+    transport.open()
+    assert transport.timeout_ms == 25_000
+    transport.set_timeout_ms(1500)
+    assert transport.timeout_s == pytest.approx(1.5)
+    assert transport._port.timeout == pytest.approx(1.5)
+    transport.set_timeout_ms(25_000)
+    assert transport._port.timeout == pytest.approx(25.0)
 
 
 def test_gpib_transports_share_one_board_lock():

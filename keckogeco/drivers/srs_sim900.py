@@ -2,7 +2,13 @@
 
 The SIM900 is a chassis: talking to a module means connecting the
 mainframe's serial stream to a slot (``CONN <slot>, "<esc>"``) and
-escaping back with a VISA device-clear. Ported from
+escaping back with a device clear — the GPIB DCL message over VISA, or
+an RS-232 <break> over the rear "COMPUTER" serial port (the SIM900
+manual defines the break as the same out-of-band Device Clear; a break
+also reverts the host baud to the rear-panel DIP default, so the
+configured ``baud_rate`` must match the DIP switches). Which host
+interface is live is chosen by a rear DIP switch read at power-up:
+the rack moved to RS-232 at 115.2k on 2026-07-21. Ported from
 ``Hardware/SRS_SIM900.py``. Behaviors preserved:
 
 * every slot operation clears first, then reconnects (the old driver
@@ -53,6 +59,22 @@ class SIM900(Instrument):
         "read_termination": "\r\n",
         "write_termination": "\r\n",
     }
+
+    #: rear COMPUTER port (transport = "serial"): break_on_clear gives the
+    #: RS-232 stream the same device-clear escape the GPIB path gets from
+    #: VISA clear(); baud must match the rear-panel DIP switches
+    SERIAL_TRANSPORT_DEFAULTS: ClassVar[dict] = {
+        "baud_rate": 115_200,
+        "timeout_s": 25.0,
+        "terminator": "\r\n",
+        "break_on_clear": True,
+    }
+
+    @classmethod
+    def transport_defaults(cls, cfg) -> dict:
+        if cfg.options.get("transport", cls.DEFAULT_TRANSPORT) == "serial":
+            return dict(cls.SERIAL_TRANSPORT_DEFAULTS)
+        return dict(cls.TRANSPORT_DEFAULTS)
 
     def clear(self) -> None:
         """Escape any module connection; mainframe becomes active."""

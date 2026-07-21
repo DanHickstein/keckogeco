@@ -22,6 +22,7 @@ import logging
 import re
 import socket
 import threading
+import time
 from typing import Protocol, runtime_checkable
 
 from .errors import InstrumentError, NotConnected
@@ -202,7 +203,19 @@ class SerialTransport:
     start rebooted the interlock firmware into its latched-tripped boot
     state (rack-probed 2026-07-20). ``None`` keeps pyserial's default
     (lines asserted at open), which some handshaking devices need.
+
+    ``break_on_clear`` makes :meth:`clear` transmit a serial <break> in
+    addition to flushing the OS buffers, for instruments that define the
+    break signal as an out-of-band Device Clear (the SRS SIM900 uses it
+    to escape a CONN'd module stream, mirroring the GPIB device clear).
     """
+
+    #: <break> hold time: must span one full character frame at the
+    #: slowest supported rate (8.3 ms at 1200 baud), rack-verified 50 ms
+    BREAK_S = 0.05
+    #: pause after the break so the instrument finishes its reset before
+    #: the next command goes out
+    BREAK_SETTLE_S = 0.05
 
     def __init__(
         self,
@@ -212,6 +225,7 @@ class SerialTransport:
         terminator: str = "\r\n",
         dtr: bool | None = None,
         rts: bool | None = None,
+        break_on_clear: bool = False,
     ):
         self.address = address
         self.baud_rate = baud_rate
@@ -219,6 +233,7 @@ class SerialTransport:
         self.terminator = terminator
         self.dtr = dtr
         self.rts = rts
+        self.break_on_clear = break_on_clear
         self._port = None
 
     def open(self) -> None:
@@ -256,6 +271,19 @@ class SerialTransport:
     def is_open(self) -> bool:
         return self._port is not None
 
+    @property
+    def timeout_ms(self) -> int:
+        return int(self.timeout_s * 1000)
+
+    def set_timeout_ms(self, timeout_ms: int) -> None:
+        """Change the I/O timeout on the open port (and future opens).
+        Same probing API as :meth:`VisaTransport.set_timeout_ms` — the
+        SIM900 driver shortens it to sweep empty mainframe slots."""
+        self.timeout_s = timeout_ms / 1000
+        if self._port is not None:
+            self._port.timeout = self.timeout_s
+            self._port.write_timeout = self.timeout_s
+
     def _require_open(self):
         if self._port is None:
             raise NotConnected(f"Serial port {self.address} is not open")
@@ -288,6 +316,11 @@ class SerialTransport:
         port = self._require_open()
         port.reset_input_buffer()
         port.reset_output_buffer()
+        if self.break_on_clear:
+            port.send_break(self.BREAK_S)
+            time.sleep(self.BREAK_SETTLE_S)
+            # the break may flush a partial reply out of the device
+            port.reset_input_buffer()
 
 
 class SocketTransport:
