@@ -24,7 +24,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         # 127.0.0.1, NOT localhost: the laptop resolves localhost to ::1
         # first and the server is IPv4-only, costing ~2 s per connection
-        "--url", default="http://127.0.0.1:8000", help="python -m keckogeco.server.app base URL"
+        "--url",
+        default="http://127.0.0.1:8000",
+        help="python -m keckogeco.server.app base URL",
     )
     parser.add_argument("--token", default="", help="API bearer token, if the server uses one")
     args = parser.parse_args(argv)

@@ -37,6 +37,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
+
 @runtime_checkable
 class Transport(Protocol):
     """Minimal byte/str pipe to one instrument."""

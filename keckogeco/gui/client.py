@@ -31,7 +31,9 @@ class KeckogecoClient:
         # IPv6 connect timeout before falling back (measured 2026-07-21:
         # 2071 ms via localhost vs 3 ms via 127.0.0.1). The server is
         # always IPv4, so the spelling is safe to normalize away.
-        self.base_url = re.sub(r"^(https?://)localhost([:/]|$)", r"\g<1>127.0.0.1\2", base_url).rstrip("/")
+        self.base_url = re.sub(
+            r"^(https?://)localhost([:/]|$)", r"\g<1>127.0.0.1\2", base_url
+        ).rstrip("/")
         self.token = token
         self.timeout = timeout
         self.session = requests.Session()
