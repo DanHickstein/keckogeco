@@ -226,7 +226,11 @@ class SIM900(Instrument):
             "SMON?": lambda _: module()["SETP"],
             "MMON?": lambda _: f"{0.5 * math.sin(2.0 * float(module()['MOUT']) + 1.0):.4f}",
             "EMON?": lambda _: "0.000",
-            "OMON?": lambda _: module()["MOUT"],
+            # in PID mode the output tracks the PID (modeled as OFST, where
+            # the loop starts with zero error); in manual mode it is MOUT
+            "OMON?": lambda _: (
+                module()["OFST"] if module()["AMAN"] == "1" else module()["MOUT"]
+            ),
             "OPON": lambda _: module().__setitem__("EXON", "1") or "",
             "OPOF": lambda _: module().__setitem__("EXON", "0") or "",
             re.compile(

@@ -101,8 +101,9 @@ def test_im_bias_scan_action(controller):
 def test_im_lock_mode_keyword_engages_from_current_bias(controller):
     """Locking is manual (no autolock): LFC_IM_LOCK_MODE = 1 copies the
     manual bias into the SIM960 output offset (bumpless takeover from
-    where the operator parked the bias) and engages the PID; 0 returns
-    to manual output."""
+    where the operator parked the bias) and engages the PID; 0 parks the
+    live PID output into the manual bias before returning to manual
+    output, so the bias holds where the lock left it."""
     servo = controller._im_servo
     servo.manual_output_V = 1.2
     servo.setpoint_ramping_on = True  # legacy front-panel state
@@ -114,8 +115,13 @@ def test_im_lock_mode_keyword_engages_from_current_bias(controller):
     # turns on-the-fly lockpoint edits into a RATE-limited crawl that
     # looks like the value reverting (Dan, 2026-07-16)
     assert servo.setpoint_ramping_on is False
+    # while locked the PID walks the output away from the engage point
+    # (sim: OMON tracks OFST in PID mode); unlocking must park the manual
+    # bias at that live output, not snap back to the stale 1.2 V
+    servo.output_offset_V = 0.7
     controller.write("LFC_IM_LOCK_MODE", "0")
     assert servo.output_mode == "MAN"
+    assert servo.manual_output_V == pytest.approx(0.7)
 
 
 def test_unknown_action_rejected(controller):
