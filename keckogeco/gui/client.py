@@ -9,12 +9,13 @@ run from any machine that reaches the server.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
 
-__all__ = ["KeckogecoClient", "PollThread", "WriteThread"]
+__all__ = ["ArrayPollThread", "KeckogecoClient", "PollThread", "WriteThread"]
 
 log = logging.getLogger(__name__)
 
@@ -23,13 +24,25 @@ class KeckogecoClient:
     """Thin wrapper over the server's REST API."""
 
     def __init__(
-        self, base_url: str = "http://localhost:8000", token: str = "", timeout: float = 10.0
+        self, base_url: str = "http://127.0.0.1:8000", token: str = "", timeout: float = 10.0
     ):
-        self.base_url = base_url.rstrip("/")
+        # "localhost" resolves to ::1 first on the laptop and the server
+        # listens on IPv4 only, so every NEW connection burned ~2 s in the
+        # IPv6 connect timeout before falling back (measured 2026-07-21:
+        # 2071 ms via localhost vs 3 ms via 127.0.0.1). The server is
+        # always IPv4, so the spelling is safe to normalize away.
+        self.base_url = re.sub(r"^(https?://)localhost([:/]|$)", r"\g<1>127.0.0.1\2", base_url).rstrip("/")
+        self.token = token
         self.timeout = timeout
         self.session = requests.Session()
         if token:
             self.session.headers["Authorization"] = f"Bearer {token}"
+
+    def clone(self) -> KeckogecoClient:
+        """A new client (own requests.Session/connection) for the same
+        server — one per thread, so a slow transfer on one thread never
+        queues behind another's connection."""
+        return KeckogecoClient(self.base_url, token=self.token, timeout=self.timeout)
 
     def _get(self, path: str, **params) -> dict:
         response = self.session.get(
@@ -160,18 +173,57 @@ class KeckogecoClient:
 
 
 class PollThread(QThread):
-    """Polls /keywords and /state, emitting fresh data as Qt signals."""
+    """Polls /keywords and /state, emitting fresh data as Qt signals.
+
+    Arrays (spectra) live on :class:`ArrayPollThread`: an OSA trace
+    transfer used to sit in this loop and stall the status/keyword
+    refresh behind it every third cycle."""
 
     keywords_ready = pyqtSignal(dict)
     state_ready = pyqtSignal(dict)
-    arrays_available = pyqtSignal(list)
-    array_ready = pyqtSignal(str, dict)
     connection_changed = pyqtSignal(bool, str)
 
-    #: arrays are fetched every Nth poll cycle (spectra sweeps are slow);
-    #: per-array overrides go in ``array_every`` (e.g. the IM scan drops to
-    #: every cycle while a sweep is running so the plot builds up live)
-    ARRAY_EVERY = 3
+    def __init__(self, client: KeckogecoClient, period_ms: int = 1000):
+        super().__init__()
+        self.client = client
+        self.period_ms = period_ms
+        self._running = True
+        self._connected = None
+
+    def run(self) -> None:
+        while self._running:
+            try:
+                self.keywords_ready.emit(self.client.snapshot())
+                self.state_ready.emit(self.client.state())
+                self._set_connected(True, "")
+            except Exception as exc:  # noqa: BLE001 - report and keep polling
+                self._set_connected(False, str(exc))
+            self.msleep(self.period_ms)
+
+    def _set_connected(self, ok: bool, detail: str) -> None:
+        if ok != self._connected:
+            self._connected = ok
+            self.connection_changed.emit(ok, detail)
+
+    def stop(self) -> None:
+        self._running = False
+        self.wait(3000)
+
+
+class ArrayPollThread(QThread):
+    """Fetches the server's data arrays (OSA spectrum, IM scan) on their
+    own thread and connection, so a slow trace transfer only delays the
+    next trace — keywords and /state keep their own cadence on
+    :class:`PollThread`. Subscribed arrays refresh every cycle; a slower
+    per-array cadence can be set in ``array_every`` (in cycles)."""
+
+    arrays_available = pyqtSignal(list)
+    array_ready = pyqtSignal(str, dict)
+
+    #: the /arrays listing (cheap, no hardware) is re-checked every Nth
+    #: cycle — what the server offers can change (a restart brings the
+    #: OSA online); the main window subscribes via ``array_names``
+    LIST_EVERY = 3
 
     def __init__(self, client: KeckogecoClient, period_ms: int = 1000):
         super().__init__()
@@ -180,38 +232,24 @@ class PollThread(QThread):
         self.array_names: list[str] = []  # set by the main window
         self.array_every: dict[str, int] = {}  # name -> cadence override
         self._running = True
-        self._connected = None
         self._cycle = 0
 
     def run(self) -> None:
         while self._running:
-            try:
-                self.keywords_ready.emit(self.client.snapshot())
-                self.state_ready.emit(self.client.state())
-                self._set_connected(True, "")
-                if self._cycle % self.ARRAY_EVERY == 0:
-                    # what the server offers can change (a restart brings the
-                    # OSA online); the main window subscribes via array_names
-                    try:
-                        self.arrays_available.emit(self.client.arrays())
-                    except Exception as exc:  # noqa: BLE001 - older server
-                        log.debug("arrays list fetch failed: %s", exc)
-                for name in list(self.array_names):
-                    if self._cycle % self.array_every.get(name, self.ARRAY_EVERY):
-                        continue
-                    try:
-                        self.array_ready.emit(name, self.client.array(name))
-                    except Exception as exc:  # noqa: BLE001 - one bad array is fine
-                        log.debug("array %s fetch failed: %s", name, exc)
-            except Exception as exc:  # noqa: BLE001 - report and keep polling
-                self._set_connected(False, str(exc))
+            if self._cycle % self.LIST_EVERY == 0:
+                try:
+                    self.arrays_available.emit(self.client.arrays())
+                except Exception as exc:  # noqa: BLE001 - server down/older
+                    log.debug("arrays list fetch failed: %s", exc)
+            for name in list(self.array_names):
+                if self._cycle % self.array_every.get(name, 1):
+                    continue
+                try:
+                    self.array_ready.emit(name, self.client.array(name))
+                except Exception as exc:  # noqa: BLE001 - one bad array is fine
+                    log.debug("array %s fetch failed: %s", name, exc)
             self._cycle += 1
             self.msleep(self.period_ms)
-
-    def _set_connected(self, ok: bool, detail: str) -> None:
-        if ok != self._connected:
-            self._connected = ok
-            self.connection_changed.emit(ok, detail)
 
     def stop(self) -> None:
         self._running = False

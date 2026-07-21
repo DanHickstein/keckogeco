@@ -13,6 +13,12 @@ class FakeClient:
 
     base_url = "fake://"
 
+    def clone(self):
+        return self
+
+    def arrays(self):
+        return []
+
     def schema(self):
         schema = load_schema()
         return {
@@ -129,6 +135,7 @@ def test_pendulum_rep_rate_display(qtbot):
     window._on_keywords({"LFC_REPRATE": {"value": None}})
     assert display.text() == "—"
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -169,6 +176,7 @@ def test_clock_tab_reference_chain(qtbot):
     assert ref.display.text() == "INT"
 
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -210,6 +218,7 @@ def test_mainwindow_constructs_and_updates(qtbot):
     assert table[0].text() == "—"
     assert table[0].styleSheet() == ""
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -229,7 +238,7 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     assert window._osa_plot is None
     window._on_arrays_available(["osa_spectrum", "wsp_profile"])
     assert window._osa_plot is not None
-    assert window.poller.array_names == ["osa_spectrum"]
+    assert window.array_poller.array_names == ["osa_spectrum"]
     window._on_array(
         "osa_spectrum",
         {"x": [1550.0, 1560.0], "y": [-40.0, -20.0], "x_label": "nm", "y_label": "dBm"},
@@ -298,9 +307,11 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     window2._on_arrays_available(["osa_spectrum"])
     assert list(window2._osa_curves["reference"].getData()[1]) == [-40.0, -20.0]
     window2.poller.stop()
+    window2.array_poller.stop()
     window2.writer.stop()
 
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -318,8 +329,9 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert window._im_plot is None
     window._on_arrays_available(["im_scan"])
     assert window._im_plot is not None
-    assert "im_scan" in window.poller.array_names
-    assert window.poller.array_every["im_scan"] == 1  # strip charts sample ~1 Hz
+    assert "im_scan" in window.array_poller.array_names
+    # subscribed arrays refresh every cycle by default (~1 Hz strip charts)
+    assert window.array_poller.array_every.get("im_scan", 1) == 1
     controls = window._im_controls
     assert controls is not None
     # the suggestion box starts with resting text, so its space is
@@ -473,6 +485,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert "set_standby" in window.statusBar().currentMessage()
 
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -565,6 +578,7 @@ def test_im_scan_blocked_while_pritel_on(qtbot, tmp_path, monkeypatch):
     assert len(warnings) == 2
 
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -678,6 +692,7 @@ def test_pritel_emission_one_click_bringup(qtbot, monkeypatch):
     assert submitted == []
 
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -701,6 +716,7 @@ def test_interlock_voltage_coloring(qtbot):
     assert "#e05252" in volts(4.9)  # above -> red
     assert volts(None) == ""  # unknown -> plain
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -727,6 +743,7 @@ def test_wsp_panel_remembers_values(qtbot, tmp_path, monkeypatch):
     assert window2._wsp_spins["LFC_WSP_CENTER"].spin.value() == 1559.8
     for w in (window, window2):
         w.poller.stop()
+        w.array_poller.stop()
         w.writer.stop()
 
 
@@ -755,6 +772,7 @@ def test_edfa23_current_in_mA_and_remembered(qtbot, tmp_path, monkeypatch):
     assert box2.spin.value() == 0.0
     for w in (window, window2):
         w.poller.stop()
+        w.array_poller.stop()
         w.writer.stop()
 
 
@@ -794,6 +812,7 @@ def test_flattener_slider_panel(qtbot, monkeypatch):
     assert "nd_slider" in panel.detail_label.text()
 
     window.poller.stop()
+    window.array_poller.stop()
     window.writer.stop()
 
 
@@ -835,3 +854,34 @@ def test_osa_save_as_default(qtbot, tmp_path, monkeypatch):
     qtbot.addWidget(fresh)
     assert fresh.defaults == controls.defaults
     assert fresh.start.spin.value() == 1548.0  # controls start at the saved defaults
+
+
+def test_client_normalizes_localhost_and_clones():
+    """localhost resolves to ::1 first on the laptop while the server is
+    IPv4-only — every new connection burned ~2 s in the IPv6 connect
+    timeout, so the client pins the loopback IP. clone() gives worker
+    threads their own connection."""
+    from keckogeco.gui.client import KeckogecoClient
+
+    client = KeckogecoClient("http://localhost:8000")
+    assert client.base_url == "http://127.0.0.1:8000"
+    # only the host is rewritten, and only when it is exactly localhost
+    assert KeckogecoClient("http://localhost:8000/").base_url == "http://127.0.0.1:8000"
+    assert KeckogecoClient("http://myhost:8000").base_url == "http://myhost:8000"
+    assert (
+        KeckogecoClient("http://localhost.example.com:8000").base_url
+        == "http://localhost.example.com:8000"
+    )
+
+    twin = client.clone()
+    assert twin.base_url == client.base_url
+    assert twin.timeout == client.timeout
+    assert twin.session is not client.session
+
+
+def test_client_clone_keeps_token():
+    from keckogeco.gui.client import KeckogecoClient
+
+    client = KeckogecoClient("http://127.0.0.1:8000", token="secret")
+    twin = client.clone()
+    assert twin.session.headers["Authorization"] == "Bearer secret"

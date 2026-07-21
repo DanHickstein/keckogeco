@@ -2,6 +2,13 @@
 # config next to it). "Save as default" in the GUI's OSA panel rewrites
 # [osa_defaults]; commit the change when the new view is the keeper.
 
+# GUI poll cadence, milliseconds. period_ms drives keywords + comb state,
+# array_period_ms drives the spectra (OSA trace, IM scan) on their own
+# thread. Defaults are 1000/1000 if the section is absent.
+[polling]
+period_ms = 1000
+array_period_ms = 1000
+
 [osa_defaults]
 start_nm = 1550.0
 stop_nm = 1570.0

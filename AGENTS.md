@@ -81,6 +81,14 @@ comes with a delay.
   install, no venv, no admin rights**. Repo at `C:\kecklfc\keckogeco`. The
   user-site Scripts dir is off PATH — another reason everything is
   `python -m`. Dan runs scripts with VSCode's Run button.
+- **Use `127.0.0.1`, never `localhost`, in server URLs on the laptop.**
+  `localhost` resolves to `::1` first, the server listens on IPv4 only, and
+  every NEW TCP connection burns ~2 s in the IPv6 connect timeout before
+  falling back (measured 2026-07-21: 2071 ms vs 3 ms) — it made every API
+  call, and therefore the whole GUI, look seconds slow. `KeckogecoClient`
+  normalizes a localhost URL to 127.0.0.1 defensively; scripts using
+  urllib/Invoke-WebRequest (fresh connection per request) pay it on every
+  single call, so spell it 127.0.0.1 there too.
 - **wsapi** (Finisar WaveShaper DLL API): pip can't install it in place under
   `Program Files` without admin — copy
   `...\Finisar\WaveManager\waveshaper\api\python3` to a writable dir and
