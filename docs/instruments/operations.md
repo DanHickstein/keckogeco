@@ -53,7 +53,9 @@ Only channels 2 and 3 of the four-channel supply are used:
   (≈0.41 A steady-state after warm-up); configured limits 15 V / 3 A.
 - **Channel 3 is the RF attenuation control voltage** for the intensity
   modulator (`LFC_IM_RF_ATT`), normally around 0.80–0.85 V with a 1 A
-  limit.
+  limit. The attenuator is an RF-Lambda RFVAT0218R30: 0–10 V control
+  (matches the keyword range), 15 V absolute maximum — the GPD can
+  source 30 V, so never raise the keyword ceiling past 10 V.
 - Channels 1 and 4 are unused.
 - **Before turning off mains power, disable the DC outputs first**,
   then the front-panel power.
