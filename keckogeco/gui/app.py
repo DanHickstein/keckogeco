@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
     from pathlib import Path
@@ -21,7 +22,11 @@ __all__ = ["main"]
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="keckogeco engineering GUI")
     parser.add_argument(
-        "--url", default="http://localhost:8000", help="python -m keckogeco.server.app base URL"
+        # 127.0.0.1, NOT localhost: the laptop resolves localhost to ::1
+        # first and the server is IPv4-only, costing ~2 s per connection
+        "--url",
+        default="http://127.0.0.1:8000",
+        help="python -m keckogeco.server.app base URL",
     )
     parser.add_argument("--token", default="", help="API bearer token, if the server uses one")
     args = parser.parse_args(argv)
@@ -35,16 +40,29 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1])
     apply_dark_theme(app)
     client = KeckogecoClient(args.url, token=args.token)
-    try:
-        client.health()
-    except Exception as exc:  # noqa: BLE001 - present any startup failure
-        QMessageBox.critical(
-            None,
-            "keckogeco",
-            f"Cannot reach the server at {args.url}:\n{exc}\n\n"
-            "Start one with:  python -m keckogeco.server.app   (or python -m keckogeco.server.app --sim)",
-        )
-        return 1
+    # The server takes a few seconds to boot; retry so both scripts can be
+    # launched back to back (Dan hits Run on server then GUI).
+    attempts, retry_delay = 4, 2.0
+    for attempt in range(1, attempts + 1):
+        try:
+            client.health()
+            break
+        except Exception as exc:  # noqa: BLE001 - present any startup failure
+            if attempt < attempts:
+                print(  # noqa: T201 - launcher feedback in the Run terminal (Dan)
+                    f"Server not detected, trying again in {retry_delay:g} seconds "
+                    f"(attempt {attempt}/{attempts})...",
+                    flush=True,
+                )
+                time.sleep(retry_delay)
+                continue
+            QMessageBox.critical(
+                None,
+                "keckogeco",
+                f"Cannot reach the server at {args.url}:\n{exc}\n\n"
+                "Start one with:  python -m keckogeco.server.app   (or python -m keckogeco.server.app --sim)",
+            )
+            return 1
     window = MainWindow(client)
     # matches the layout's real minimum (~930x635 with the plots wired) so
     # the window no longer snaps larger when the first poll arrives;

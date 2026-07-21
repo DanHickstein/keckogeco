@@ -413,6 +413,7 @@ MAX_INSTANCES = {
 EXPECTED_SERIAL = [
     ("amonics_edfa", "Amonics EDFA(s)"),
     ("pritel_amp", "Pritel optical amplifier"),
+    ("srs_sim900", "SRS SIM900 mainframe (RS-232 host since 2026-07-21)"),
     ("instek_psu", "GW Instek DC supplies (GPD-4303S + GPP)"),
     ("clarity", "Wavelength References Clarity laser"),
     ("rb_clock", "SRS FS725 Rb frequency standard"),
@@ -427,9 +428,8 @@ EXPECTED_SERIAL = [
 ]
 
 EXPECTED_GPIB = [
-    ("srs_sim900", "SRS SIM900 mainframe"),
-    ("pendulum_cnt90", "Pendulum CNT-90 counter"),
-    ("agilent_86142b", "Agilent 86142B OSA"),
+    ("pendulum_cnt90", "Pendulum CNT-90 counter (USB-TMC since 2026-07-21)"),
+    ("agilent_86142b", "Agilent 86142B OSA (the only instrument left on GPIB)"),
     ("keysight_fg33500", "Keysight 33500-series function generator (USB-TMC)"),
     ("tds2024c", "Tektronix TDS2024C oscilloscope (USB-TMC)"),
 ]

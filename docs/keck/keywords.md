@@ -105,7 +105,7 @@ against seed loss.
 |---|---|---|---|
 | `LFC_IM_BIAS` | double, V, −3…+3 | RW 🔒 | IM bias voltage (normally owned by the SIM960 servo). |
 | `LFC_IM_LOCK_MODE` | boolean | RW 🔒 | 1 = PID (locked), 0 = manual. |
-| `LFC_IM_RF_ATT` | double, V, 0–10 | RW 🔒 | Voltage-controlled RF attenuator in the minicomb drive (GPD channel 3; default ≈ 0.72–0.8 V). |
+| `LFC_IM_RF_ATT` | double, V, 0–10 | RW 🔒 | Voltage-controlled RF attenuator in the minicomb drive (RF-Lambda RFVAT0218R30, GPD channel 3; default ≈ 0.72–0.8 V; 0–10 V is the attenuator's full control range, abs max 15 V). |
 
 ## Seed and reference lasers
 

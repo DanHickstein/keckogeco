@@ -93,8 +93,8 @@ class NativeCrashTransport(SimTransport):
 def test_native_crash_is_never_retried_and_poisons_device():
     """A native-layer crash (SEH access violation surfaced by ctypes) must
     not trigger the reconnect: on 2026-07-17 the reconnect's close/reopen
-    hung inside the crashed ni4882 with the GPIB board lock held, wedging
-    the poller and starving the whole server. The device fails fast and
+    hung inside the crashed ni4882 holding locks, wedging the poller and
+    starving the whole server. The device fails fast and
     stays failed until the process restarts."""
     transport = NativeCrashTransport(responses={"Q?": "42"})
     inst = Fake(transport)

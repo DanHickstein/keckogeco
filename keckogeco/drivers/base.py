@@ -36,8 +36,10 @@ __all__ = ["Instrument"]
 #: violation reading 0x...")). After one of these the layer's internal
 #: state is undefined: the 2026-07-17 ni4882 access violation survived the
 #: except clause, but the reconnect's close/reopen then hung forever inside
-#: the crashed DLL — with the shared GPIB board lock held, which wedged the
-#: poller and starved the whole server. These errors are never retried.
+#: the crashed DLL — holding locks that wedged the poller and starved the
+#: whole server. These errors are never retried. Still load-bearing after
+#: the GPIB thin-out: the OSA (GPIB) and the Pendulum + Keysight FGs
+#: (USB-TMC) all run through the same NI-VISA/ni4882 native stack.
 _NATIVE_CRASH_MARKERS = ("access violation", "stack overflow")
 
 
@@ -246,7 +248,7 @@ class Instrument:
                 if _is_native_crash(first_error):
                     # the DLL's internal state (and any locks it holds) is
                     # undefined — one more call through it can hang forever
-                    # with our board lock held. Fail fast and stay failed.
+                    # with our driver lock held. Fail fast and stay failed.
                     self._poisoned = str(first_error)
                     self.log.critical(
                         "%s: %s crashed in the native I/O layer (%s); disabling "

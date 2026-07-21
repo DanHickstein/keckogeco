@@ -60,7 +60,9 @@ comes with a delay.
   operator-entered values only: photodiode setpoint + PI gains via
   `PUT /im`, starting bias via `LFC_IM_BIAS`, engage via
   `LFC_IM_LOCK_MODE` (engaging copies the manual bias into the SIM960
-  output offset for a bumpless start). The GUI scan panel only
+  output offset for a bumpless start; disengaging parks the live PID
+  output into the manual bias so unlock holds the voltage the lock was
+  at, 2026-07-21). The GUI scan panel only
   *suggests* values (text); the operator types them into the servo
   panel. `LFC_IM_AUTO_LOCK` is unbound (retirement proposed in
   `ktl/keyword-changes.md`); the minicomb transition no longer locks.
@@ -79,6 +81,14 @@ comes with a delay.
   install, no venv, no admin rights**. Repo at `C:\kecklfc\keckogeco`. The
   user-site Scripts dir is off PATH — another reason everything is
   `python -m`. Dan runs scripts with VSCode's Run button.
+- **Use `127.0.0.1`, never `localhost`, in server URLs on the laptop.**
+  `localhost` resolves to `::1` first, the server listens on IPv4 only, and
+  every NEW TCP connection burns ~2 s in the IPv6 connect timeout before
+  falling back (measured 2026-07-21: 2071 ms vs 3 ms) — it made every API
+  call, and therefore the whole GUI, look seconds slow. `KeckogecoClient`
+  normalizes a localhost URL to 127.0.0.1 defensively; scripts using
+  urllib/Invoke-WebRequest (fresh connection per request) pay it on every
+  single call, so spell it 127.0.0.1 there too.
 - **wsapi** (Finisar WaveShaper DLL API): pip can't install it in place under
   `Program Files` without admin — copy
   `...\Finisar\WaveManager\waveshaper\api\python3` to a writable dir and
@@ -162,6 +172,26 @@ comes with a delay.
   interface panel A4, "Minicomb photodiode → SRS PID"), so bias scans read
   power via `MMON` — **no DAQ involved**; the USB-2408s only read
   thermocouples. Slot number lives in the `srs` block's `im_slot` option.
+- **The SIM900 host interface is RS-232 (COM23), not GPIB, since 2026-07-21.**
+  A rear-panel DIP switch selects the host interface and is read **only at
+  power-up**; the rightmost 5 switches double as GPIB address / RS-232 baud
+  select (set to 115.2k — the config `baud_rate` must match, because a
+  Device Clear reverts the unit to the DIP rate). Plug into the DB-9 female
+  labeled **COMPUTER**, not the identical EAVESDROP jack next to it. Over
+  RS-232 a serial `<break>` IS the Device Clear the driver uses to escape a
+  CONN'd slot (`SerialTransport(break_on_clear=True)`); rack-verified: the
+  driver, `module_inventory`, and slot I/O all work unchanged. The SIM960s
+  keep settings through a mainframe power cycle — slot 3 came back with the
+  IM lock still engaged and holding. GPIB now carries only the OSA.
+- **The shared per-GPIB-board VISA lock was removed (2026-07-21)** along
+  with the SIM900/Pendulum GPIB exodus: with one instrument on the bus its
+  driver `RLock` already serializes board I/O, and the shared lock was how
+  one wedged instrument starved its bus-mates (2026-07-20 GUI freeze). The
+  per-instrument **native-crash poisoning in `drivers/base.py` stays** — the
+  OSA (GPIB) and the Pendulum/Keysights (USB-TMC) still run through the
+  ni4882/NI-VISA stack that produced the access violations. If a second
+  GPIB instrument ever returns (e.g. SIM900 DIP flipped back), restore the
+  per-board lock — concurrent multi-instrument GPIB polling AVs ni4882.
 - **The Pritel refuses `FA ON` while its STORED power-amp setpoint is too
   high for the measured seed** (rack-probed 2026-07-18: 3.9 A stored →
   refused, ≤ 1.0 A → fine, at the commissioned seed; the ASD reply is
@@ -220,13 +250,3 @@ windows. New drivers follow the existing module pattern — read
 `drivers/instek_psu.py` or `drivers/oz_voa.py` as templates, and give config
 metadata keys a home in `DISCOVERY_KEYS`/`CONTROLLER_KEYS` so they don't leak
 into transport kwargs.
-
-## Status snapshot (2026-07-12)
-
-Working end-to-end in sim: server + PyQt GUI + actions + IM auto-lock;
-61/77 keywords bound. First real-rack run: 7/14 discovered devices passed
-immediately (EDFA27 live at 450 mW, both Insteks, Pritel, Rb clock locked,
-hk_shutter, Arduino interlock). Pending on the rack: GPIB is down until an
-NI-488.2 downgrade (blocks SIM900/IM lock, Pendulum, Agilent OSA), TC-720s
-silent (power?), one Keysight FG wedged. Remaining work is tracked in the
-GitHub issues.

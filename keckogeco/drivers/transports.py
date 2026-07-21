@@ -22,6 +22,7 @@ import logging
 import re
 import socket
 import threading
+import time
 from typing import Protocol, runtime_checkable
 
 from .errors import InstrumentError, NotConnected
@@ -35,28 +36,6 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
-
-#: one lock per GPIB interface ("GPIB0"): NI-488 crashed the server three
-#: times on 2026-07-16 with a native access violation (no traceback, the
-#: process just dies) once three GPIB instruments were polled from
-#: concurrent threads — the bus tested clean single-threaded. All VISA
-#: I/O on the same board is serialized process-wide, so the NI layer
-#: never sees concurrent calls for one interface. Instruments on other
-#: transports are unaffected; each thread's own driver-level RLock still
-#: comes first (never acquire the board lock, then a driver lock).
-_GPIB_BOARD_LOCKS: dict[str, threading.RLock] = {}
-_GPIB_BOARD_LOCKS_GUARD = threading.Lock()
-
-
-def _visa_io_lock(address: str) -> threading.RLock:
-    """The shared per-board lock for GPIB addresses; a private lock for
-    every other VISA resource (USB-TMC, ASRL serial)."""
-    match = re.match(r"(GPIB\d*)\s*::", address, re.IGNORECASE)
-    if not match:
-        return threading.RLock()
-    board = match.group(1).upper()
-    with _GPIB_BOARD_LOCKS_GUARD:
-        return _GPIB_BOARD_LOCKS.setdefault(board, threading.RLock())
 
 
 @runtime_checkable
@@ -110,9 +89,15 @@ class VisaTransport:
         self.timeout_ms = timeout_ms
         self.attrs = attrs
         self._resource = None
-        # shared across all transports on the same GPIB board (see
-        # _visa_io_lock); private for non-GPIB VISA resources
-        self._io_lock = _visa_io_lock(address)
+        # Private per-resource lock. GPIB instruments used to share one
+        # lock per board: concurrent multi-instrument polling crashed
+        # ni4882 with native access violations (2026-07-16), and the
+        # shared lock let one wedged instrument starve its bus-mates
+        # (2026-07-20). With the SIM900 and Pendulum moved off GPIB the
+        # OSA is alone on the bus and its driver RLock already serializes
+        # board I/O — but if a second GPIB instrument ever returns, bring
+        # the per-board lock back (git: sim900-rs232 branch removed it).
+        self._io_lock = threading.RLock()
 
     def open(self) -> None:
         import pyvisa
@@ -202,7 +187,19 @@ class SerialTransport:
     start rebooted the interlock firmware into its latched-tripped boot
     state (rack-probed 2026-07-20). ``None`` keeps pyserial's default
     (lines asserted at open), which some handshaking devices need.
+
+    ``break_on_clear`` makes :meth:`clear` transmit a serial <break> in
+    addition to flushing the OS buffers, for instruments that define the
+    break signal as an out-of-band Device Clear (the SRS SIM900 uses it
+    to escape a CONN'd module stream, mirroring the GPIB device clear).
     """
+
+    #: <break> hold time: must span one full character frame at the
+    #: slowest supported rate (8.3 ms at 1200 baud), rack-verified 50 ms
+    BREAK_S = 0.05
+    #: pause after the break so the instrument finishes its reset before
+    #: the next command goes out
+    BREAK_SETTLE_S = 0.05
 
     def __init__(
         self,
@@ -212,6 +209,7 @@ class SerialTransport:
         terminator: str = "\r\n",
         dtr: bool | None = None,
         rts: bool | None = None,
+        break_on_clear: bool = False,
     ):
         self.address = address
         self.baud_rate = baud_rate
@@ -219,6 +217,7 @@ class SerialTransport:
         self.terminator = terminator
         self.dtr = dtr
         self.rts = rts
+        self.break_on_clear = break_on_clear
         self._port = None
 
     def open(self) -> None:
@@ -256,6 +255,19 @@ class SerialTransport:
     def is_open(self) -> bool:
         return self._port is not None
 
+    @property
+    def timeout_ms(self) -> int:
+        return int(self.timeout_s * 1000)
+
+    def set_timeout_ms(self, timeout_ms: int) -> None:
+        """Change the I/O timeout on the open port (and future opens).
+        Same probing API as :meth:`VisaTransport.set_timeout_ms` — the
+        SIM900 driver shortens it to sweep empty mainframe slots."""
+        self.timeout_s = timeout_ms / 1000
+        if self._port is not None:
+            self._port.timeout = self.timeout_s
+            self._port.write_timeout = self.timeout_s
+
     def _require_open(self):
         if self._port is None:
             raise NotConnected(f"Serial port {self.address} is not open")
@@ -288,6 +300,11 @@ class SerialTransport:
         port = self._require_open()
         port.reset_input_buffer()
         port.reset_output_buffer()
+        if self.break_on_clear:
+            port.send_break(self.BREAK_S)
+            time.sleep(self.BREAK_SETTLE_S)
+            # the break may flush a partial reply out of the device
+            port.reset_input_buffer()
 
 
 class SocketTransport:

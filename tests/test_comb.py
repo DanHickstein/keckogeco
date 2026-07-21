@@ -265,3 +265,18 @@ def test_bound_keyword_count(controller):
     assert len(controller.registry.bound) >= 30
     for name in controller.registry.bound:
         assert name in controller.registry.schema
+
+
+def test_keyword_device_tags(controller):
+    """Hardware-touching keywords declare their device so the server's
+    background poller can read different instruments concurrently."""
+    registry = controller.registry
+    assert registry.device_of("LFC_EDFA27_P") == "edfa27"
+    assert registry.device_of("LFC_PTAMP_ONOFF") == "ptamp"
+    assert registry.device_of("LFC_PTAMP_LATCH") == "arduino_relay"
+    assert registry.device_of("LFC_REPRATE") == "pendulum"
+    assert registry.device_of("LFC_RFOSCI_I") == "rf_osc_psu"
+    # soft and composite keywords carry no device (shared misc lane)
+    assert registry.device_of("ICECLK") is None
+    assert registry.device_of("LFC_CHECK_STATUS") is None
+    assert registry.device_of("LFC_WSP_PHASE") is None  # softstore read

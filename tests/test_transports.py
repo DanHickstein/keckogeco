@@ -68,8 +68,19 @@ def _fake_serial_module(events):
             self._rts = True
             self.port = port
             self.is_open = False
+            self.timeout = kwargs.get("timeout")
+            self.write_timeout = kwargs.get("write_timeout")
             if port is not None:
                 self.open()
+
+        def send_break(self, duration=0.25):
+            events.append(("break", duration))
+
+        def reset_input_buffer(self):
+            events.append("flush_in")
+
+        def reset_output_buffer(self):
+            events.append("flush_out")
 
         @property
         def dtr(self):
@@ -123,24 +134,71 @@ def test_serial_transport_dtr_suppressed_before_open(monkeypatch):
     assert events == [("open", True, True)]
 
 
-def test_gpib_transports_share_one_board_lock():
-    """All VISA transports on one GPIB board share a single I/O lock:
-    NI-488 crashed the server with native access violations under
-    concurrent multi-instrument polling (2026-07-16), so calls into the
-    NI layer are serialized per board. Other VISA resources (USB-TMC,
-    ASRL) keep private locks."""
+def test_serial_clear_flushes_only_by_default(monkeypatch):
+    import sys
+
+    from keckogeco.drivers.transports import SerialTransport
+
+    events = []
+    monkeypatch.setitem(sys.modules, "serial", _fake_serial_module(events))
+
+    plain = SerialTransport("COM8")
+    plain.open()
+    events.clear()
+    plain.clear()
+    assert events == ["flush_in", "flush_out"]
+
+
+def test_serial_clear_sends_break_when_enabled(monkeypatch):
+    """break_on_clear turns clear() into the SIM900's RS-232 Device Clear:
+    flush, then a <break> long enough for one character frame at any
+    DIP-selectable baud, then flush the input again."""
+    import sys
+
+    from keckogeco.drivers.transports import SerialTransport
+
+    events = []
+    monkeypatch.setitem(sys.modules, "serial", _fake_serial_module(events))
+
+    sim900 = SerialTransport("COM23", break_on_clear=True)
+    sim900.open()
+    events.clear()
+    sim900.clear()
+    assert events == ["flush_in", "flush_out", ("break", SerialTransport.BREAK_S), "flush_in"]
+
+
+def test_serial_timeout_probing_api(monkeypatch):
+    """SerialTransport exposes the same timeout_ms/set_timeout_ms pair as
+    VisaTransport, so SIM900.module_inventory can shorten the timeout to
+    sweep empty slots on either transport."""
+    import sys
+
+    from keckogeco.drivers.transports import SerialTransport
+
+    events = []
+    monkeypatch.setitem(sys.modules, "serial", _fake_serial_module(events))
+
+    transport = SerialTransport("COM23", timeout_s=25.0)
+    transport.open()
+    assert transport.timeout_ms == 25_000
+    transport.set_timeout_ms(1500)
+    assert transport.timeout_s == pytest.approx(1.5)
+    assert transport._port.timeout == pytest.approx(1.5)
+    transport.set_timeout_ms(25_000)
+    assert transport._port.timeout == pytest.approx(25.0)
+
+
+def test_visa_transports_have_private_locks():
+    """Every VISA transport gets its own I/O lock. The per-GPIB-board
+    shared lock (2026-07-16, ni4882 AVs under concurrent multi-instrument
+    polling) was removed once the OSA became the bus's only instrument —
+    its driver RLock already serializes board I/O. If a second GPIB
+    instrument ever returns, restore the per-board lock."""
     from keckogeco.drivers.transports import VisaTransport
 
-    srs = VisaTransport("GPIB0::2::INSTR")
     osa = VisaTransport("GPIB0::30::INSTR")
-    cnt = VisaTransport("gpib0::10::INSTR")  # VISA is case-insensitive
-    other_board = VisaTransport("GPIB1::5::INSTR")
+    other = VisaTransport("GPIB0::2::INSTR")
     usb = VisaTransport("USB0::0x0957::0x2807::MY62003852::INSTR")
-    asrl = VisaTransport("ASRL13::INSTR")
 
-    assert srs._io_lock is osa._io_lock
-    assert srs._io_lock is cnt._io_lock
-    assert other_board._io_lock is not srs._io_lock
-    assert usb._io_lock is not srs._io_lock
-    assert asrl._io_lock is not srs._io_lock
-    assert usb._io_lock is not asrl._io_lock
+    assert osa._io_lock is not other._io_lock
+    assert osa._io_lock is not usb._io_lock

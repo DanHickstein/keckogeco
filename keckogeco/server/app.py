@@ -19,6 +19,7 @@ import contextlib
 import logging
 import math
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Literal
@@ -106,31 +107,66 @@ def _json_value(value):
 
 
 class Poller(threading.Thread):
-    """Background refresh of every bound keyword into the registry cache."""
+    """Background refresh of every bound keyword into the registry cache.
 
-    def __init__(self, controller: LFCController, period_s: float = 5.0):
+    Keywords are grouped into lanes by the device their binding declares
+    (``KeywordRegistry.bind(device=...)``) and the lanes are read
+    concurrently; per-device driver RLocks keep any one instrument's I/O
+    serial. Sweeping all ~79 keywords in sequence took ~8 s on the real
+    rack, leaving cached values up to sweep+period (~13 s) stale in the
+    GUI. Two carve-outs: every device on the NI-VISA/ni4882 native stack
+    (``::`` VISA addresses — the OSA, Pendulum, Keysights) shares ONE
+    lane, so the poller itself never makes two native VISA calls at
+    once (that stack has the access-violation history, AGENTS.md); and
+    untagged keywords (soft values, composites like LFC_CHECK_STATUS)
+    share a lane of their own."""
+
+    def __init__(self, controller: LFCController, period_s: float = 2.0):
         super().__init__(name="keyword-poller", daemon=True)
         self.controller = controller
         self.period_s = period_s
         self._stop_event = threading.Event()
 
-    def run(self) -> None:
+    def lanes(self) -> list[list[str]]:
+        """Bound keywords grouped into concurrently-pollable lanes."""
         registry = self.controller.registry
-        while not self._stop_event.is_set():
-            for name in sorted(registry._getters):
-                if self._stop_event.is_set():
-                    break
-                try:
-                    registry.read(name)
-                except Exception as exc:  # noqa: BLE001 - keep polling the rest
-                    log.debug("poll %s failed: %s", name, exc)
-            self._stop_event.wait(self.period_s)
+        visa = {
+            key
+            for key, dev in self.controller.config.enabled_devices().items()
+            if "::" in dev.address
+        }
+        grouped: dict[str, list[str]] = {}
+        for name in sorted(registry._getters):
+            device = registry.device_of(name)
+            lane = "_visa" if device in visa else (device or "_misc")
+            grouped.setdefault(lane, []).append(name)
+        return list(grouped.values())
+
+    def _read_lane(self, names: list[str]) -> None:
+        registry = self.controller.registry
+        for name in names:
+            if self._stop_event.is_set():
+                return
+            try:
+                registry.read(name)
+            except Exception as exc:  # noqa: BLE001 - keep polling the rest
+                log.debug("poll %s failed: %s", name, exc)
+
+    def run(self) -> None:
+        lanes = self.lanes()  # bindings are fixed once the controller started
+        with ThreadPoolExecutor(
+            max_workers=max(1, len(lanes)), thread_name_prefix="keyword-poll"
+        ) as pool:
+            while not self._stop_event.is_set():
+                for future in [pool.submit(self._read_lane, lane) for lane in lanes]:
+                    future.result()
+                self._stop_event.wait(self.period_s)
 
     def stop(self) -> None:
         self._stop_event.set()
 
 
-def create_app(config: Config, sim: bool = False, poll_s: float = 5.0) -> FastAPI:
+def create_app(config: Config, sim: bool = False, poll_s: float = 2.0) -> FastAPI:
     controller = LFCController(config, sim=sim)
     poller = Poller(controller, period_s=poll_s)
 
@@ -557,7 +593,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sim", action="store_true", help="simulated instruments")
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
-    parser.add_argument("--poll", type=float, default=5.0, help="cache poll period, s (0 = off)")
+    # 2 s: with the per-device poll lanes a full sweep is ~the slowest
+    # single instrument, so the cache can afford to refresh faster than
+    # the old 5 s (which on top of the ~8 s sequential sweep left GUI
+    # values up to ~13 s stale)
+    parser.add_argument("--poll", type=float, default=2.0, help="cache poll period, s (0 = off)")
     args = parser.parse_args(argv)
 
     try:

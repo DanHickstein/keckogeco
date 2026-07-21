@@ -43,7 +43,7 @@ from PyQt6.QtWidgets import (
 
 from ..comb.locking import recommend_lock_point
 from . import prefs, spectra
-from .client import KeckogecoClient, PollThread, WriteThread
+from .client import ArrayPollThread, KeckogecoClient, PollThread, WriteThread
 from .laptop import TEMP_HOT_C, TEMP_WARN_C, LaptopPollThread, temp_state
 from .theme import ACCENT, MUTED, PLOT_BG, STATE_COLORS
 from .widgets import (
@@ -741,13 +741,22 @@ class MainWindow(QMainWindow):
         self.writer.call_done.connect(self._on_call_done)
         self.writer.start()
 
-        self.poller = PollThread(client)
+        # poll periods are tunable in config/gui.toml [polling]
+        polling = prefs.load_section("polling")
+        self.poller = PollThread(client, period_ms=int(polling.get("period_ms", 1000)))
         self.poller.keywords_ready.connect(self._on_keywords)
         self.poller.state_ready.connect(self._on_state)
-        self.poller.arrays_available.connect(self._on_arrays_available)
-        self.poller.array_ready.connect(self._on_array)
         self.poller.connection_changed.connect(self._on_connection)
         self.poller.start()
+
+        # arrays (OSA spectrum, IM scan) poll on their own thread and
+        # connection: a slow trace transfer must not hold up /state
+        self.array_poller = ArrayPollThread(
+            client.clone(), period_ms=int(polling.get("array_period_ms", 1000))
+        )
+        self.array_poller.arrays_available.connect(self._on_arrays_available)
+        self.array_poller.array_ready.connect(self._on_array)
+        self.array_poller.start()
 
         self._build_layout()
         self.setStatusBar(QStatusBar())
@@ -1462,8 +1471,8 @@ class MainWindow(QMainWindow):
             self._wire_im_panel()
 
     def _subscribe_array(self, name: str) -> None:
-        if name not in self.poller.array_names:
-            self.poller.array_names.append(name)
+        if name not in self.array_poller.array_names:
+            self.array_poller.array_names.append(name)
 
     def _plot_widget(self):
         """A themed pyqtgraph PlotWidget, or None if pyqtgraph is missing."""
@@ -1652,9 +1661,8 @@ class MainWindow(QMainWindow):
             self._im_charts.append((key, chart, chart_curve))
             self._im_servo_layout.addWidget(chart, stretch=1)
 
-        # every poll cycle: the strip charts sample at ~1 Hz and scans
-        # build up live (the payload is cached data during a sweep)
-        self.poller.array_every["im_scan"] = 1
+        # the strip charts sample at ~1 Hz and scans build up live (the
+        # payload is cached data during a sweep)
         self._subscribe_array("im_scan")
 
     #: strip-chart history length, seconds (at the ~1 s poll cadence)
@@ -2230,6 +2238,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.poller.stop()
+        self.array_poller.stop()
         self.writer.stop()
         self.laptop_poller.stop()
         super().closeEvent(event)

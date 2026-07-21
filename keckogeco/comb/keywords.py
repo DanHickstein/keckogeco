@@ -117,6 +117,7 @@ class KeywordRegistry:
         self.schema = schema if schema is not None else load_schema()
         self._getters: dict[str, Callable[[], object]] = {}
         self._setters: dict[str, Callable[[object], None]] = {}
+        self._devices: dict[str, str] = {}  # keyword -> device key
         self._cache: dict[str, KeywordValue] = {}
         self._lock = threading.Lock()
 
@@ -133,7 +134,12 @@ class KeywordRegistry:
         name: str,
         getter: Callable[[], object] | None = None,
         setter: Callable[[object], None] | None = None,
+        device: str | None = None,
     ) -> None:
+        """Bind getter/setter callables to a keyword. ``device`` names the
+        device key the callables talk to (None for soft/composite
+        keywords); the background poller uses it to read different
+        instruments concurrently while keeping each one sequential."""
         spec = self._spec(name)
         if getter is not None:
             self._getters[name] = getter
@@ -141,6 +147,13 @@ class KeywordRegistry:
             if not spec.writable:
                 raise KeywordError(f"{name} is read-only in the schema")
             self._setters[name] = setter
+        if device is not None:
+            self._devices[name] = device
+
+    def device_of(self, name: str) -> str | None:
+        """The device key a keyword was bound with, or None (soft or
+        composite keywords)."""
+        return self._devices.get(name)
 
     def getter(self, name: str):
         def decorate(func):

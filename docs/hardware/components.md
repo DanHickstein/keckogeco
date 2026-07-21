@@ -57,7 +57,7 @@ The astrocomb hardware with numbered components.
 | 30 | RF amplifier (spare) | CTT/Kratos GaN | — | Bench / A21 | — | Replacement for item 29. |
 | 31 | RF splitter | Broadband splitter | Passive | Bench | — | Distributes RF to the three phase modulators. |
 | 32–34 | RF phase shifters | Adjustable, 16 GHz | Manual knobs | Bench | Passive | Optimize RF phase alignment across modulators. |
-| 35–37 | EO phase modulators | EOSpace PM-5SES-20-PFA-PFA-UV(-SOP1W)-UL | RF-driven | Bench | — | Generate the phase-modulated sidebands of the minicomb; one carries a small programmable RF attenuator. |
+| 35–37 | EO phase modulators | EOSpace PM-5SES-20-PFA-PFA-UV(-SOP1W)-UL | RF-driven | Bench | — | Generate the phase-modulated sidebands of the minicomb; one carries the programmable RF attenuator (RF-Lambda RFVAT0218R30, 2–18 GHz reflective, 30 dB range; control 0–10 V operating / 15 V abs max, driven by DC supply 1 ch 3). |
 | 38 | Intensity modulator | EOSpace AX-0MSS-20-PFA-PFA-LV-UL (20 GHz LiNbO₃) | RF drive + DC bias | Bench | — | Pulse carving and the IM-bias lock actuator. |
 | 39–40 | RF/EO misc | Cabling, terminations | Passive | Bench | — | Complete the modulation chain. |
 

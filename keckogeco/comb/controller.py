@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import ClassVar
 
@@ -167,19 +168,23 @@ class LFCController:
                 f"{kw}_P",
                 getter=lambda k=key: self.device(k).setpoint(),
                 setter=lambda v, k=key: self.device(k).set_setpoint(v),
+                device=key,
             )
             bind(
                 f"{kw}_ONOFF",
                 getter=lambda k=key: self.device(k).activation,
                 setter=lambda v, k=key: self._edfa_onoff(k, v),
+                device=key,
             )
             bind(
                 f"{kw}_INPUT_POWER_MONITOR",
                 getter=lambda k=key: self.device(k).input_power_mW(),
+                device=key,
             )
             bind(
                 f"{kw}_OUTPUT_POWER_MONITOR",
                 getter=lambda k=key: self.device(k).output_power_mW(),
+                device=key,
             )
 
         # --- Pritel amplifier + Arduino interlock
@@ -190,24 +195,32 @@ class LFCController:
                 "LFC_PTAMP_PRE_P",
                 getter=lambda: self.device("ptamp").preamp_mA,
                 setter=lambda v: self.device("ptamp").set_preamp_mA(v),
+                device="ptamp",
             )
             bind(
                 "LFC_PTAMP_I",
                 getter=lambda: self.device("ptamp").pwramp_mA / 1000,
                 setter=lambda v: self.device("ptamp").set_pwramp_mA(v * 1000),
+                device="ptamp",
             )
-            bind("LFC_PTAMP_OUT", getter=lambda: self.device("ptamp").output_power_mW / 1000)
-            bind("LFC_PTAMP_IN", getter=lambda: self.device("ptamp").input_power_mW)
+            bind(
+                "LFC_PTAMP_OUT",
+                getter=lambda: self.device("ptamp").output_power_mW / 1000,
+                device="ptamp",
+            )
+            bind("LFC_PTAMP_IN", getter=lambda: self.device("ptamp").input_power_mW, device="ptamp")
             bind(
                 "LFC_PTAMP_ONOFF",
                 getter=lambda: self.device("ptamp").pump_on,
                 setter=lambda v: self.device("ptamp").set_pump(v),
+                device="ptamp",
             )
         if has("arduino_relay"):
             bind(
                 "LFC_PTAMP_LATCH",
                 getter=self._latch_state,
                 setter=lambda _v: self.device("arduino_relay").reset_latch(),
+                device="arduino_relay",
             )
             # the interlock's photodiode voltage: raw 10-bit ADC counts
             # over a 0-5 V range, reported in volts
@@ -216,11 +229,13 @@ class LFCController:
                 getter=lambda: (
                     self.device("arduino_relay").relay_status().voltage_now * 5.0 / 1023.0
                 ),
+                device="arduino_relay",
             )
             bind(
                 "LFC_YJ_SHUTTER",
                 getter=lambda: self.device("arduino_relay").yj_open,
                 setter=self._set_yj,
+                device="arduino_relay",
             )
 
         # --- RIO seed laser
@@ -229,11 +244,13 @@ class LFCController:
                 "LFC_RIO_T",
                 getter=lambda: self.device("rio").tec_setpoint_C(volatile=True),
                 setter=lambda v: self.device("rio").set_tec_setpoint_C(v),
+                device="rio",
             )
             bind(
                 "LFC_RIO_I",
                 getter=lambda: self.device("rio").diode_current_mA(volatile=True),
                 setter=lambda v: self.device("rio").set_diode_current_mA(v),
+                device="rio",
             )
 
         # --- RF chain power supplies (channels from the `channel` config
@@ -246,14 +263,17 @@ class LFCController:
                 f"{kw}_ONOFF",
                 getter=lambda d=dev_key, c=channel: self.device(d).output_on(c),
                 setter=lambda v, d=dev_key, c=channel: self.device(d).set_output(v, c),
+                device=dev_key,
             )
             bind(
                 f"{kw}_I",
                 getter=lambda d=dev_key, c=channel: self.device(d).output_current_A(c),
+                device=dev_key,
             )
             bind(
                 f"{kw}_V",
                 getter=lambda d=dev_key, c=channel: self.device(d).output_voltage_V(c),
+                device=dev_key,
             )
 
         # --- TECs (setpoint changes stepped in 0.5 C increments, as the old
@@ -263,12 +283,14 @@ class LFCController:
                 "LFC_PPLN_T",
                 getter=lambda: self.device("tec_ppln").temperature_C,
                 setter=lambda v: self._ramp_tec("tec_ppln", v),
+                device="tec_ppln",
             )
         if has("tec_wvg"):
             bind(
                 "LFC_WGD_T",
                 getter=lambda: self.device("tec_wvg").temperature_C,
                 setter=lambda v: self._ramp_tec("tec_wvg", v),
+                device="tec_wvg",
             )
 
         # --- IM bias via the SIM960 servo (slot from config option im_slot).
@@ -292,6 +314,7 @@ class LFCController:
                 "LFC_IM_BIAS",
                 getter=lambda: self._im_servo.manual_output_V,
                 setter=lambda v: setattr(self._im_servo, "manual_output_V", v),
+                device="srs",
             )
 
         # --- Rack thermocouples (DAQ board 0; channel map verified 2023-06)
@@ -304,14 +327,26 @@ class LFCController:
                 "LFC_T_RACK_BOT": 6,  # power supply shelf
             }
             for kw, channel in daq_map.items():
-                bind(kw, getter=lambda ch=channel: self.device("daq").temperature_C(ch))
+                bind(
+                    kw,
+                    getter=lambda ch=channel: self.device("daq").temperature_C(ch),
+                    device="daq",
+                )
         if has("daq_eocb"):
             # ch4 = inlet, ch5 = outlet: the June-2023 channel doc had
             # these reversed — as-labeled the "inlet" read ~35 °C and the
             # "outlet" the ~15 °C facility supply (2026-07-18, Dan; see
             # ktl/keyword-changes.md)
-            bind("LFC_T_EOCB_IN", getter=lambda: self.device("daq_eocb").temperature_C(4))
-            bind("LFC_T_EOCB_OUT", getter=lambda: self.device("daq_eocb").temperature_C(5))
+            bind(
+                "LFC_T_EOCB_IN",
+                getter=lambda: self.device("daq_eocb").temperature_C(4),
+                device="daq_eocb",
+            )
+            bind(
+                "LFC_T_EOCB_OUT",
+                getter=lambda: self.device("daq_eocb").temperature_C(5),
+                device="daq_eocb",
+            )
 
         # --- VOAs, HK shutter, pendulum rep-rate monitor
         # Which physical VOA is which wavelength is not yet known; config
@@ -328,24 +363,42 @@ class LFCController:
                     kw,
                     getter=lambda k=key: self.device(k).attenuation_dB,
                     setter=lambda v, k=key: setattr(self.device(k), "attenuation_dB", v),
+                    device=key,
                 )
         if has("hk_shutter"):
             bind(
                 "LFC_HK_SHUTTER",
                 getter=lambda: self.device("hk_shutter").open,
                 setter=lambda v: self.device("hk_shutter").set_open(v),
+                device="hk_shutter",
             )
         if has("pendulum"):
-            bind("LFC_PENDULEM_FREQ_MONITOR", getter=lambda: self._rep_rate_ok() is True)
-            bind("LFC_REPRATE", getter=self._rep_rate_Hz)
-            bind("LFC_REPRATE_REF", getter=lambda: self.device("pendulum").reference_source)
+            bind(
+                "LFC_PENDULEM_FREQ_MONITOR",
+                getter=lambda: self._rep_rate_ok() is True,
+                device="pendulum",
+            )
+            bind("LFC_REPRATE", getter=self._rep_rate_Hz, device="pendulum")
+            bind(
+                "LFC_REPRATE_REF",
+                getter=lambda: self.device("pendulum").reference_source,
+                device="pendulum",
+            )
 
         # --- Rb frequency standard health (FS725, read-only). This is the
         # 10 MHz behind both the DRO and the counter; see LFC_REPRATE_REF
         # in the schema for why the chain needs its own keywords.
         if has("rb_clock"):
-            bind("LFC_RBCLOCK_PHASELOCK", getter=lambda: self.device("rb_clock").phase_locked)
-            bind("LFC_RBCLOCK_FREQLOCK", getter=lambda: self.device("rb_clock").frequency_locked)
+            bind(
+                "LFC_RBCLOCK_PHASELOCK",
+                getter=lambda: self.device("rb_clock").phase_locked,
+                device="rb_clock",
+            )
+            bind(
+                "LFC_RBCLOCK_FREQLOCK",
+                getter=lambda: self.device("rb_clock").frequency_locked,
+                device="rb_clock",
+            )
 
         # --- Agiltron 2x2 switch (enumerated: 1 = YJ path, 2 = HK path)
         if has("switch2x2"):
@@ -353,6 +406,7 @@ class LFCController:
                 "LFC_2BY2_SWITCH",
                 getter=lambda: self.device("switch2x2").position,
                 setter=lambda v: self.device("switch2x2").set_position(v),
+                device="switch2x2",
             )
 
         # --- Clarity laser: the keyword collapses the 4-state status to
@@ -362,6 +416,7 @@ class LFCController:
                 "LFC_CLARITY_ONOFF",
                 getter=lambda: 1 if self.device("clarity").status_code > 0 else 0,
                 setter=lambda v: self.device("clarity").set_output(bool(int(v))),
+                device="clarity",
             )
 
         # LFC_IM_AUTO_LOCK is deliberately unbound: locking is manual from
@@ -422,12 +477,14 @@ class LFCController:
                 "LFC_IM_LOCK_MODE",
                 getter=lambda: self._im_servo.output_mode == "PID",
                 setter=lambda v: self._im_set_lock(bool(int(v))),
+                device="srs",
             )
         if has("rf_osc_psu"):
             bind(
                 "LFC_IM_RF_ATT",
                 getter=lambda: self.device("rf_osc_psu").output_voltage_V(3),
                 setter=lambda v: self.device("rf_osc_psu").set_voltage_V(v, 3),
+                device="rf_osc_psu",
             )
 
         # --- commissioned preset keywords: write 1 to push the default
@@ -463,20 +520,22 @@ class LFCController:
         # old auto-CLOSE_ALL/email reaction is deliberately gone (see
         # ktl/keyword-changes.md, same policy as the rep-rate monitor).
         if has("daq"):
-            bind("LFC_TEMP_MONITOR", getter=self._temps_ok)
+            bind("LFC_TEMP_MONITOR", getter=self._temps_ok, device="daq")
             bind(
                 "LFC_TEMP_TEST1",
                 getter=lambda: [self.device("daq").temperature_C(ch) for ch in range(8)],
+                device="daq",
             )
         if has("daq_eocb"):
             bind(
                 "LFC_TEMP_TEST2",
                 getter=lambda: [self.device("daq_eocb").temperature_C(ch) for ch in range(8)],
+                device="daq_eocb",
             )
         if has("rf_osc_psu"):
-            bind("LFC_RFOSCI_MONITOR", getter=self._rfosc_ok)
+            bind("LFC_RFOSCI_MONITOR", getter=self._rfosc_ok, device="rf_osc_psu")
         if has("rf_amp_psu"):
-            bind("LFC_RFAMP_MONITOR", getter=self._rfamp_ok)
+            bind("LFC_RFAMP_MONITOR", getter=self._rfamp_ok, device="rf_amp_psu")
 
         # --- legacy near-no-ops kept for KTL compatibility: LFC_YJ_SHUT is
         # proposed for retirement (the old handler was already a stub) and
@@ -721,7 +780,10 @@ class LFCController:
         current panel settings: the manual bias is copied into the SIM960
         output offset so the PID starts from where the operator parked the
         bias (bumpless takeover); setpoint and PI gains are whatever was
-        last written. Disengaging just returns to manual output."""
+        last written. Disengaging is bumpless too: the live PID output is
+        parked into the manual bias before switching to manual, so the
+        output holds where the lock left it instead of snapping back to
+        the stale MOUT value."""
         if engage:
             # ramping would turn later lockpoint edits into a slow crawl
             # (see _register_keywords); assert off in case the front
@@ -730,6 +792,12 @@ class LFCController:
             self._im_servo.output_offset_V = self._im_servo.manual_output_V
             self._im_servo.output_mode = "PID"
         else:
+            bias = self._im_servo.output_V
+            bias = min(
+                max(bias, self._im_servo.manual_output_min),
+                self._im_servo.manual_output_max,
+            )
+            self._im_servo.manual_output_V = bias
             self._im_servo.output_mode = "MAN"
 
     def _submit_if_true(self, action: str, value) -> None:
@@ -803,8 +871,8 @@ class LFCController:
     REP_RATE_GATE_S = 1.0
     #: one gated measurement serves every caller for this long — the
     #: /state poll (~1 Hz from the GUI) and the keyword cache poller
-    #: would otherwise each re-gate, holding the shared GPIB board lock
-    #: for a full gate time per call
+    #: would otherwise each re-gate, tying up the counter for a full
+    #: gate time per call
     REP_RATE_CACHE_S = 5.0
 
     def _rf_chain_on(self) -> bool:
@@ -859,7 +927,13 @@ class LFCController:
         return ok
 
     def subsystem_status(self) -> SubsystemStatus:
-        """Probe the six state-defining subsystems (offline -> None)."""
+        """Probe the six state-defining subsystems (offline -> None).
+
+        The probes run concurrently: each is a round-trip to a different
+        instrument (per-device RLocks keep any one instrument serial),
+        and /state is polled at ~1 Hz by the GUI — summing six serial
+        round-trips made every status poll pay their total (~0.6-0.8 s
+        on the rack) instead of the slowest one."""
 
         def probe(func):
             try:
@@ -867,18 +941,21 @@ class LFCController:
             except Exception:  # noqa: BLE001 - offline/unreadable -> unknown
                 return None
 
-        return SubsystemStatus(
-            ptamp_on=probe(lambda: self.device("ptamp").pump_on),
-            edfa23_on=probe(lambda: self.device("edfa23").activation),
-            edfa27_on=probe(lambda: self.device("edfa27").activation),
-            rf_oscillator_on=probe(
-                lambda: self.device("rf_osc_psu").output_on(self.psu_channel("rf_osc_psu"))
+        probes = {
+            "ptamp_on": lambda: self.device("ptamp").pump_on,
+            "edfa23_on": lambda: self.device("edfa23").activation,
+            "edfa27_on": lambda: self.device("edfa27").activation,
+            "rf_oscillator_on": lambda: self.device("rf_osc_psu").output_on(
+                self.psu_channel("rf_osc_psu")
             ),
-            rf_amplifier_on=probe(
-                lambda: self.device("rf_amp_psu").output_on(self.psu_channel("rf_amp_psu"))
+            "rf_amplifier_on": lambda: self.device("rf_amp_psu").output_on(
+                self.psu_channel("rf_amp_psu")
             ),
-            rep_rate_detected=probe(self._rep_rate_ok),
-        )
+            "rep_rate_detected": self._rep_rate_ok,
+        }
+        with ThreadPoolExecutor(len(probes), thread_name_prefix="subsys-probe") as pool:
+            futures = {name: pool.submit(probe, func) for name, func in probes.items()}
+            return SubsystemStatus(**{name: f.result() for name, f in futures.items()})
 
     def comb_state(self) -> CombState:
         return state_mod.evaluate(self.subsystem_status())
