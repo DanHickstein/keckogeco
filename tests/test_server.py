@@ -302,3 +302,53 @@ def test_bearer_token_auth(tmp_path):
         assert ok.status_code == 200
         # health stays open for monitoring
         assert client.get("/api/v1/health").status_code == 200
+
+
+def test_poller_lanes_group_by_device():
+    """The background poller reads one lane per device concurrently;
+    everything on the native VISA stack shares a single lane, and
+    soft/composite keywords share a misc lane."""
+    from keckogeco.comb.controller import LFCController
+    from keckogeco.server.app import Poller
+
+    ctrl = LFCController(load_config(EXAMPLE), sim=True)
+    ctrl.start()
+    try:
+        lanes = Poller(ctrl).lanes()
+        flat = [name for lane in lanes for name in lane]
+        # every bound getter appears in exactly one lane
+        assert sorted(flat) == sorted(ctrl.registry._getters)
+        lane_of = {name: i for i, lane in enumerate(lanes) for name in lane}
+        # same device -> same lane (arduino_relay, COM3)
+        assert lane_of["LFC_PTAMP_LATCH"] == lane_of["LFC_YJ_SHUTTER"]
+        # different plain-serial devices -> different lanes
+        assert lane_of["LFC_HK_SHUTTER"] != lane_of["LFC_2BY2_SWITCH"]
+        # VISA-addressed devices (`::`) all share one lane, whatever the
+        # bus: pendulum is GPIB and edfa27 ASRL in the example config
+        assert lane_of["LFC_REPRATE"] == lane_of["LFC_EDFA27_P"]
+        # untagged keywords (soft + composite) share the misc lane,
+        # apart from any hardware lane
+        assert lane_of["ICECLK"] == lane_of["LFC_CHECK_STATUS"]
+        assert lane_of["ICECLK"] != lane_of["LFC_HK_SHUTTER"]
+    finally:
+        ctrl.stop()
+
+
+def test_background_poller_populates_cache():
+    """With the poller on, /keywords fills in without any explicit
+    reads (the concurrent-lane sweep updates the registry cache)."""
+    import time
+
+    config = load_config(EXAMPLE)
+    app = create_app(config, sim=True, poll_s=0.05)
+    with TestClient(app) as test_client:
+        deadline = time.monotonic() + 10.0
+        data = {}
+        while time.monotonic() < deadline:
+            data = test_client.get("/api/v1/keywords").json()
+            if "LFC_EDFA27_P" in data and "LFC_HK_SHUTTER" in data and "ICECLK" in data:
+                break
+            time.sleep(0.05)
+        assert "LFC_EDFA27_P" in data
+        assert "LFC_HK_SHUTTER" in data
+        assert "ICECLK" in data
