@@ -34,3 +34,7 @@ bias_start = 3.3
 
 [im_reference]
 csv = "C:/kecklfc/keckogeco/spectra/im_scan_2026-07-17_113136.csv"
+
+[yokogawa_reference]
+csv = "C:/kecklfc/keckogeco/spectra/yokogawa_2026-07-22_114055 - Octave Hexagon Hero, 4 watts.csv"
+show = true
