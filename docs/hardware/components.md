@@ -119,19 +119,19 @@ Contents of item 3 and closely associated rack hardware:
 
 | Hub A port | Device | Hub B port | Device |
 |---|---|---|---|
-| 1 | GPIB adapter (SIM900) | 3 | Filter cavity TEC |
-| 2 | RF amp 1 supply | 6 | DAQ USB-2408 #1 |
-| 3 | RF osc supply | 15 | RJ45–USB adapter |
-| 4 | RF amp 2 supply | others | Spare / unused |
-| 5 | Keysight function generator | | |
-| 6 | Amonics 27 dBm | | |
-| 7 | Amonics 13 dBm | | |
+| 1 | GPIB adapter (OSA) | 3 | Filter cavity TEC |
+| 2 | RF amp 1 supply | 4 | Pendulum CNT-90 |
+| 3 | RF osc supply | 5 | SIM900 RS-232 adapter (COM23) |
+| 4 | RF amp 2 supply | 6 | DAQ USB-2408 #1 |
+| 5 | Keysight function generator | 11 or 12 | Arduino interlock (latching circuit) |
+| 6 | Amonics 27 dBm | 15 | RJ45–USB adapter |
+| 7 | Amonics 13 dBm | others | Spare / unused |
 | 8 | Pritel | | |
 | 9 | WaveShaper | | |
 | 10 | Rb clock | | |
 | 11 | Amonics 23 dBm | | |
 | 12 | Eaton PDU (left) | | |
-| 13 | Latching circuit | | |
+| 13 | Spare (was the latching circuit) | | |
 | 14 | TP-Link router | | |
 | 15 | Spare | | |
 
@@ -139,6 +139,11 @@ Contents of item 3 and closely associated rack hardware:
 Physical hub ports are informational only — `keckogeco` never relies on
 them. Discovery anchors each instrument to its USB adapter serial
 number, so devices keep working when re-plugged into different ports.
+
+The Pendulum, SIM900 adapter, and Arduino interlock moved from hub A to
+hub B on 2026-07-21, deliberately: hub A also carries the laptop's
+keyboard/mouse, so power-cycling it is disruptive — hub B is the safe
+outlet to cycle, and these are the devices that have needed cycling.
 ```
 
 ```{warning}
