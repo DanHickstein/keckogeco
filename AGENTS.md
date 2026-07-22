@@ -223,6 +223,16 @@ comes with a delay.
 - **hk_shutter is on COM8; the Agiltron 2×2 switch is on COM12.** The old
   code's hardcoded values had these swapped. Never trust old hardcoded
   ports — discovery anchors devices by USB adapter serial instead.
+- **The Yokogawa AQ6376 OSA sits on the SECOND GPIB-USB adapter
+  (`GPIB1::1::INSTR`, added 2026-07-21)** and is driven by the standalone
+  `keckogeco/gui/yokogawa_app.py` (direct driver, not a server device yet).
+  Its auto-detect scan must never touch board GPIB0 — that bus belongs to
+  the server's Agilent 86142B, and two processes on one board is the
+  concurrent-GPIB pattern that AVs ni4882. Folding the unit into the
+  server later requires restoring the per-board VISA lock. Protocol notes:
+  `_configure()` sends `CFORM1` to escape AQ6317 legacy mode, and the
+  AQ6376's REAL,32 trace blocks are **little-endian** (the Agilent's are
+  big-endian) — both drivers share `drivers/ieee_block.py`.
 - **VISA lists USB-TMC resources under two spellings**
   (`...::0::INSTR` and `...::INSTR`). Discovery dedupes via
   `normalize_visa_addr()` — which must **never rewrite GPIB addresses**.
