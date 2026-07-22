@@ -159,9 +159,40 @@ class VisaTransport:
         with self._io_lock:
             self._require_open().write_raw(data)
 
+    #: viRead chunk size for raw reads (matches pyvisa's default)
+    _READ_CHUNK = 20 * 1024
+
     def read_bytes(self, n: int = 1) -> bytes:
+        """Read raw bytes: up to ``n``, stopping early at end of message.
+
+        Deliberately NOT ``resource.read_bytes(n)`` — pyvisa's contract
+        there is "read exactly n bytes": it keeps issuing reads past the
+        END indicator and times out when a message is shorter than ``n``
+        (this hung every OSA REAL,32 trace pull, 2026-07-21). The manual
+        loop stops as soon as viRead reports anything but max-count-read.
+        The termchar is disabled for the duration so a 0x0A byte inside a
+        binary payload cannot end the read early.
+        """
+        from pyvisa import constants
+
         with self._io_lock:
-            return bytes(self._require_open().read_bytes(n))
+            resource = self._require_open()
+            termchar_en = resource.get_visa_attribute(constants.VI_ATTR_TERMCHAR_EN)
+            resource.set_visa_attribute(constants.VI_ATTR_TERMCHAR_EN, False)
+            try:
+                chunks: list[bytes] = []
+                remaining = n
+                while remaining > 0:
+                    chunk, status = resource.visalib.read(
+                        resource.session, min(remaining, self._READ_CHUNK)
+                    )
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                    if status != constants.StatusCode.success_max_count_read:
+                        break  # END (EOI) — the message is complete
+                return b"".join(chunks)
+            finally:
+                resource.set_visa_attribute(constants.VI_ATTR_TERMCHAR_EN, termchar_en)
 
     def read_available(self) -> bytes:
         with self._io_lock:
@@ -465,6 +496,11 @@ class SimTransport:
             self._pending_bytes += self.bytes_responder(data) or b""
 
     def read_bytes(self, n: int = 1) -> bytes:
+        if not self._pending_bytes and self._pending_reply is not None:
+            # a text command whose reply is read as raw bytes (the OSA's
+            # binary trace block): latin-1 round-trips byte values 0-255
+            self._pending_bytes = self._pending_reply.encode("latin-1")
+            self._pending_reply = None
         if self._pending_bytes:
             data, self._pending_bytes = self._pending_bytes[:n], self._pending_bytes[n:]
             return data

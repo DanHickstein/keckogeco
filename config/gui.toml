@@ -22,12 +22,12 @@ sensitivity_dBm = -60.0
 setpoint_mA = 80.0
 
 [wsp]
-gdd_ps_nm = -2.96
-tod_ps_nm2 = 0.09
+gdd_ps_nm = 2.07
+tod_ps_nm2 = -0.14
 center_nm = 1559.8
 
 [osa_reference]
-csv = "C:/kecklfc/keckogeco/spectra/osa_2026-07-15_201758.csv"
+csv = "C:/kecklfc/keckogeco/spectra/osa_2026-07-21_151353.csv"
 
 [im_lock]
 bias_start = 3.3

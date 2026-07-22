@@ -128,19 +128,51 @@ class Agilent86142B(Instrument):
 
     # -------------------------------------------------------------- traces
 
+    #: one GPIB read covers the whole trace message (the read ends at EOI,
+    #: not at this count): block header + 4 bytes/point + terminator
+    _TRACE_READ_MAX = 2 + 9 + 4 * 20_001 + 2
+
     def get_spectrum(self, trace: str = "A") -> tuple[np.ndarray, np.ndarray]:
-        """(wavelength_nm, power_dBm) for one trace."""
+        """(wavelength_nm, power_dBm) for one trace.
+
+        The transfer is binary (``FORM REAL,32``): an ASCII trace pull held
+        the GPIB bus ~1 s and the OSA pauses its sweep to serve it, so the
+        1 Hz GUI spectrum poll visibly slowed the front-panel sweep
+        (measured 2026-07-21: ≤1.5 s quiet vs ~4 s under ASCII polling).
+        """
         trace = str(trace).upper()
         if trace not in _TRACES:
             raise ValueError(f"trace must be one of {_TRACES}, got {trace!r}")
-        self.write("form ascii")
-        raw = self.query(f"trac:data:y? tr{trace}").replace("\n", "")
+        with self.lock:  # keep format-set, query, and block read adjacent
+            self.write("FORM REAL,32")
+            self.write(f"TRAC:DATA:Y? TR{trace}")
+            raw = self.read_bytes(self._TRACE_READ_MAX)
+            power = self._parse_trace_block(raw)
+            wavelength = np.linspace(self.wl_start_nm, self.wl_stop_nm, len(power))
+        return wavelength, power
+
+    def _parse_trace_block(self, raw: bytes) -> np.ndarray:
+        """Decode an IEEE-488.2 definite-length block of float32 dBm values."""
+        if not raw.startswith(b"#") or len(raw) < 2:
+            raise ResponseError(f"{self.name}: unparseable trace data {raw[:80]!r}")
         try:
-            power = np.array(raw.split(","), dtype=float)
+            digits = int(raw[1:2])
+            nbytes = int(raw[2 : 2 + digits])
         except ValueError as exc:
             raise ResponseError(f"{self.name}: unparseable trace data {raw[:80]!r}") from exc
-        wavelength = np.linspace(self.wl_start_nm, self.wl_stop_nm, len(power))
-        return wavelength, power
+        payload = raw[2 + digits : 2 + digits + nbytes]
+        if len(payload) < nbytes or nbytes % 4:
+            raise ResponseError(
+                f"{self.name}: trace block truncated ({len(payload)}/{nbytes} bytes)"
+            )
+        power = np.frombuffer(payload, dtype=">f4").astype(np.float64)
+        # dBm values live within ±210; anything wilder means the instrument
+        # sent little-endian floats and the byte order must be swapped
+        if power.size and (not np.isfinite(power).all() or np.abs(power).max() > 1e3):
+            swapped = np.frombuffer(payload, dtype="<f4").astype(np.float64)
+            if np.isfinite(swapped).all() and np.abs(swapped).max() <= 1e3:
+                power = swapped
+        return power
 
     def status(self) -> dict:
         return {
@@ -168,12 +200,16 @@ class Agilent86142B(Instrument):
         }
 
         def trace(_):
-            # a comb-ish spectrum: gaussian envelope with 0.13 nm teeth
+            # a comb-ish spectrum: gaussian envelope with 0.13 nm teeth,
+            # framed as the REAL,32 definite-length block the driver reads
+            # (latin-1 keeps every byte value intact through SimTransport)
             n = 501
             wl = np.linspace(state["start_m"], state["stop_m"], n) * 1e9
             envelope = -20 + 15 * np.exp(-(((wl - 1560) / 6) ** 2))
             teeth = 3 * (np.cos(2 * np.pi * (wl - 1560) / 0.13) > 0.6)
-            return ",".join(f"{v:.2f}" for v in envelope + teeth - 3)
+            payload = (envelope + teeth - 3).astype(">f4").tobytes()
+            header = f"#{len(str(len(payload)))}{len(payload)}".encode("ascii")
+            return (header + payload).decode("latin-1")
 
         def set_wl(key):
             def _set(m):
@@ -206,6 +242,6 @@ class Agilent86142B(Instrument):
             re.compile(r"INIT:CONT ([01])$"): set_state("cont"),
             "INIT:IMM": "",
             "DISP:WIND:TRAC:Y:SCAL:RLEV?": lambda _: state["rlev"],
-            re.compile(r"trac:data:y\? tr\w$"): trace,
-            "form ascii": "",
+            re.compile(r"TRAC:DATA:Y\? TR\w$"): trace,
+            "FORM REAL,32": "",
         }
