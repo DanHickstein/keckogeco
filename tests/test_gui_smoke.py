@@ -250,10 +250,20 @@ def test_temp_interlock_status_line(qtbot):
         }
 
     okay = [
-        {"name": "Pritel", "nominal_C": 33.9, "limit_C": 41.9,
-         "temperature_C": 33.7, "over_s": None},
-        {"name": "RF amplifier", "nominal_C": 48.2, "limit_C": 56.2,
-         "temperature_C": 48.1, "over_s": None},
+        {
+            "name": "Pritel",
+            "nominal_C": 33.9,
+            "limit_C": 41.9,
+            "temperature_C": 33.7,
+            "over_s": None,
+        },
+        {
+            "name": "RF amplifier",
+            "nominal_C": 48.2,
+            "limit_C": 56.2,
+            "temperature_C": 48.1,
+            "over_s": None,
+        },
     ]
     window._on_state(payload(okay))
     assert label.text() == "Temps okay"

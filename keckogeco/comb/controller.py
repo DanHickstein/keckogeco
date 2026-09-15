@@ -738,9 +738,7 @@ class LFCController:
             ("Pritel pump", lambda: self.device("ptamp").set_pump(False)),
             (
                 "RF amplifier supply",
-                lambda: self.device("rf_amp_psu").set_output(
-                    False, self.psu_channel("rf_amp_psu")
-                ),
+                lambda: self.device("rf_amp_psu").set_output(False, self.psu_channel("rf_amp_psu")),
             ),
         ):
             try:

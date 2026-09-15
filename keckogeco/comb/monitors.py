@@ -212,9 +212,7 @@ class TempInterlock(MonitorThread):
             log.critical("TEMP INTERLOCK TRIPPED: %s", self.trip_reason)
             self.shutdown(self.trip_reason)
         elif over:
-            log.warning(
-                "temp interlock: %s (shutdown after %.0f s)", "; ".join(over), self.hold_s
-            )
+            log.warning("temp interlock: %s (shutdown after %.0f s)", "; ".join(over), self.hold_s)
 
     def clear_trip(self) -> None:
         """Operator acknowledgement (the Pritel or the RF amplifier was
@@ -234,7 +232,10 @@ class TempInterlock(MonitorThread):
         now = time.monotonic()
         last_trip = self.last_trip
         if last_trip is not None:  # copy: _check mutates the peak in place
-            last_trip = {"at": last_trip["at"], "channels": [dict(c) for c in last_trip["channels"]]}
+            last_trip = {
+                "at": last_trip["at"],
+                "channels": [dict(c) for c in last_trip["channels"]],
+            }
         return {
             "tripped": self.tripped,
             "trip_reason": self.trip_reason,

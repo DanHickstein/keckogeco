@@ -105,7 +105,9 @@ def attenuation_dB_per_m(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("files", nargs="*", type=Path, help="spectrum CSVs (default: 2026-07-22 ZBLAN set)")
+    parser.add_argument(
+        "files", nargs="*", type=Path, help="spectrum CSVs (default: 2026-07-22 ZBLAN set)"
+    )
     parser.add_argument("--labels", nargs="*", default=None, help="legend label per file")
     parser.add_argument(
         "--attenuation",
@@ -115,7 +117,12 @@ def main():
         default=None,
         help="1-based indices of the reference and measured spectra, and the fiber length in metres",
     )
-    parser.add_argument("--floor-margin", type=float, default=5.0, help="dB above noise floor required to trust a point (default 5)")
+    parser.add_argument(
+        "--floor-margin",
+        type=float,
+        default=5.0,
+        help="dB above noise floor required to trust a point (default 5)",
+    )
     parser.add_argument(
         "--coupling-loss",
         type=float,
@@ -124,7 +131,11 @@ def main():
         f"(default {DEFAULT_COUPLING_LOSS_DB} for the built-in dataset, else 0)",
     )
     parser.add_argument(
-        "--dashed", nargs="*", type=int, default=None, help="1-based indices of spectra to draw dashed"
+        "--dashed",
+        nargs="*",
+        type=int,
+        default=None,
+        help="1-based indices of spectra to draw dashed",
     )
     parser.add_argument(
         "--fade-below",
@@ -137,7 +148,11 @@ def main():
     args = parser.parse_args()
 
     files = args.files or DEFAULT_FILES
-    labels = args.labels if args.labels else (DEFAULT_LABELS if not args.files else [p.stem for p in files])
+    labels = (
+        args.labels
+        if args.labels
+        else (DEFAULT_LABELS if not args.files else [p.stem for p in files])
+    )
     attenuation = args.attenuation or (DEFAULT_ATTENUATION if not args.files else None)
     dashed = args.dashed if args.dashed is not None else (DEFAULT_DASHED if not args.files else [])
     coupling_loss = args.coupling_loss
@@ -170,9 +185,13 @@ def main():
     if attenuation is not None:
         i_ref, i_meas, length_m = int(attenuation[0]) - 1, int(attenuation[1]) - 1, attenuation[2]
         wl, atten = attenuation_dB_per_m(
-            spectra[i_ref][0], spectra[i_ref][1],
-            spectra[i_meas][0], spectra[i_meas][1],
-            length_m, args.floor_margin, coupling_loss,
+            spectra[i_ref][0],
+            spectra[i_ref][1],
+            spectra[i_meas][0],
+            spectra[i_meas][1],
+            length_m,
+            args.floor_margin,
+            coupling_loss,
         )
         if fade_below is not None:
             lo, hi = wl <= fade_below, wl >= fade_below  # overlap one sample for continuity

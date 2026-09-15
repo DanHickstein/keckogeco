@@ -30,9 +30,7 @@ def test_log_row_writes_scalars(tmp_path):
 
 
 def test_log_row_expands_arrays_per_channel(tmp_path):
-    registry = FakeRegistry(
-        {"LFC_TEMP_TEST2": [40.6, 48.2], "LFC_RFAMP_I": 3.86}
-    )
+    registry = FakeRegistry({"LFC_TEMP_TEST2": [40.6, 48.2], "LFC_RFAMP_I": 3.86})
     logger = TelemetryLogger(registry, tmp_path)
     logger._log_row()
     rows = read_rows(tmp_path)[1:]
