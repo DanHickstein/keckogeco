@@ -65,6 +65,9 @@ class LoggingConfig:
     level: str = "INFO"
     #: seconds between telemetry CSV rows; 0 disables the telemetry logger
     telemetry_s: float = 30.0
+    #: seconds between OSA spectrum snapshots in <dir>/spectra (mini-comb
+    #: history); 0 disables spectrum logging (the sweep manager still runs)
+    spectra_s: float = 600.0
 
 
 @dataclass(frozen=True)
@@ -192,6 +195,7 @@ def parse_config(data: dict, source: Path | None = None) -> Config:
         dir=str(logging_raw.get("dir", LoggingConfig.dir)),
         level=str(logging_raw.get("level", LoggingConfig.level)).upper(),
         telemetry_s=float(logging_raw.get("telemetry_s", LoggingConfig.telemetry_s)),
+        spectra_s=float(logging_raw.get("spectra_s", LoggingConfig.spectra_s)),
     )
     alerts = AlertsConfig(enabled=bool(alerts_raw.get("enabled", False)))
     devices = {key: _parse_device(key, block) for key, block in devices_raw.items()}

@@ -232,7 +232,7 @@ def test_osa_settings_endpoints(client):
     body = client.get("/api/v1/osa").json()
     assert body["resolution_nm"] == pytest.approx(0.06)  # sim default = best
     assert body["resolutions_nm"][0] == 0.06
-    assert body["sweep_continuous"] is True
+    assert body["sweep_mode"] == "slow"  # unattended default cadence
     body = client.put(
         "/api/v1/osa", json={"start_nm": 1550, "stop_nm": 1570, "resolution_nm": 0.1}
     ).json()
@@ -246,13 +246,22 @@ def test_osa_settings_endpoints(client):
 
 
 def test_osa_sweep_endpoint(client):
-    body = client.post("/api/v1/osa/sweep", json={"mode": "stop"}).json()
-    assert body["sweep_continuous"] is False
-    body = client.post("/api/v1/osa/sweep", json={"mode": "continuous"}).json()
-    assert body["sweep_continuous"] is True
-    body = client.post("/api/v1/osa/sweep", json={"mode": "single"}).json()
-    assert body["sweep_continuous"] is False  # single sweep then hold
+    body = client.post("/api/v1/osa/sweep", json={"mode": "fast"}).json()
+    assert body["sweep_mode"] == "fast"
+    assert body["fast_remaining_s"] > 0  # idle-decay countdown is armed
+    body = client.post("/api/v1/osa/sweep", json={"mode": "slow"}).json()
+    assert body["sweep_mode"] == "slow"
+    assert body["fast_remaining_s"] is None
+    # the old instrument-level modes are gone: cadence only
+    assert client.post("/api/v1/osa/sweep", json={"mode": "continuous"}).status_code == 422
     assert client.post("/api/v1/osa/sweep", json={"mode": "bogus"}).status_code == 422
+
+
+def test_osa_spectrum_array_served_from_cache(client):
+    body = client.get("/api/v1/arrays/osa_spectrum").json()
+    assert body["name"] == "osa_spectrum"
+    assert len(body["x"]) == len(body["y"]) == 501
+    assert body["time"]  # grab timestamp rides along for staleness display
 
 
 def test_flattener_slider_endpoints(client):

@@ -87,9 +87,14 @@ class TelemetryLogger(MonitorThread):
                 writer.writerow(["timestamp", "keyword", "value"])
             for name in sorted(snapshot):
                 value = snapshot[name].value
-                if isinstance(value, list):  # arrays don't belong in telemetry
-                    continue
-                writer.writerow([now, name, value])
+                if isinstance(value, list):
+                    # arrays expand to one row per element, e.g.
+                    # LFC_TEMP_TEST2[1] — the GUI-only DAQ thermocouples
+                    # (RF amp, Pritel, ...) had no history before this
+                    for i, element in enumerate(value):
+                        writer.writerow([now, f"{name}[{i}]", element])
+                else:
+                    writer.writerow([now, name, value])
 
 
 def read_telemetry(directory: str | Path, date: str | None = None):

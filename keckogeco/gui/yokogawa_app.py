@@ -7,6 +7,13 @@ directly — the Yokogawa hangs off the second GPIB-USB adapter and is not
 server. Auto-detection deliberately skips board GPIB0: that bus belongs
 to the server's Agilent 86142B.
 
+The instrument is never put into REPEAT sweep (Dan, 2026-07-29): the app
+grabs one SINGLE sweep at a time — "Cont. fast" back-to-back (~17 s per
+sweep at the usual MID sensitivity), "Cont. slow" every 10 minutes —
+so a crash of anything leaves the monochromator parked. Fast drops to
+slow after 30 minutes without keyboard/mouse input, same scheme as the
+server's Agilent sweep manager (``keckogeco/comb/osa_sweeper.py``).
+
 ``--sim`` runs against the driver's canned responses for an offline
 layout check; ``--address GPIB1::1::INSTR`` skips auto-detection.
 """
@@ -24,9 +31,12 @@ from pathlib import Path
 if __package__ in (None, ""):  # run as a bare file (VSCode Run button)
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from keckogeco.comb.osa_sweeper import FAST_IDLE_TIMEOUT_S, SLOW_PERIOD_S  # noqa: E402
+
 __all__ = ["main"]
 
-POLL_MS_DEFAULT = 1000
+#: wait after a failed grab before trying again
+RETRY_S = 10.0
 #: default plot Y limits (dBm); fixed, not autoscaled, because the OSA
 #: reports unmeasured trace points as -210 dBm
 YLIM_DEFAULT = (-70.0, 0.0)
@@ -73,21 +83,28 @@ def _make_worker_class():
 
     class OsaWorker(QThread):
         """Owns the instrument: all I/O happens on this thread, the GUI
-        thread only enqueues callables and consumes signals."""
+        thread only enqueues callables and consumes signals.
+
+        Acquisition is a fast/slow/stopped single-grab state machine —
+        the instrument is only ever triggered for SINGLE sweeps. Any
+        queued command aborts the sweep in progress, so the GUI never
+        waits ~17 s for a settings change to land."""
 
         sig_connected = pyqtSignal(str, str)  # idn, address
         sig_disconnected = pyqtSignal()
         sig_trace = pyqtSignal(object, object)  # wavelength_nm, power_dBm
         sig_status = pyqtSignal(dict)
         sig_error = pyqtSignal(str)
+        sig_acq = pyqtSignal(str, str)  # mode, human-readable note
 
-        def __init__(self, sim: bool, poll_ms: int):
+        def __init__(self, sim: bool):
             super().__init__()
             self._sim = sim
-            self._poll_s = max(poll_ms, 200) / 1000
             self._commands: queue.Queue = queue.Queue()
             self._stop_event = threading.Event()
             self._osa = None
+            self._mode = "slow"  # worker-thread-owned after start()
+            self._next_grab = 0.0
 
         # ------------------------------------------------- GUI-thread API
 
@@ -100,6 +117,10 @@ def _make_worker_class():
         def disconnect_osa(self) -> None:
             self.submit(self._do_disconnect)
 
+        def set_mode(self, mode: str) -> None:
+            """Select the grab cadence: "fast", "slow" or "stopped"."""
+            self.submit(lambda: self._do_set_mode(mode))
+
         def apply(self, setter, label: str) -> None:
             """Run a driver call, then refresh status so the GUI shows what
             the instrument actually accepted (it coerces bad values)."""
@@ -110,6 +131,7 @@ def _make_worker_class():
                 except Exception as exc:  # noqa: BLE001 - show, keep polling
                     self.sig_error.emit(f"{label}: {exc}")
                 self._poll_status()
+                self._next_grab = 0.0  # show the new view without waiting
 
             self.submit(_run)
 
@@ -143,6 +165,7 @@ def _make_worker_class():
             self._osa = osa
             self.sig_connected.emit(osa.identity, osa.transport.address)
             self._poll_status()
+            self._do_set_mode("slow")  # grabs once right away, then idles
 
         def _do_disconnect(self) -> None:
             if self._osa is not None:
@@ -151,22 +174,60 @@ def _make_worker_class():
                 self._osa = None
                 self.sig_disconnected.emit()
 
+        def _do_set_mode(self, mode: str) -> None:
+            self._mode = mode
+            if mode == "stopped":
+                if self._osa is not None:
+                    with contextlib.suppress(Exception):
+                        self._osa.abort()
+                self.sig_acq.emit(mode, "acquisition stopped")
+            else:
+                self._next_grab = 0.0  # either button means "spectrum now"
+                self.sig_acq.emit(mode, "")
+
         def _poll_status(self) -> None:
             try:
                 self.sig_status.emit(self._require().status())
             except Exception as exc:  # noqa: BLE001
                 self.sig_error.emit(str(exc))
 
-        def _poll_trace(self) -> None:
-            try:
-                wavelength, power = self._require().get_spectrum("A")
-            except Exception as exc:  # noqa: BLE001
-                self.sig_error.emit(str(exc))
-                return
+        def _emit_trace(self) -> None:
+            wavelength, power = self._osa.get_spectrum("A")
             self.sig_trace.emit(wavelength, power)
 
+        def _grab(self) -> None:
+            """One full single-sweep grab; bails out (sweep aborted) if a
+            command arrives or the app is shutting down mid-sweep."""
+            osa = self._osa
+            try:
+                osa.trigger_single()
+                self.sig_acq.emit(self._mode, "sweeping…")
+                # no trace pulls while sweeping: the AQ6376 holds a
+                # :TRAC:Y? issued during a SINGLE sweep until the sweep
+                # completes (rack-observed 2026-07-29), which would pin
+                # this loop and time out the transport on slow sweeps.
+                # The status event register answers throughout, so the
+                # completion poll (and command-abort check) stays live.
+                while not osa.sweep_done():
+                    if self._stop_event.is_set() or not self._commands.empty():
+                        osa.abort()
+                        return  # command runs next; _next_grab stays due
+                    time.sleep(0.25)
+                self._emit_trace()
+            except Exception as exc:  # noqa: BLE001 - keep the cadence alive
+                self.sig_error.emit(str(exc))
+                self._next_grab = time.monotonic() + RETRY_S
+                self.sig_acq.emit(self._mode, f"grab failed, retrying in {RETRY_S:.0f} s")
+                return
+            if self._mode == "fast":
+                self._next_grab = time.monotonic()
+                self.sig_acq.emit(self._mode, "")
+            else:
+                self._next_grab = time.monotonic() + SLOW_PERIOD_S
+                next_at = time.strftime("%H:%M:%S", time.localtime(time.time() + SLOW_PERIOD_S))
+                self.sig_acq.emit(self._mode, f"next sweep {next_at}")
+
         def run(self) -> None:
-            next_poll = 0.0
             while not self._stop_event.is_set():
                 try:
                     fn = self._commands.get(timeout=0.1)
@@ -180,17 +241,21 @@ def _make_worker_class():
                     except Exception as exc:  # noqa: BLE001 - worker must survive
                         self.sig_error.emit(str(exc))
                     continue
-                if self._osa is not None and time.monotonic() >= next_poll:
-                    self._poll_trace()
-                    next_poll = time.monotonic() + self._poll_s
+                if (
+                    self._osa is not None
+                    and self._mode in ("fast", "slow")
+                    and time.monotonic() >= self._next_grab
+                ):
+                    self._grab()
             self._do_disconnect()
 
     return OsaWorker
 
 
 def _make_window_class():
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import QEvent, Qt, QTimer
     from PyQt6.QtWidgets import (
+        QApplication,
         QCheckBox,
         QComboBox,
         QDoubleSpinBox,
@@ -205,8 +270,9 @@ def _make_window_class():
         QWidget,
     )
 
+    from keckogeco import spectra
     from keckogeco.drivers.yokogawa_osa import YokogawaOSA
-    from keckogeco.gui import prefs, spectra
+    from keckogeco.gui import prefs
     from keckogeco.gui.theme import ACCENT, MUTED, PLOT_BG
 
     class YokogawaWindow(QMainWindow):
@@ -323,16 +389,27 @@ def _make_window_class():
                 )
             )
 
-            # --- sweep + save row
+            # --- sweep + save row (single grabs only, never REPEAT: a
+            # crash must leave the monochromator parked)
             row = QHBoxLayout()
-            for label, mode in (("Single", "SINGLE"), ("Repeat", "REPEAT")):
+            self._sweep_buttons: dict[str, QPushButton] = {}
+            for label, mode, tooltip in (
+                (
+                    "Cont. fast",
+                    "fast",
+                    "single sweeps back-to-back — drops to slow after "
+                    "30 min without keyboard/mouse input",
+                ),
+                ("Cont. slow", "slow", "one sweep every 10 minutes"),
+            ):
                 button = QPushButton(label)
-                button.clicked.connect(
-                    lambda _c, m=mode: self._apply(f"sweep {m}", lambda osa: osa.sweep(m))
-                )
+                button.setToolTip(tooltip)
+                button.clicked.connect(lambda _c, m=mode: self._worker.set_mode(m))
+                self._sweep_buttons[mode] = button
                 row.addWidget(button)
             stop_btn = QPushButton("Stop")
-            stop_btn.clicked.connect(lambda: self._apply("stop sweep", lambda osa: osa.abort()))
+            stop_btn.setToolTip("stop grabbing spectra (aborts the sweep in progress)")
+            stop_btn.clicked.connect(lambda: self._worker.set_mode("stopped"))
             row.addWidget(stop_btn)
             self._mode_label = QLabel("")
             self._mode_label.setStyleSheet(f"color: {MUTED};")
@@ -374,7 +451,35 @@ def _make_window_class():
             worker.sig_disconnected.connect(self._on_disconnected)
             worker.sig_trace.connect(self._on_trace)
             worker.sig_status.connect(self._on_status)
+            worker.sig_acq.connect(self._on_acq)
             worker.sig_error.connect(lambda msg: self.statusBar().showMessage(msg, 10000))
+
+            # fast drops to slow after 30 min without keyboard/mouse
+            # input anywhere in the app (same policy as the server's
+            # Agilent sweep manager; here the check is local because
+            # this process owns the instrument)
+            self._acq_mode = "slow"
+            self._last_user_input = time.monotonic()
+            QApplication.instance().installEventFilter(self)
+            self._idle_timer = QTimer(self)
+            self._idle_timer.setInterval(60_000)
+            self._idle_timer.timeout.connect(self._check_idle)
+            self._idle_timer.start()
+
+        def eventFilter(self, obj, event):  # noqa: N802 - Qt override
+            if event.type() in (QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress):
+                self._last_user_input = time.monotonic()
+            return super().eventFilter(obj, event)
+
+        def _check_idle(self) -> None:
+            if (
+                self._acq_mode == "fast"
+                and time.monotonic() - self._last_user_input >= FAST_IDLE_TIMEOUT_S
+            ):
+                self._worker.set_mode("slow")
+                self.statusBar().showMessage(
+                    "no interaction for 30 min — dropped to one sweep per 10 min", 0
+                )
 
         # ---------------------------------------------------------- slots
 
@@ -397,6 +502,16 @@ def _make_window_class():
                 return
             self._plot.setYRange(ymin, ymax, padding=0)
 
+        def _on_acq(self, mode: str, note: str) -> None:
+            self._acq_mode = mode
+            text = f"acquisition: {mode}"
+            if note:
+                text += f" — {note}"
+            self._mode_label.setText(text)
+            for name, button in self._sweep_buttons.items():
+                active = name == mode
+                button.setStyleSheet(f"color: {ACCENT}; font-weight: bold;" if active else "")
+
         def _on_connected(self, idn: str, address: str) -> None:
             self._connect_btn.setText("Disconnect")
             self._addr.setText(address)
@@ -411,6 +526,9 @@ def _make_window_class():
             self.statusBar().showMessage("disconnected", 5000)
 
         def _on_trace(self, wavelength, power) -> None:
+            # complete spectra only: the worker never pulls mid-sweep (the
+            # AQ6376 holds trace queries during a SINGLE sweep), so the
+            # old REPEAT-mode sweep-front marker is gone with the mode
             self._last_trace = (wavelength, power)
             if self._curve is not None:
                 self._curve.setData(wavelength, power)
@@ -430,7 +548,12 @@ def _make_window_class():
                 self._res.setCurrentText(f"{status['resolution_nm']:g}")
             if not self._sens.hasFocus():
                 self._sens.setCurrentText(status["sensitivity"])
-            self._mode_label.setText(f"sweep: {status['sweep_mode']}")
+            # the OSA's level unit may be plain power or spectral density
+            unit = status.get("power_unit", "dBm")
+            if self._plot is not None:
+                self._plot.setLabel("left", f"power ({unit})")
+            for box in (self._ymin, self._ymax):
+                box.setSuffix(f" {unit}")
 
         def _spectra_dir(self) -> Path:
             directory = prefs.GUI_CONFIG_PATH.parent.parent / "spectra"
@@ -536,7 +659,6 @@ def main(argv: list[str] | None = None) -> int:
         help="VISA resource (e.g. GPIB1::1::INSTR); blank auto-detects on GPIB boards 1+",
     )
     parser.add_argument("--sim", action="store_true", help="run against canned responses")
-    parser.add_argument("--poll", type=int, default=POLL_MS_DEFAULT, help="trace poll period in ms")
     args = parser.parse_args(argv)
 
     from PyQt6.QtWidgets import QApplication
@@ -545,7 +667,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication(sys.argv[:1])
     apply_dark_theme(app)
-    worker = _make_worker_class()(sim=args.sim, poll_ms=args.poll)
+    worker = _make_worker_class()(sim=args.sim)
     window = _make_window_class()(worker, args.address)
     worker.start()
     worker.connect_osa(args.address)  # auto-connect so Run-button launch just works

@@ -126,6 +126,20 @@ class Agilent86142B(Instrument):
         self.write("INIT:CONT 0")
         self.write("INIT:IMM")
 
+    def grab_single(self, trace: str = "A") -> tuple[np.ndarray, np.ndarray]:
+        """Trigger one sweep, wait for it to finish, return the fresh trace.
+
+        ``*OPC?`` blocks until the overlapped ``INIT:IMM`` completes, so the
+        returned spectrum is never a partially-written buffer. The driver
+        lock is held across the whole grab so a concurrent settings write
+        can't land mid-sweep. The transport timeout bounds the wait — a
+        sweep slower than that raises instead of hanging forever.
+        """
+        with self.lock:
+            self.trigger_single()
+            self.query("*OPC?")
+            return self.get_spectrum(trace)
+
     # -------------------------------------------------------------- traces
 
     #: one GPIB read covers the whole trace message (the read ends at EOI,
@@ -218,6 +232,7 @@ class Agilent86142B(Instrument):
             "INIT:CONT?": lambda _: state["cont"],
             re.compile(r"INIT:CONT ([01])$"): set_state("cont"),
             "INIT:IMM": "",
+            "*OPC?": "1",
             "DISP:WIND:TRAC:Y:SCAL:RLEV?": lambda _: state["rlev"],
             re.compile(r"TRAC:DATA:Y\? TR\w$"): trace,
             "FORM REAL,32": "",

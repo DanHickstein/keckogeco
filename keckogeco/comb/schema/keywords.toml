@@ -109,7 +109,7 @@ help = "Comb repetition rate measured by the Pendulum counter (channel C, 0.1 s 
 [LFC_REPRATE_REF]
 type = "string"
 writable = false
-help = "Pendulum counter timebase in use (EXT = rear 10 MHz from the Rb standard, INT = free-running internal)"
+help = "Pendulum counter reference selection (:ROSC:SOUR?, forced to EXT = rear 10 MHz from the Rb standard at connect; INT or AUTO = the force failed and the reading can't be trusted)"
 
 [LFC_RBCLOCK_PHASELOCK]
 type = "boolean"

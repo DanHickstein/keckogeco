@@ -82,6 +82,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["T20"]
 "docs/*" = ["T20"]
+"scripts/*" = ["T20"]  # standalone analysis scripts report to the console
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

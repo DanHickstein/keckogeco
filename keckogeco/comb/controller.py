@@ -31,6 +31,7 @@ from . import state as state_mod
 from .actions import ActionExecutor
 from .keywords import KeywordRegistry
 from .monitors import Heartbeat, TelemetryLogger
+from .osa_sweeper import OsaSweeper
 from .state import CombState, SubsystemStatus
 
 __all__ = ["LFCController"]
@@ -63,6 +64,9 @@ class LFCController:
         self.im_scan_points: list[tuple[float, float]] = []
         # (monotonic time, Hz) of the last gated Pendulum measurement
         self._rep_rate_cache: tuple[float, float] | None = None
+        # single-sweep acquisition manager, created at start() if the OSA
+        # is online (never sweep continuously — a crash must park the OSA)
+        self.osa_sweeper: OsaSweeper | None = None
         self._started = False
 
     # ------------------------------------------------------------ lifecycle
@@ -92,6 +96,16 @@ class LFCController:
     def _start_monitors(self) -> None:
         self.heartbeat = Heartbeat(self.registry)
         self.monitors.append(self.heartbeat)
+        if "osa" in self.devices:
+            spectra_s = self.config.logging.spectra_s
+            kwargs = {}
+            if spectra_s > 0:  # 0 keeps the sweep cadence but logs nothing
+                kwargs = {
+                    "log_dir": Path(self.config.logging.dir) / "spectra",
+                    "log_period_s": spectra_s,
+                }
+            self.osa_sweeper = OsaSweeper(self.device("osa"), **kwargs)
+            self.monitors.append(self.osa_sweeper)
         if self.config.logging.telemetry_s > 0:
             telemetry_dir = Path(self.config.logging.dir) / "telemetry"
             self.monitors.append(
@@ -104,6 +118,7 @@ class LFCController:
         for monitor in self.monitors:
             monitor.stop()
         self.monitors.clear()
+        self.osa_sweeper = None
         self.executor.abort()
         self.executor.join(timeout=5)
         for key, device in self.devices.items():
@@ -595,13 +610,12 @@ class LFCController:
         if "osa" in self.devices:
 
             def osa_spectrum() -> dict:
-                wavelength, power = self.device("osa").get_spectrum()
-                return {
-                    "x": wavelength.tolist(),
-                    "y": power.tolist(),
-                    "x_label": "wavelength (nm)",
-                    "y_label": "power (dBm)",
-                }
+                # served from the OsaSweeper cache: array polls cost no
+                # GPIB traffic, and freshness is set by the fast/slow
+                # single-sweep cadence (the OSA never sweeps continuously)
+                if self.osa_sweeper is None:
+                    raise InstrumentError("OSA sweep manager not running")
+                return self.osa_sweeper.latest()
 
             self.arrays["osa_spectrum"] = osa_spectrum
         if "waveshaper1" in self.devices:
@@ -977,4 +991,7 @@ class LFCController:
             "devices_offline": dict(self.offline),
             "action": self.executor.current(),
             "sim": self.sim,
+            # GUIs highlight the active Cont. fast/slow button from here
+            # (the 1 Hz /state poll), so an idle decay shows up promptly
+            "osa_sweep": self.osa_sweeper.info() if self.osa_sweeper else None,
         }

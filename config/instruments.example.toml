@@ -23,6 +23,11 @@ api_token = ""
 # Directory for application logs and telemetry CSVs.
 dir = "logs"
 level = "INFO"
+# Seconds between OSA spectrum log files in <dir>/spectra (0 disables;
+# the fast/slow sweep manager runs either way). Disabled in this example
+# config so tests and sim runs never write into a real logs directory —
+# the production keckogeco.toml omits the key and gets the 600 s default.
+spectra_s = 0
 
 [alerts]
 enabled = false

@@ -27,6 +27,27 @@ class PendulumCNT90(Instrument):
         "read_termination": "\n",
     }
 
+    def _configure(self) -> None:
+        # Force the external 10 MHz reference (issue #48). The counter's
+        # power-up selection is AUTO, and :ROSC:SOUR? reports the
+        # SELECTION, not the timebase in use — AUTO read back identically
+        # whether the counter was on the Rb-disciplined rear input (front
+        # panel EXT REF lit, 2026-07-21) or free-running ~200 Hz off
+        # (2026-07-17). With EXT commanded, the read-back is meaningful.
+        # Note this connect-time force alone is not enough: CONFigure sets
+        # ALL settings back to their *RST values (programmer's handbook
+        # 8-56) and :ROSC:SOUR's *RST value is AUTO (8-100), so
+        # measure_frequency_Hz() re-asserts EXT after every :CONF:FREQ.
+        self.transport.write(":ROSC:SOUR EXT")
+        readback = self.transport.query(":ROSC:SOUR?").strip().upper()
+        if readback != "EXT":
+            self.log.warning(
+                "%s: external 10 MHz reference refused (:ROSC:SOUR? -> %r); "
+                "rep-rate readings are on the internal timebase and cannot be trusted",
+                self.name,
+                readback,
+            )
+
     @property
     def identity(self) -> str:
         return self.query("*IDN?")
@@ -37,11 +58,15 @@ class PendulumCNT90(Instrument):
 
     @property
     def reference_source(self) -> str:
-        """Timebase the counter is using, e.g. ``EXT`` (rear 10 MHz input,
-        Rb-disciplined here) or ``INT``. Reported verbatim from
-        ``:ROSC:SOUR?``. A counter that silently falls back to INT reads
-        ~10 ppb (~200 Hz at 16 GHz) off with every other monitor healthy
-        (seen 2026-07-17), so this is surfaced as LFC_REPRATE_REF."""
+        """Reference selection, reported verbatim from ``:ROSC:SOUR?`` —
+        ``EXT`` (rear 10 MHz input, Rb-disciplined here) after
+        ``_configure()`` forces it; ``INT`` or ``AUTO`` only if that
+        force was refused or never ran. The query reports the selection,
+        not the timebase in use: under AUTO a counter fallen back to
+        internal reads ~10 ppb (~200 Hz at 16 GHz) off with every other
+        monitor healthy (seen 2026-07-17), so this is surfaced as
+        LFC_REPRATE_REF and anything but EXT means the rep rate can't be
+        trusted."""
         return self.query(":ROSC:SOUR?").strip().upper()
 
     def run(self) -> None:
@@ -62,6 +87,10 @@ class PendulumCNT90(Instrument):
             raise ValueError(f"meas_time_s must be within 20 ns .. 1000 s, got {meas_time_s}")
         self.write(f":CONF:FREQ {_CHANNELS[key]}")
         self.write(f":ACQ:APER {meas_time_s}")
+        # :CONF just reset every setting to *RST — including :ROSC:SOUR
+        # back to AUTO — so the external reference must be re-forced here
+        # or the connect-time force lasts exactly one poll (issue #48).
+        self.write(":ROSC:SOUR EXT")
         self.write(":INIT")
         reply = self.query("FETC?")
         try:

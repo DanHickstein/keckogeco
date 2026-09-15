@@ -2,7 +2,7 @@
 
 import pytest
 
-from keckogeco.gui.spectra import load_spectrum_csv, save_spectrum_csv
+from keckogeco.spectra import load_spectrum_csv, save_spectrum_csv
 
 
 def test_roundtrip_with_metadata(tmp_path):

@@ -53,6 +53,10 @@ class YokogawaOSA(Instrument):
         "NORMAL",
     )
 
+    #: Y-axis level units in ``:DISP:TRAC:Y1:SCAL:UNIT?`` reply-index order
+    #: (rack-verified on the AQ6376: reply "2" with the panel in dBm/nm)
+    POWER_UNITS: ClassVar[tuple[str, ...]] = ("dBm", "W", "dBm/nm", "W/nm")
+
     #: sweep modes in ``:INIT:SMOD?`` reply order (1..4)
     SWEEP_MODES: ClassVar[tuple[str, ...]] = ("SINGLE", "REPEAT", "AUTO", "SEGMENT")
     _SMOD_COMMANDS: ClassVar[dict[str, str]] = {
@@ -90,6 +94,25 @@ class YokogawaOSA(Instrument):
     @reference_level_dBm.setter
     def reference_level_dBm(self, level: float) -> None:
         self.write(f":DISP:TRAC:Y1:SCAL:RLEV {float(level):.1f}DBM")
+
+    @property
+    def power_unit(self) -> str:
+        """Y-axis level unit: "dBm", "W", "dBm/nm" or "W/nm" (the /nm pair
+        is the power-spectral-density display mode)."""
+        reply = self.query(":DISP:TRAC:Y1:SCAL:UNIT?")
+        try:
+            return self.POWER_UNITS[int(float(reply))]
+        except (ValueError, IndexError) as exc:
+            raise ResponseError(f"{self.name}: unexpected level-unit reply {reply!r}") from exc
+
+    @power_unit.setter
+    def power_unit(self, unit: str) -> None:
+        wanted = str(unit).strip().lower()
+        for name in self.POWER_UNITS:
+            if wanted == name.lower():
+                self.write(f":DISP:TRAC:Y1:SCAL:UNIT {name.upper()}")
+                return
+        raise ValueError(f"power unit must be one of {self.POWER_UNITS}, got {unit!r}")
 
     @property
     def wl_start_nm(self) -> float:
@@ -191,6 +214,20 @@ class YokogawaOSA(Instrument):
         """Stop the current sweep (front panel's STOP key)."""
         self.write(":ABOR")
 
+    def trigger_single(self) -> None:
+        """Start one sweep, arming ``sweep_done()`` to detect its end."""
+        with self.lock:
+            # reading the operation event register clears a stale
+            # sweep-complete latch from any earlier sweep
+            self.query(":STAT:OPER:EVEN?")
+            self.sweep("SINGLE")
+
+    def sweep_done(self) -> bool:
+        """True once the sweep started by ``trigger_single()`` finished
+        (operation event register bit 0, rack-verified 2026-07-29).
+        Reading clears the latch, so poll from a single owner only."""
+        return bool(int(float(self.query(":STAT:OPER:EVEN?"))) & 1)
+
     # -------------------------------------------------------------- traces
 
     #: one GPIB read covers the whole trace message (the read ends at EOI,
@@ -221,6 +258,7 @@ class YokogawaOSA(Instrument):
             "sensitivity": self.sensitivity,
             "sweep_mode": self.sweep_mode,
             "reference_level_dBm": self.reference_level_dBm,
+            "power_unit": self.power_unit,
         }
 
     # ----------------------------------------------------------------- sim
@@ -236,6 +274,7 @@ class YokogawaOSA(Instrument):
             "res_m": 1e-10,  # 0.1 nm
             "sens": "3",  # HIGH1
             "smod": "2",  # REPEAT
+            "unit": "2",  # dBm/nm (the rack unit's setting as found)
         }
 
         def trace(_):
@@ -289,6 +328,10 @@ class YokogawaOSA(Instrument):
             state["rlev"] = m.group(1)
             return ""
 
+        def set_unit(m):
+            state["unit"] = str([u.upper() for u in cls.POWER_UNITS].index(m.group(1)))
+            return ""
+
         return {
             "*IDN?": "YOKOGAWA,AQ6376,SIM000001,01.00",
             "CFORM1": "",
@@ -304,10 +347,13 @@ class YokogawaOSA(Instrument):
             re.compile(r":SENS:BAND:RES ([\d.]+)NM$"): set_res,
             ":SENS:SENS?": lambda _: state["sens"],
             re.compile(r":SENS:SENS (\w+)$"): set_sens,
+            ":DISP:TRAC:Y1:SCAL:UNIT?": lambda _: state["unit"],
+            re.compile(r":DISP:TRAC:Y1:SCAL:UNIT ([\w/]+)$"): set_unit,
             ":INIT:SMOD?": lambda _: state["smod"],
             re.compile(r":INIT:SMOD (\w+)$"): set_smod,
             ":INIT": "",
             ":ABOR": "",
+            ":STAT:OPER:EVEN?": "1",  # sim sweeps finish instantly
             ":DISP:TRAC:Y1:SCAL:RLEV?": lambda _: state["rlev"],
             re.compile(r":DISP:TRAC:Y1:SCAL:RLEV (-?[\d.]+)DBM$"): set_rlev,
             re.compile(r":TRAC:Y\? TR\w$"): trace,
