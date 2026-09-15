@@ -12,7 +12,7 @@ from typing import ClassVar
 import numpy as np
 
 from .base import Instrument
-from .errors import ResponseError
+from .ieee_block import parse_float32_block
 
 __all__ = ["Agilent86142B"]
 
@@ -147,32 +147,9 @@ class Agilent86142B(Instrument):
             self.write("FORM REAL,32")
             self.write(f"TRAC:DATA:Y? TR{trace}")
             raw = self.read_bytes(self._TRACE_READ_MAX)
-            power = self._parse_trace_block(raw)
+            power = parse_float32_block(raw, self.name)
             wavelength = np.linspace(self.wl_start_nm, self.wl_stop_nm, len(power))
         return wavelength, power
-
-    def _parse_trace_block(self, raw: bytes) -> np.ndarray:
-        """Decode an IEEE-488.2 definite-length block of float32 dBm values."""
-        if not raw.startswith(b"#") or len(raw) < 2:
-            raise ResponseError(f"{self.name}: unparseable trace data {raw[:80]!r}")
-        try:
-            digits = int(raw[1:2])
-            nbytes = int(raw[2 : 2 + digits])
-        except ValueError as exc:
-            raise ResponseError(f"{self.name}: unparseable trace data {raw[:80]!r}") from exc
-        payload = raw[2 + digits : 2 + digits + nbytes]
-        if len(payload) < nbytes or nbytes % 4:
-            raise ResponseError(
-                f"{self.name}: trace block truncated ({len(payload)}/{nbytes} bytes)"
-            )
-        power = np.frombuffer(payload, dtype=">f4").astype(np.float64)
-        # dBm values live within ±210; anything wilder means the instrument
-        # sent little-endian floats and the byte order must be swapped
-        if power.size and (not np.isfinite(power).all() or np.abs(power).max() > 1e3):
-            swapped = np.frombuffer(payload, dtype="<f4").astype(np.float64)
-            if np.isfinite(swapped).all() and np.abs(swapped).max() <= 1e3:
-                power = swapped
-        return power
 
     def status(self) -> dict:
         return {

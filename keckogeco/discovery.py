@@ -429,7 +429,8 @@ EXPECTED_SERIAL = [
 
 EXPECTED_GPIB = [
     ("pendulum_cnt90", "Pendulum CNT-90 counter (USB-TMC since 2026-07-21)"),
-    ("agilent_86142b", "Agilent 86142B OSA (the only instrument left on GPIB)"),
+    ("agilent_86142b", "Agilent 86142B OSA (the only instrument on GPIB0)"),
+    ("yokogawa_osa", "Yokogawa AQ63xx OSA (second GPIB adapter, standalone GUI for now)"),
     ("keysight_fg33500", "Keysight 33500-series function generator (USB-TMC)"),
     ("tds2024c", "Tektronix TDS2024C oscilloscope (USB-TMC)"),
 ]
@@ -458,6 +459,7 @@ GPIB_SIGNATURES = [
     ("33500", "Keysight 33500-series function generator", "keysight_fg33500"),
     ("33512", "Keysight 33512B function generator", "keysight_fg33500"),
     ("86142", "Agilent 86142B OSA", "agilent_86142b"),
+    ("AQ63", "Yokogawa AQ63xx OSA", "yokogawa_osa"),
     ("TDS 2024C", "Tektronix TDS2024C oscilloscope", "tds2024c"),
 ]
 

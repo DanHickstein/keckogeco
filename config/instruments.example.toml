@@ -141,6 +141,16 @@ driver = "agilent_86142b"
 address = "GPIB0::30::INSTR"
 name = "Agilent 86142B OSA"
 
+# Second OSA on its own GPIB-USB adapter (board 1). Driven by the
+# standalone keckogeco/gui/yokogawa_app.py for now, so keep it disabled
+# here until it is folded into the server (then also restore the
+# per-GPIB-board VISA lock -- see AGENTS.md).
+[devices.osa_yokogawa]
+driver = "yokogawa_osa"
+address = "GPIB1::1::INSTR"
+name = "Yokogawa AQ63xx OSA"
+enabled = false
+
 # Three OZ Optics VOAs (1310 / 1550 / 2000 nm units). Which port is which
 # wavelength is not yet known, so keep neutral (e.g. unit-serial-based) keys.
 # Once a unit is identified, rename its block to voa1310/voa1550/voa2000 --
