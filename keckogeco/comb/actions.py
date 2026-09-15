@@ -190,6 +190,7 @@ def _pritel_up(controller, ctx: ActionContext) -> None:
     ctx.sleep(0.5)
     ctx.step("Pritel pump ON")
     ptamp.set_pump(True)
+    controller._clear_temp_trip()  # turning a heat source back on acknowledges a temp trip
     ctx.sleep(0.5)
     ctx.step("Pritel power amp -> 3.9 A (ramped)")
     ptamp.set_pwramp_mA(3900, abort_check=ctx.aborting)
@@ -224,6 +225,7 @@ def minicomb_auto_setup(controller, ctx: ActionContext) -> None:
     ctx.sleep(0.5)
     ctx.step("RF amplifier supply output ON")
     rf_amp.set_output(True, channel)
+    controller._clear_temp_trip()  # turning a heat source back on acknowledges a temp trip
     ctx.sleep(0.3)
 
     ctx.step("RF oscillator supply: 15 V / 3 A")

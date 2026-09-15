@@ -30,7 +30,7 @@ from ..drivers.errors import InstrumentError
 from . import state as state_mod
 from .actions import ActionExecutor
 from .keywords import KeywordRegistry
-from .monitors import Heartbeat, TelemetryLogger
+from .monitors import Heartbeat, InterlockChannel, TelemetryLogger, TempInterlock
 from .osa_sweeper import OsaSweeper
 from .state import CombState, SubsystemStatus
 
@@ -67,6 +67,8 @@ class LFCController:
         # single-sweep acquisition manager, created at start() if the OSA
         # is online (never sweep continuously — a crash must park the OSA)
         self.osa_sweeper: OsaSweeper | None = None
+        # glycol-failure interlock, created at start() if a DAQ is online
+        self.temp_interlock: TempInterlock | None = None
         self._started = False
 
     # ------------------------------------------------------------ lifecycle
@@ -111,6 +113,33 @@ class LFCController:
             self.monitors.append(
                 TelemetryLogger(self.registry, telemetry_dir, self.config.logging.telemetry_s)
             )
+        # over-temperature interlock on the two glycol-cooled heat sources
+        # (2026-08-15 glycol outage); watches whichever boards are online
+        channels = []
+        if "daq" in self.devices:
+            channels.append(
+                InterlockChannel(
+                    "Pritel",
+                    lambda: self.device("daq").temperature_C(self.PRITEL_TC_CHANNEL),
+                    self.PRITEL_NOMINAL_C,
+                )
+            )
+        if "daq_eocb" in self.devices:
+            channels.append(
+                InterlockChannel(
+                    "RF amplifier",
+                    lambda: self.device("daq_eocb").temperature_C(self.RFAMP_TC_CHANNEL),
+                    self.RFAMP_NOMINAL_C,
+                )
+            )
+        if channels:
+            self.temp_interlock = TempInterlock(
+                channels,
+                self._temp_interlock_shutdown,
+                delta_C=self.TEMP_INTERLOCK_DELTA_C,
+                hold_s=self.TEMP_INTERLOCK_HOLD_S,
+            )
+            self.monitors.append(self.temp_interlock)
         for monitor in self.monitors:
             monitor.start()
 
@@ -119,6 +148,7 @@ class LFCController:
             monitor.stop()
         self.monitors.clear()
         self.osa_sweeper = None
+        self.temp_interlock = None
         self.executor.abort()
         self.executor.join(timeout=5)
         for key, device in self.devices.items():
@@ -227,7 +257,7 @@ class LFCController:
             bind(
                 "LFC_PTAMP_ONOFF",
                 getter=lambda: self.device("ptamp").pump_on,
-                setter=lambda v: self.device("ptamp").set_pump(v),
+                setter=self._set_ptamp_pump,
                 device="ptamp",
             )
         if has("arduino_relay"):
@@ -277,7 +307,7 @@ class LFCController:
             bind(
                 f"{kw}_ONOFF",
                 getter=lambda d=dev_key, c=channel: self.device(d).output_on(c),
-                setter=lambda v, d=dev_key, c=channel: self.device(d).set_output(v, c),
+                setter=lambda v, d=dev_key, c=channel: self._set_psu_output(d, c, v),
                 device=dev_key,
             )
             bind(
@@ -670,6 +700,55 @@ class LFCController:
     #: rack thermocouple alarm level for LFC_TEMP_MONITOR
     RACK_TEMP_MAX_C: ClassVar[float] = 40.0
 
+    # --- over-temperature interlock (Dan, 2026-09-15, after the 2026-08-15
+    # glycol outage): more than DELTA over nominal for HOLD seconds shuts
+    # down the Pritel and the RF amplifier; everything else stays running.
+    # Nominals are the 2026-07-19 closed-door baselines (same numbers as
+    # the GUI's _THERMO_PANELS); channels per the Jun-2023 commissioning
+    # map (drivers/usb2408.DEFAULT_POSITIONS).
+    TEMP_INTERLOCK_DELTA_C: ClassVar[float] = 8.0
+    TEMP_INTERLOCK_HOLD_S: ClassVar[float] = 30.0
+    #: rack DAQ ch3 = "Pritel (middle upper rack)"
+    PRITEL_TC_CHANNEL: ClassVar[int] = 3
+    PRITEL_NOMINAL_C: ClassVar[float] = 33.9
+    #: optical-table DAQ ch1 = "RF amplifier"
+    RFAMP_TC_CHANNEL: ClassVar[int] = 1
+    RFAMP_NOMINAL_C: ClassVar[float] = 48.2
+
+    def _set_ptamp_pump(self, on: bool) -> None:
+        self.device("ptamp").set_pump(on)
+        if on:  # only after a confirmed turn-on (set_pump raises on refusal)
+            self._clear_temp_trip()
+
+    def _set_psu_output(self, dev_key: str, channel: int, on: bool) -> None:
+        self.device(dev_key).set_output(on, channel)
+        if on and dev_key == "rf_amp_psu":
+            self._clear_temp_trip()
+
+    def _clear_temp_trip(self) -> None:
+        """Turning a shut-down heat source back on acknowledges the trip:
+        the GUI message clears and the interlock starts a fresh countdown
+        (it can trip again if temperatures are still high)."""
+        if self.temp_interlock is not None:
+            self.temp_interlock.clear_trip()
+
+    def _temp_interlock_shutdown(self, reason: str) -> None:
+        """Cut the two big heat sources; the rest of the comb stays up."""
+        for label, off in (
+            ("Pritel pump", lambda: self.device("ptamp").set_pump(False)),
+            (
+                "RF amplifier supply",
+                lambda: self.device("rf_amp_psu").set_output(
+                    False, self.psu_channel("rf_amp_psu")
+                ),
+            ),
+        ):
+            try:
+                off()
+                log.critical("temp interlock: %s switched OFF", label)
+            except Exception as exc:  # noqa: BLE001 - always attempt both shutdowns
+                log.critical("temp interlock: FAILED to switch %s off: %s", label, exc)
+
     def _edfa_default(self, key: str, mode: str, setpoint: float, turn_on: bool = False) -> None:
         """Push the commissioned EDFA setpoint (and optionally emit)."""
         edfa = self.device(key)
@@ -994,4 +1073,6 @@ class LFCController:
             # GUIs highlight the active Cont. fast/slow button from here
             # (the 1 Hz /state poll), so an idle decay shows up promptly
             "osa_sweep": self.osa_sweeper.info() if self.osa_sweeper else None,
+            # GUIs surface a trip (and its reason) from the 1 Hz /state poll
+            "temp_interlock": self.temp_interlock.info() if self.temp_interlock else None,
         }

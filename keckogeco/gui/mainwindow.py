@@ -165,6 +165,11 @@ _THERMO_PANELS = (
 #: deviation from a channel's baseline that turns its readout red/blue
 _TEMP_TOLERANCE_C = 3.0
 
+#: style for the temp-interlock warning/trip message (the ThermoArray's
+#: hot-channel red) and for the quiet "Temps okay" line
+_TEMP_ALERT_STYLE = "color: #e05252; font-weight: bold;"
+_TEMP_OKAY_STYLE = "color: #8b96a5;"
+
 #: readout styles for the laptop's absolute temperature bands
 #: (temp_state in gui/laptop.py; "ok" stays plain)
 _LAPTOP_TEMP_STYLES = {
@@ -1453,7 +1458,9 @@ class MainWindow(QMainWindow):
         the LFC_TEMP_TEST1/2 array keywords (the seven LFC_T_* keywords
         stay bound server-side for KTL; here the full arrays cover them)."""
         box = QGroupBox("Temperatures")
-        row = QHBoxLayout(box)
+        outer = QVBoxLayout(box)
+        row = QHBoxLayout()
+        outer.addLayout(row)
         # the laptop lives in the rack, so its hottest ACPI zone shows as
         # an extra row of the Rack column (a third column cost too much
         # width — Dan, 2026-07-18). Fed by the local health thread
@@ -1492,6 +1499,21 @@ class MainWindow(QMainWindow):
                 column.addLayout(grid)
             column.addStretch(1)
             row.addLayout(column, stretch=1)
+        # server-side over-temperature interlock status (bottom right),
+        # driven from the 1 Hz /state poll — see _update_temp_interlock
+        self._temp_interlock_label = QLabel("")
+        self._temp_interlock_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._temp_interlock_label.setWordWrap(True)
+        self._temp_interlock_label.setToolTip(
+            "Server-side over-temperature interlock: if the Pritel or the "
+            "RF-amplifier thermocouple stays above its limit (nominal + "
+            "allowed rise) for the hold time, the server shuts both of them "
+            "down; everything else keeps running. Turning the Pritel or the "
+            "RF amplifier back on clears a trip message."
+        )
+        outer.addWidget(self._temp_interlock_label)
         return box
 
     def _osa_panel(self) -> QGroupBox:
@@ -2124,6 +2146,7 @@ class MainWindow(QMainWindow):
             self._osa_sweep_mode = osa_sweep.get("sweep_mode")
             if self._osa_controls is not None:
                 self._osa_controls.set_sweep(self._osa_sweep_mode)
+        self._update_temp_interlock(state.get("temp_interlock"))
         for key, lamp in self.subsystem_lamps.items():
             if key in ("im_lock", "interlock"):
                 continue  # driven from the keyword snapshot instead
@@ -2153,6 +2176,38 @@ class MainWindow(QMainWindow):
             # the final ✓/❌ shows once, then times out
             self.statusBar().showMessage(text, 0 if action.get("running") else 8000)
         self._action_status_shown = text
+
+    def _update_temp_interlock(self, info) -> None:
+        """Status line under the Temperatures panel: the server's
+        over-temperature interlock (Pritel / RF amplifier), three states —
+        quiet "Temps okay", a red countdown while a channel is over its
+        limit, and a persistent shutdown notice after a trip (cleared by
+        turning the Pritel or the RF amplifier back on)."""
+        label = self._temp_interlock_label
+        if not isinstance(info, dict):
+            label.setText("")  # no DAQ online: the interlock is not running
+            label.setStyleSheet("")
+            return
+        last_trip = info.get("last_trip")
+        over = [ch for ch in info.get("channels", []) if ch.get("over_s") is not None]
+        if last_trip:
+            names = " + ".join(ch["name"] for ch in last_trip["channels"])
+            worst = max(last_trip["channels"], key=lambda ch: ch["max_temp_C"] - ch["limit_C"])
+            label.setText(
+                f"System shut down due to {names} over temp "
+                f"({worst['max_temp_C']:.1f} °C max temp, above the "
+                f"threshold of {worst['limit_C']:.1f} °C)"
+            )
+            label.setStyleSheet(_TEMP_ALERT_STYLE)
+        elif over:
+            names = " + ".join(ch["name"] for ch in over)
+            hold_s = float(info.get("hold_s", 30.0))
+            remaining = max(0.0, hold_s - max(ch["over_s"] for ch in over))
+            label.setText(f"{names} over temp. Shutdown in {remaining:.0f} s.")
+            label.setStyleSheet(_TEMP_ALERT_STYLE)
+        else:
+            label.setText("Temps okay")
+            label.setStyleSheet(_TEMP_OKAY_STYLE)
 
     def _on_array(self, name: str, data: dict) -> None:
         if name == "osa_spectrum":

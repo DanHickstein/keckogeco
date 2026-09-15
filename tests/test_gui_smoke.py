@@ -224,6 +224,68 @@ def test_mainwindow_constructs_and_updates(qtbot):
     window.writer.stop()
 
 
+def test_temp_interlock_status_line(qtbot):
+    """The Temperatures panel's bottom-right status line: quiet
+    "Temps okay", a red countdown while a channel is over its limit, and
+    a persistent shutdown notice after a trip (the server drops it when
+    the Pritel or the RF amplifier is turned back on)."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    label = window._temp_interlock_label
+    window._on_state(FakeClient().state())  # no temp_interlock in /state
+    assert label.text() == ""
+
+    def payload(channels, last_trip=None):
+        return {
+            "state": "STANDBY",
+            "temp_interlock": {
+                "tripped": last_trip is not None,
+                "delta_C": 8.0,
+                "hold_s": 30.0,
+                "last_trip": last_trip,
+                "channels": channels,
+            },
+        }
+
+    okay = [
+        {"name": "Pritel", "nominal_C": 33.9, "limit_C": 41.9,
+         "temperature_C": 33.7, "over_s": None},
+        {"name": "RF amplifier", "nominal_C": 48.2, "limit_C": 56.2,
+         "temperature_C": 48.1, "over_s": None},
+    ]
+    window._on_state(payload(okay))
+    assert label.text() == "Temps okay"
+    assert "bold" not in label.styleSheet()
+
+    over = [dict(okay[0]), dict(okay[1], temperature_C=58.9, over_s=12.0)]
+    window._on_state(payload(over))
+    assert label.text() == "RF amplifier over temp. Shutdown in 18 s."
+    assert "#e05252" in label.styleSheet()
+    assert "bold" in label.styleSheet()
+
+    # after the shutdown the notice persists even once temps recover
+    trip = {
+        "at": "2026-09-15 12:00:00",
+        "channels": [{"name": "RF amplifier", "max_temp_C": 59.3, "limit_C": 56.2}],
+    }
+    window._on_state(payload(okay, last_trip=trip))
+    assert label.text() == (
+        "System shut down due to RF amplifier over temp "
+        "(59.3 °C max temp, above the threshold of 56.2 °C)"
+    )
+    assert "#e05252" in label.styleSheet()
+
+    # the server clears last_trip when the Pritel / RF amp is re-enabled
+    window._on_state(payload(okay))
+    assert label.text() == "Temps okay"
+
+    window.poller.stop()
+    window.array_poller.stop()
+    window.writer.stop()
+
+
 def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     """The spectrum panel starts as a placeholder and becomes a live plot
     the first time the server reports the osa_spectrum array."""

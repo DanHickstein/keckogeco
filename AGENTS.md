@@ -86,6 +86,24 @@ comes with a delay.
   Sweep-done detection: Agilent `*OPC?` after `INIT:IMM`; Yokogawa
   `:STAT:OPER:EVEN?` bit 0 (reading clears the latch; rack-verified
   2026-07-29).
+- **Over-temperature interlock (2026-09-15, after the 2026-08-15 glycol
+  outage).** Server-side `TempInterlock` monitor (`comb/monitors.py`,
+  wired in `comb/controller.py`): if the Pritel thermocouple (rack DAQ
+  ch3, nominal 33.9 °C) or the RF-amplifier thermocouple (optical-table
+  DAQ ch1, nominal 48.2 °C) reads more than 8 °C above nominal
+  continuously for 30 s, the server shuts down the Pritel pump
+  (`set_pump(False)`, which also zeroes the stored setpoint) and the RF
+  amplifier's PSU output — everything else stays running. NaN/failed
+  readings never trip and reset the timer (same policy as the rep-rate
+  monitor). The trip latches (shutdown fires once), auto re-arms when
+  both channels are back under their limits, and is reported in `/state`
+  under `temp_interlock`. Thresholds/nominals are ClassVar constants in
+  `LFCController`. The GUI's Temperatures panel shows a status line
+  (bottom right): "Temps okay" → red countdown while over limit → a
+  persistent "System shut down due to ..." notice after a trip. The
+  notice is cleared by turning the Pritel or the RF amplifier back on
+  (keyword write or bring-up action) — which also restarts the hold
+  countdown, so a still-hot system shuts down again 30 s later.
 
 ## Environments
 
