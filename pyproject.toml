@@ -62,8 +62,9 @@ line-length = 100
 target-version = "py311"
 # ktl/ deploys to Keck's kroot hosts whose Python is old and whose code
 # conventions differ (percent formatting, tolerant excepts) - do not
-# lint it against package standards.
-exclude = ["ktl"]
+# lint it against package standards. .claude/ holds AI-assistant prompt
+# docs whose embedded code snippets newer ruff releases format-check.
+exclude = ["ktl", ".claude"]
 
 [tool.ruff.lint]
 select = [
