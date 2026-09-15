@@ -72,6 +72,38 @@ comes with a delay.
   Beware: the transfer curve's amplitude scales with EDFA27 power, and
   at the commissioned 450 mW the lock photodetector clips above ~5.5 V
   (docs/hardware/design.md) — scan at the power you'll operate at.
+- **OSAs are never left sweeping continuously (2026-07-29).** Both the
+  Agilent (server-side `comb/osa_sweeper.py`) and the Yokogawa (standalone
+  GUI) only ever trigger SINGLE sweeps, so a crash of anything leaves the
+  monochromators parked. Two cadences: "Cont. fast" grabs back-to-back
+  (~1 s Agilent, ~17 s Yokogawa at MID) and decays to "Cont. slow" (one
+  sweep per 10 min) after 30 min without user interaction — the main GUI
+  renews fast mode on real key/mouse input, the Yokogawa app checks
+  locally. The server logs the newest Agilent spectrum every 10 min to
+  `logs/spectra/<date>/` (mini-comb history; same CSV format as the GUI
+  Save button, readable by `scripts/plot_spectra.py`).
+  `/arrays/osa_spectrum` serves the sweeper's cache — no GPIB per poll.
+  Sweep-done detection: Agilent `*OPC?` after `INIT:IMM`; Yokogawa
+  `:STAT:OPER:EVEN?` bit 0 (reading clears the latch; rack-verified
+  2026-07-29).
+- **Over-temperature interlock (2026-09-15, after the 2026-08-15 glycol
+  outage).** Server-side `TempInterlock` monitor (`comb/monitors.py`,
+  wired in `comb/controller.py`): if the Pritel thermocouple (rack DAQ
+  ch3, nominal 33.9 °C) or the RF-amplifier thermocouple (optical-table
+  DAQ ch1, nominal 48.2 °C) reads more than 8 °C above nominal
+  continuously for 30 s, the server shuts down the Pritel pump
+  (`set_pump(False)`, which also zeroes the stored setpoint) and the RF
+  amplifier's PSU output — everything else stays running. NaN/failed
+  readings never trip and reset the timer (same policy as the rep-rate
+  monitor). The trip latches (shutdown fires once), auto re-arms when
+  both channels are back under their limits, and is reported in `/state`
+  under `temp_interlock`. Thresholds/nominals are ClassVar constants in
+  `LFCController`. The GUI's Temperatures panel shows a status line
+  (bottom right): "Temps okay" → red countdown while over limit → a
+  persistent "System shut down due to ..." notice after a trip. The
+  notice is cleared by turning the Pritel or the RF amplifier back on
+  (keyword write or bring-up action) — which also restarts the hold
+  countdown, so a still-hot system shuts down again 30 s later.
 
 ## Environments
 

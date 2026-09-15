@@ -84,6 +84,18 @@ def test_sensitivity_enumeration():
         osa.sensitivity = "ULTRA"
 
 
+def test_power_unit():
+    osa = make()
+    assert osa.power_unit == "dBm/nm"  # sim mirrors the rack's as-found PSD mode
+    osa.power_unit = "dbm"  # case-insensitive
+    assert osa.power_unit == "dBm"
+    assert ":DISP:TRAC:Y1:SCAL:UNIT DBM" in osa.transport.sent
+    osa.power_unit = "W/nm"
+    assert osa.power_unit == "W/nm"
+    with pytest.raises(ValueError, match="power unit"):
+        osa.power_unit = "horsepower"
+
+
 def test_sweep_control():
     osa = make()
     assert osa.sweep_mode == "REPEAT"  # sim default
@@ -98,6 +110,16 @@ def test_sweep_control():
         osa.sweep_mode = "WARP"
 
 
+def test_single_grab_handshake():
+    osa = make()
+    osa.trigger_single()
+    sent = osa.transport.sent
+    # the stale sweep-complete latch is cleared before the sweep starts
+    assert sent.index(":STAT:OPER:EVEN?") < sent.index(":INIT")
+    assert ":INIT:SMOD SING" in sent
+    assert osa.sweep_done() is True  # sim sweeps complete instantly
+
+
 def test_status_keys():
     osa = make()
     status = osa.status()
@@ -108,5 +130,7 @@ def test_status_keys():
         "sensitivity",
         "sweep_mode",
         "reference_level_dBm",
+        "power_unit",
     }
     assert status["sweep_mode"] == "REPEAT"
+    assert status["power_unit"] == "dBm/nm"

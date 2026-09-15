@@ -201,6 +201,48 @@ def test_controller_presets_and_monitors(controller):
     assert len(temps) == 8
 
 
+def test_controller_temp_interlock(controller):
+    """The glycol-failure interlock watches both DAQ thermocouples and its
+    trip cuts exactly the Pritel and the RF amplifier — nothing else."""
+    interlock = controller.temp_interlock
+    assert interlock is not None
+    assert {ch.name for ch in interlock.channels} == {"Pritel", "RF amplifier"}
+    interlock._check()  # sim temps (23-27 C) sit well under both limits
+    assert interlock.tripped is False
+    assert controller.state_summary()["temp_interlock"]["tripped"] is False
+
+    controller.write("LFC_PTAMP_ONOFF", "1")
+    controller.write("LFC_RFAMP_ONOFF", "1")
+    controller.write("LFC_RFOSCI_ONOFF", "1")
+    controller.write("LFC_EDFA27_ONOFF", "1")
+    controller._temp_interlock_shutdown("test trip")
+    assert controller.device("ptamp").pump_on is False
+    rf_amp_ch = controller.psu_channel("rf_amp_psu")
+    assert controller.device("rf_amp_psu").output_on(rf_amp_ch) is False
+    # other systems stay running
+    rf_osc_ch = controller.psu_channel("rf_osc_psu")
+    assert controller.device("rf_osc_psu").output_on(rf_osc_ch) is True
+    assert controller.device("edfa27").activation is True
+
+    # a trip is acknowledged (message cleared) by turning either heat
+    # source back on — but not by unrelated keywords like the oscillator
+    def fake_trip():
+        interlock.tripped = True
+        interlock.last_trip = {"at": "t", "channels": []}
+
+    fake_trip()
+    controller.write("LFC_RFOSCI_ONOFF", "1")
+    assert interlock.last_trip is not None
+    controller.write("LFC_PTAMP_ONOFF", "1")
+    assert interlock.last_trip is None
+    fake_trip()
+    controller.write("LFC_RFAMP_ONOFF", "1")
+    assert interlock.last_trip is None
+    fake_trip()
+    controller.write("LFC_PTAMP_ONOFF", "0")  # turning OFF never clears
+    assert interlock.last_trip is not None
+
+
 def test_controller_rep_rate_keyword(controller):
     # RF chain off: NaN (nothing to count; the GUI shows an em dash) —
     # never an error, so the snapshot poll stays cheap with the RF down

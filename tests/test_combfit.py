@@ -108,7 +108,7 @@ def test_fit_pins_phase_sign_from_asymmetry():
 def test_combfit_window_loads_and_fits(qtbot, tmp_path):
     pytest.importorskip("pyqtgraph")
     from keckogeco.gui.combfit import CombFitWindow
-    from keckogeco.gui.spectra import save_spectrum_csv
+    from keckogeco.spectra import save_spectrum_csv
 
     wl, db = synth_spectrum(**TRUTH)
     path = tmp_path / "osa_synthetic.csv"

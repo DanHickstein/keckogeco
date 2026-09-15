@@ -10,8 +10,9 @@ with photodiode + bias strip charts on top, the bias-scan panel in the
 middle (transfer function; only while unlocked), and a mirror of the
 OSA spectrum at the bottom so the comb is visible while adjusting.
 **Spectral Flattener** holds the flattener hardware reachable from this
-laptop — currently just the ND-filter output slider (the SLM flattener
-itself stays on the Menlo laptop, see docs/user_guide/menlo_flattener.md).
+laptop — the ND-filter output slider and the HK output shutter (the SLM
+flattener itself stays on the Menlo laptop, see
+docs/user_guide/menlo_flattener.md).
 **Other** holds the rarely-touched hardware: EDFA13 (out of the light
 path), WaveShaper dispersion, TECs, YJ shutter, VOAs.
 """
@@ -22,8 +23,9 @@ import platform
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -41,8 +43,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .. import spectra
 from ..comb.locking import recommend_lock_point
-from . import prefs, spectra
+from . import prefs
 from .client import ArrayPollThread, KeckogecoClient, PollThread, WriteThread
 from .laptop import TEMP_HOT_C, TEMP_WARN_C, LaptopPollThread, temp_state
 from .theme import ACCENT, MUTED, PLOT_BG, STATE_COLORS
@@ -162,6 +165,11 @@ _THERMO_PANELS = (
 #: deviation from a channel's baseline that turns its readout red/blue
 _TEMP_TOLERANCE_C = 3.0
 
+#: style for the temp-interlock warning/trip message (the ThermoArray's
+#: hot-channel red) and for the quiet "Temps okay" line
+_TEMP_ALERT_STYLE = "color: #e05252; font-weight: bold;"
+_TEMP_OKAY_STYLE = "color: #8b96a5;"
+
 #: readout styles for the laptop's absolute temperature bands
 #: (temp_state in gui/laptop.py; "ok" stays plain)
 _LAPTOP_TEMP_STYLES = {
@@ -185,8 +193,10 @@ class OsaControls(QWidget):
 
     The default view (factory values below, overridden by the user's
     saved ``[osa_defaults]`` in the GUI prefs file) is pushed to the OSA
-    plus continuous sweep when the panel first connects, and again on
-    the Default button; "Save as default" persists the current settings.
+    plus the fast single-sweep cadence when the panel first connects, and
+    again on the Default button; "Save as default" persists the current
+    settings. The OSA never sweeps continuously — the server grabs one
+    sweep at a time (fast/slow), so a crash leaves it parked.
     Controls re-populate from the read-back after every apply, so they
     always show what the instrument accepted; edits go through the
     writer thread.
@@ -254,13 +264,21 @@ class OsaControls(QWidget):
         sweep = QHBoxLayout()
         self._sweep_buttons: dict[str, QPushButton] = {}
         for text, tooltip, mode in (
-            ("Single", "trigger one sweep, then hold it on screen", "single"),
-            ("Cont.", "sweep continuously (the live view)", "continuous"),
-            ("Stop", "", "stop"),
+            (
+                "Cont. fast",
+                "grab single sweeps back-to-back — drops to slow after "
+                "30 min without GUI interaction",
+                "fast",
+            ),
+            (
+                "Cont. slow",
+                "one spectrum every 10 minutes (the unattended cadence; "
+                "spectra are logged to logs/spectra at this rate)",
+                "slow",
+            ),
         ):
             button = QPushButton(text)
-            if tooltip:
-                button.setToolTip(tooltip)
+            button.setToolTip(tooltip)
             button.clicked.connect(lambda _checked, m=mode: self._submit_sweep(m))
             self._sweep_buttons[mode] = button
             sweep.addWidget(button)
@@ -300,13 +318,13 @@ class OsaControls(QWidget):
         self._default_button.setToolTip(
             f"{self.defaults['start_nm']:g}–{self.defaults['stop_nm']:g} nm, "
             f"{self.defaults['resolution_nm']:g} nm resolution, "
-            f"{self.defaults['sensitivity_dBm']:g} dBm sensitivity, continuous sweep"
+            f"{self.defaults['sensitivity_dBm']:g} dBm sensitivity, fast grabs"
         )
 
     def apply_defaults(self) -> None:
         """Push the default mini-comb view to the OSA."""
         self._submit_settings(**self.defaults)
-        self._submit_sweep("continuous")
+        self._submit_sweep("fast")
 
     def current_settings(self) -> dict:
         return {
@@ -355,18 +373,13 @@ class OsaControls(QWidget):
             self.resolution.blockSignals(True)
             self.resolution.setCurrentIndex(index)
             self.resolution.blockSignals(False)
-        self.set_sweep(settings.get("sweep_continuous"))
+        self.set_sweep(settings.get("sweep_mode"))
 
-    def set_sweep(self, continuous) -> None:
-        """Highlight the sweep button matching the instrument state.
-
-        ``continuous`` False lights Stop (a single sweep also ends there:
-        Single is a momentary trigger, not a state); None clears both.
-        """
-        for mode, button in self._sweep_buttons.items():
-            if mode == "single":
-                continue
-            active = continuous is not None and (mode == "continuous") == bool(continuous)
+    def set_sweep(self, mode) -> None:
+        """Highlight the button for the active acquisition cadence
+        ("fast" or "slow"; anything else clears both)."""
+        for name, button in self._sweep_buttons.items():
+            active = mode == name
             button.setStyleSheet(f"color: {ACCENT}; font-weight: bold;" if active else "")
 
 
@@ -762,12 +775,36 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(f"connecting to {client.base_url} ...")
 
+        # keep the OSA's fast cadence alive only while a human is here:
+        # any key/mouse press counts as interaction, and once a minute a
+        # renewal is posted if there was one. The server drops fast->slow
+        # 30 min after the last renewal, so a crashed or abandoned GUI
+        # can't keep the OSA sweeping at full rate.
+        self._osa_sweep_mode: str | None = None
+        self._last_user_input = time.monotonic()
+        QApplication.instance().installEventFilter(self)
+        self._osa_renew_timer = QTimer(self)
+        self._osa_renew_timer.setInterval(60_000)
+        self._osa_renew_timer.timeout.connect(self._renew_osa_fast)
+        self._osa_renew_timer.start()
+
         # laptop health (this machine, not the rack): a local sampling
         # thread, no server involvement — the Laptop tab must keep working
         # while the server is down. Started after the layout exists.
         self.laptop_poller = LaptopPollThread()
         self.laptop_poller.sample_ready.connect(self._on_laptop_sample)
         self.laptop_poller.start()
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt override
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress):
+            self._last_user_input = time.monotonic()
+        return super().eventFilter(obj, event)
+
+    def _renew_osa_fast(self) -> None:
+        """Once a minute: if the OSA is in fast mode and the user touched
+        the GUI since the last check, renew the server's idle timeout."""
+        if self._osa_sweep_mode == "fast" and time.monotonic() - self._last_user_input < 61.0:
+            self._osa_sweep("fast")
 
     # ------------------------------------------------------------- building
 
@@ -932,10 +969,10 @@ class MainWindow(QMainWindow):
         return page
 
     def _flattener_tab(self) -> QWidget:
-        """Flattener hardware reachable from this laptop — for now just
-        the ND-filter output slider. Built whether or not the slider is
-        connected: offline shows as a status line, and commands surface
-        the server's refusal in the status bar."""
+        """Flattener hardware reachable from this laptop — the ND-filter
+        output slider and the HK output shutter. Built whether or not the
+        slider is connected: offline shows as a status line, and commands
+        surface the server's refusal in the status bar."""
         page = QWidget()
         layout = QVBoxLayout(page)
 
@@ -950,6 +987,16 @@ class MainWindow(QMainWindow):
         )
         inner.addWidget(self._flattener_panel)
         layout.addWidget(box)
+
+        shutter_box = QGroupBox(self._title_with_port("HK shutter", "hk_shutter"))
+        shutter_form = QFormLayout(shutter_box)
+        self._add_onoff(
+            shutter_form,
+            "HK shutter",
+            "LFC_HK_SHUTTER",
+            tooltip="ON = open (HK comb passes to the flattener), OFF = closed",
+        )
+        layout.addWidget(shutter_box)
 
         note = QLabel(
             "The SLM flattener itself (Flatten / Filter modes) runs on the Menlo "
@@ -1111,8 +1158,9 @@ class MainWindow(QMainWindow):
     def _pendulum_panel(self) -> QGroupBox:
         """The comb repetition rate, measured — every digit the CNT-90XL
         resolves (LFC_REPRATE; em dash while the RF chain is off) — and
-        the timebase the counter is actually using (green only on EXT,
-        the Rb-disciplined rear 10 MHz input)."""
+        the counter's reference selection (green only on EXT, the
+        Rb-disciplined rear 10 MHz input, which the driver forces at
+        connect)."""
         box = QGroupBox(self._title_with_port("Repetition rate — Pendulum CNT-90XL", "pendulum"))
         layout = QVBoxLayout(box)
         display = PrecisionDisplay(
@@ -1127,11 +1175,14 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
         self._add_lamp_display(
             form,
-            "Timebase",
+            "External Reference",
             "LFC_REPRATE_REF",
             ok=lambda v: str(v).strip().upper() == "EXT",
-            tooltip="green only on EXT — the Rb-disciplined rear 10 MHz input; "
-            "INT means the counter free-runs and the reading can't be trusted",
+            tooltip="green only on EXT — the Rb-disciplined rear 10 MHz input, "
+            "forced by the driver at connect; INT means the counter free-runs, "
+            "and AUTO means the selection was never forced (the counter reports "
+            "its selection, not the timebase in use) — either way the reading "
+            "can't be trusted",
         )
         layout.addLayout(form)
         return box
@@ -1149,17 +1200,18 @@ class MainWindow(QMainWindow):
         self._set_banner("UNKNOWN")
         outer.addWidget(self.state_banner)
 
-        # lamp order per operations: RF chain first, then amplification
+        # lamp order = the operator's turn-on sequence, left to right
         self.subsystem_lamps: dict[str, StatusLamp] = {}
         lamps = QGridLayout()
         lamps.setHorizontalSpacing(6)
         for column, (key, label) in enumerate(
             [
                 ("rf_oscillator", "RF Osc"),
-                ("im_lock", "IM Lock"),  # from LFC_IM_LOCK_MODE, not /state
                 ("rf_amplifier", "RF Amp"),
                 ("edfa27", "EDFA27"),
+                ("im_lock", "IM Lock"),  # from LFC_IM_LOCK_MODE, not /state
                 ("edfa23", "EDFA23"),
+                ("interlock", "Interlock"),  # from LFC_PTAMP_LATCH, not /state
                 ("ptamp", "Pritel"),
             ]
         ):
@@ -1406,7 +1458,9 @@ class MainWindow(QMainWindow):
         the LFC_TEMP_TEST1/2 array keywords (the seven LFC_T_* keywords
         stay bound server-side for KTL; here the full arrays cover them)."""
         box = QGroupBox("Temperatures")
-        row = QHBoxLayout(box)
+        outer = QVBoxLayout(box)
+        row = QHBoxLayout()
+        outer.addLayout(row)
         # the laptop lives in the rack, so its hottest ACPI zone shows as
         # an extra row of the Rack column (a third column cost too much
         # width — Dan, 2026-07-18). Fed by the local health thread
@@ -1445,6 +1499,21 @@ class MainWindow(QMainWindow):
                 column.addLayout(grid)
             column.addStretch(1)
             row.addLayout(column, stretch=1)
+        # server-side over-temperature interlock status (bottom right),
+        # driven from the 1 Hz /state poll — see _update_temp_interlock
+        self._temp_interlock_label = QLabel("")
+        self._temp_interlock_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._temp_interlock_label.setWordWrap(True)
+        self._temp_interlock_label.setToolTip(
+            "Server-side over-temperature interlock: if the Pritel or the "
+            "RF-amplifier thermocouple stays above its limit (nominal + "
+            "allowed rise) for the hold time, the server shuts both of them "
+            "down; everything else keeps running. Turning the Pritel or the "
+            "RF amplifier back on clears a trip message."
+        )
+        outer.addWidget(self._temp_interlock_label)
         return box
 
     def _osa_panel(self) -> QGroupBox:
@@ -1902,7 +1971,8 @@ class MainWindow(QMainWindow):
         if label == "OSA settings":
             self._osa_controls.populate(result)
         elif label == "OSA sweep":
-            self._osa_controls.set_sweep(result.get("sweep_continuous"))
+            self._osa_sweep_mode = result.get("sweep_mode")
+            self._osa_controls.set_sweep(self._osa_sweep_mode)
 
     #: commissioned dispersion, from the old orchestration; also the
     #: initial [wsp] values shipped in config/gui.toml
@@ -2042,6 +2112,14 @@ class MainWindow(QMainWindow):
         if im_lock is not None:
             value = im_lock.get("value")
             self.subsystem_lamps["im_lock"].set_state(None if value is None else bool(value))
+        # so is the interlock lamp: LFC_PTAMP_LATCH enum (1 ready,
+        # 0 tripped-but-resettable, 3/5 photodiode voltage out of window)
+        latch = snapshot.get("LFC_PTAMP_LATCH")
+        if latch is not None:
+            value = latch.get("value")
+            self.subsystem_lamps["interlock"].set_state(
+                {1: True, 0: False, 3: "fault", 5: "fault"}.get(value)
+            )
         volts = snapshot.get("LFC_PTAMP_INTERLOCK_V")
         if volts is not None:
             self._color_interlock_voltage(volts.get("value"))
@@ -2061,8 +2139,16 @@ class MainWindow(QMainWindow):
 
     def _on_state(self, state: dict) -> None:
         self._set_banner(state.get("state", "UNKNOWN"))
+        osa_sweep = state.get("osa_sweep")
+        if isinstance(osa_sweep, dict):
+            # track the server's real cadence (it decays fast->slow on
+            # its own) so the highlight and renewals never go stale
+            self._osa_sweep_mode = osa_sweep.get("sweep_mode")
+            if self._osa_controls is not None:
+                self._osa_controls.set_sweep(self._osa_sweep_mode)
+        self._update_temp_interlock(state.get("temp_interlock"))
         for key, lamp in self.subsystem_lamps.items():
-            if key == "im_lock":
+            if key in ("im_lock", "interlock"):
                 continue  # driven from the keyword snapshot instead
             lamp.set_state(state.get("subsystems", {}).get(key))
         action = state.get("action")
@@ -2090,6 +2176,38 @@ class MainWindow(QMainWindow):
             # the final ✓/❌ shows once, then times out
             self.statusBar().showMessage(text, 0 if action.get("running") else 8000)
         self._action_status_shown = text
+
+    def _update_temp_interlock(self, info) -> None:
+        """Status line under the Temperatures panel: the server's
+        over-temperature interlock (Pritel / RF amplifier), three states —
+        quiet "Temps okay", a red countdown while a channel is over its
+        limit, and a persistent shutdown notice after a trip (cleared by
+        turning the Pritel or the RF amplifier back on)."""
+        label = self._temp_interlock_label
+        if not isinstance(info, dict):
+            label.setText("")  # no DAQ online: the interlock is not running
+            label.setStyleSheet("")
+            return
+        last_trip = info.get("last_trip")
+        over = [ch for ch in info.get("channels", []) if ch.get("over_s") is not None]
+        if last_trip:
+            names = " + ".join(ch["name"] for ch in last_trip["channels"])
+            worst = max(last_trip["channels"], key=lambda ch: ch["max_temp_C"] - ch["limit_C"])
+            label.setText(
+                f"System shut down due to {names} over temp "
+                f"({worst['max_temp_C']:.1f} °C max temp, above the "
+                f"threshold of {worst['limit_C']:.1f} °C)"
+            )
+            label.setStyleSheet(_TEMP_ALERT_STYLE)
+        elif over:
+            names = " + ".join(ch["name"] for ch in over)
+            hold_s = float(info.get("hold_s", 30.0))
+            remaining = max(0.0, hold_s - max(ch["over_s"] for ch in over))
+            label.setText(f"{names} over temp. Shutdown in {remaining:.0f} s.")
+            label.setStyleSheet(_TEMP_ALERT_STYLE)
+        else:
+            label.setText("Temps okay")
+            label.setStyleSheet(_TEMP_OKAY_STYLE)
 
     def _on_array(self, name: str, data: dict) -> None:
         if name == "osa_spectrum":

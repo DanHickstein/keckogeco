@@ -22,8 +22,8 @@ sensitivity_dBm = -60.0
 setpoint_mA = 80.0
 
 [wsp]
-gdd_ps_nm = 2.07
-tod_ps_nm2 = -0.14
+gdd_ps_nm = 2.04
+tod_ps_nm2 = -0.23
 center_nm = 1559.8
 
 [osa_reference]
@@ -36,5 +36,5 @@ bias_start = 3.3
 csv = "C:/kecklfc/keckogeco/spectra/im_scan_2026-07-17_113136.csv"
 
 [yokogawa_reference]
-csv = "C:/kecklfc/keckogeco/spectra/yokogawa_2026-07-22_114055 - Octave Hexagon Hero, 4 watts.csv"
+csv = "C:/kecklfc/keckogeco/spectra/yokogawa_2026-07-23_091727 - hexagon hero, 4.1A, with 10 dB atten.csv"
 show = true

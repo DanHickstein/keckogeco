@@ -76,7 +76,9 @@ class FakeClient:
             "wl_stop_nm": 1568.0,
             "resolution_nm": 0.1,
             "sensitivity_dBm": -70.0,
-            "sweep_continuous": True,
+            "sweep_mode": "slow",
+            "spectrum_time": "2026-07-29T12:00:00",
+            "fast_remaining_s": None,
             "resolutions_nm": [0.06, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0],
         }
 
@@ -94,7 +96,7 @@ class FakeClient:
         return base
 
     def osa_sweep(self, mode):
-        return {"mode": mode, "sweep_continuous": mode == "continuous"}
+        return {"sweep_mode": mode, "spectrum_time": None, "fast_remaining_s": None}
 
     def interlock(self):
         return {
@@ -222,6 +224,78 @@ def test_mainwindow_constructs_and_updates(qtbot):
     window.writer.stop()
 
 
+def test_temp_interlock_status_line(qtbot):
+    """The Temperatures panel's bottom-right status line: quiet
+    "Temps okay", a red countdown while a channel is over its limit, and
+    a persistent shutdown notice after a trip (the server drops it when
+    the Pritel or the RF amplifier is turned back on)."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    label = window._temp_interlock_label
+    window._on_state(FakeClient().state())  # no temp_interlock in /state
+    assert label.text() == ""
+
+    def payload(channels, last_trip=None):
+        return {
+            "state": "STANDBY",
+            "temp_interlock": {
+                "tripped": last_trip is not None,
+                "delta_C": 8.0,
+                "hold_s": 30.0,
+                "last_trip": last_trip,
+                "channels": channels,
+            },
+        }
+
+    okay = [
+        {
+            "name": "Pritel",
+            "nominal_C": 33.9,
+            "limit_C": 41.9,
+            "temperature_C": 33.7,
+            "over_s": None,
+        },
+        {
+            "name": "RF amplifier",
+            "nominal_C": 48.2,
+            "limit_C": 56.2,
+            "temperature_C": 48.1,
+            "over_s": None,
+        },
+    ]
+    window._on_state(payload(okay))
+    assert label.text() == "Temps okay"
+    assert "bold" not in label.styleSheet()
+
+    over = [dict(okay[0]), dict(okay[1], temperature_C=58.9, over_s=12.0)]
+    window._on_state(payload(over))
+    assert label.text() == "RF amplifier over temp. Shutdown in 18 s."
+    assert "#e05252" in label.styleSheet()
+    assert "bold" in label.styleSheet()
+
+    # after the shutdown the notice persists even once temps recover
+    trip = {
+        "at": "2026-09-15 12:00:00",
+        "channels": [{"name": "RF amplifier", "max_temp_C": 59.3, "limit_C": 56.2}],
+    }
+    window._on_state(payload(okay, last_trip=trip))
+    assert label.text() == (
+        "System shut down due to RF amplifier over temp "
+        "(59.3 °C max temp, above the threshold of 56.2 °C)"
+    )
+    assert "#e05252" in label.styleSheet()
+
+    # the server clears last_trip when the Pritel / RF amp is re-enabled
+    window._on_state(payload(okay))
+    assert label.text() == "Temps okay"
+
+    window.poller.stop()
+    window.array_poller.stop()
+    window.writer.stop()
+
+
 def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     """The spectrum panel starts as a placeholder and becomes a live plot
     the first time the server reports the osa_spectrum array."""
@@ -251,7 +325,8 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     assert controls is not None
     assert controls.sensitivity.spin.minimum() == -90.0  # the 86142B's floor
     qtbot.waitUntil(lambda: controls.start.spin.value() == 1550.0)
-    qtbot.waitUntil(lambda: "bold" in controls._sweep_buttons["continuous"].styleSheet())
+    # connecting selects the fast single-grab cadence (never continuous)
+    qtbot.waitUntil(lambda: "bold" in controls._sweep_buttons["fast"].styleSheet())
     assert controls.stop.spin.value() == 1570.0
     assert controls.sensitivity.spin.value() == -60.0
     assert controls.resolution.currentData() == 0.06
@@ -260,11 +335,15 @@ def test_osa_plot_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch):
     assert controls.start.spin.value() == 1552.0
     assert controls.sensitivity.spin.value() == -70.0
     assert controls.resolution.currentData() == 0.1
-    # sweep-state indication follows the instrument, single ends stopped
-    window._on_call_done("OSA sweep", {"mode": "single", "sweep_continuous": False})
-    assert "bold" in controls._sweep_buttons["stop"].styleSheet()
-    assert controls._sweep_buttons["continuous"].styleSheet() == ""
-    assert controls._sweep_buttons["single"].styleSheet() == ""
+    # sweep-state indication follows the server's cadence, including the
+    # automatic fast->slow idle decay arriving via /state
+    window._on_call_done("OSA sweep", {"sweep_mode": "slow"})
+    assert "bold" in controls._sweep_buttons["slow"].styleSheet()
+    assert controls._sweep_buttons["fast"].styleSheet() == ""
+    assert window._osa_sweep_mode == "slow"
+    window._on_state({"state": "STANDBY", "osa_sweep": {"sweep_mode": "fast"}})
+    assert "bold" in controls._sweep_buttons["fast"].styleSheet()
+    assert window._osa_sweep_mode == "fast"
 
     # --- save the live spectrum: dialog prefilled with a datetime name
     from PyQt6.QtWidgets import QFileDialog
@@ -393,7 +472,7 @@ def test_im_scan_panel_wires_up_when_array_appears(qtbot, tmp_path, monkeypatch)
     assert servo.intg.spin.value() == 0.1
 
     # the reference calibration overlay restores from prefs (OSA pattern)
-    from keckogeco.gui import spectra as spectra_mod
+    from keckogeco import spectra as spectra_mod
 
     ref_csv = tmp_path / "im_ref.csv"
     spectra_mod.save_spectrum_csv(ref_csv, [-1.0, 1.0], [0.2, 0.8], {})
@@ -628,6 +707,39 @@ def test_pritel_panel_setpoints_and_interlock_lamp(qtbot):
     for tripped in (0, 3, 5, 4):
         window._on_keywords({"LFC_PTAMP_LATCH": {"value": tripped}})
         assert "#3a4350" in latch.lamp.styleSheet()  # anything else -> grey
+
+
+def test_comb_state_lamps_follow_turn_on_order(qtbot):
+    """The top lamps read left to right in the order the operator turns
+    things on, and the Interlock lamp is driven from LFC_PTAMP_LATCH
+    (green ready, grey resettable, red voltage out of window) — never
+    overwritten by the /state poll."""
+    from keckogeco.gui.mainwindow import MainWindow
+
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    assert list(window.subsystem_lamps) == [
+        "rf_oscillator",
+        "rf_amplifier",
+        "edfa27",
+        "im_lock",
+        "edfa23",
+        "interlock",
+        "ptamp",
+    ]
+    lamp = window.subsystem_lamps["interlock"]
+    window._on_keywords({"LFC_PTAMP_LATCH": {"value": 1}})
+    assert "#35d07f" in lamp.styleSheet()  # ready -> green
+    window._on_keywords({"LFC_PTAMP_LATCH": {"value": 0}})
+    assert "#3a4350" in lamp.styleSheet()  # tripped but resettable -> grey
+    for out_of_window in (3, 5):
+        window._on_keywords({"LFC_PTAMP_LATCH": {"value": out_of_window}})
+        assert "#e05252" in lamp.styleSheet()  # voltage out of window -> red
+    window._on_state(FakeClient().state())  # /state must leave it alone
+    assert "#e05252" in lamp.styleSheet()
+    window.poller.stop()
+    window.array_poller.stop()
+    window.writer.stop()
 
 
 def test_pritel_emission_one_click_bringup(qtbot, monkeypatch):

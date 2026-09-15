@@ -2,7 +2,7 @@
 
 Run with ``python -m keckogeco.gui.combfit [spectrum.csv]``, or open this
 file and press Run in VSCode. Works entirely offline on the CSVs written
-by the main GUI's OSA "Save" button (``keckogeco/gui/spectra.py`` format);
+by the main GUI's OSA "Save" button (``keckogeco/spectra.py`` format);
 no server needed.
 
 Model
@@ -594,7 +594,7 @@ class CombFitWindow(QMainWindow):
 
     def load_path(self, path: Path):
         """Load a spectrum CSV, extract its comb lines, and start a fit."""
-        from keckogeco.gui.spectra import load_spectrum_csv
+        from keckogeco.spectra import load_spectrum_csv
 
         try:
             x, y, _meta = load_spectrum_csv(path)

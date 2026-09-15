@@ -60,7 +60,11 @@ class OsaSettingsRequest(BaseModel):
 
 
 class OsaSweepRequest(BaseModel):
-    mode: Literal["single", "continuous", "stop"]
+    """Acquisition cadence, not an instrument sweep mode: the OSA only
+    ever runs operator-triggered single sweeps (fast = back-to-back,
+    slow = one per 10 min; fast decays to slow after 30 idle minutes)."""
+
+    mode: Literal["fast", "slow"]
 
 
 class ImScanRequest(BaseModel):
@@ -367,6 +371,12 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 2.0) -> FastAP
         except InstrumentError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    def osa_sweeper():
+        sweeper = controller.osa_sweeper
+        if sweeper is None:
+            raise HTTPException(status_code=503, detail="OSA sweep manager not running")
+        return sweeper
+
     def refuse_during_action() -> None:
         if controller.executor.running:
             action = controller.executor.current() or {}
@@ -376,11 +386,19 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 2.0) -> FastAP
                 "until it finishes (reads are fine)",
             )
 
+    def osa_readback(osa) -> dict:
+        sweeper = controller.osa_sweeper
+        return {
+            **osa.status(),
+            "resolutions_nm": list(osa.RESOLUTIONS_NM),
+            **(sweeper.info() if sweeper else {}),
+        }
+
     @app.get(f"{API_PREFIX}/osa", dependencies=[auth])
     def osa_settings() -> dict:
         osa = osa_device()
         try:
-            return {**osa.status(), "resolutions_nm": list(osa.RESOLUTIONS_NM)}
+            return osa_readback(osa)
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -394,8 +412,14 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 2.0) -> FastAP
                 osa.resolution_nm = body.resolution_nm
             if body.sensitivity_dBm is not None:
                 osa.sensitivity_dBm = body.sensitivity_dBm
+            # a settings change is user interaction, and the new view
+            # should appear without waiting out the slow cadence
+            sweeper = controller.osa_sweeper
+            if sweeper is not None:
+                sweeper.touch()
+                sweeper.request_grab()
             # read back so the GUI shows what the instrument accepted
-            return {**osa.status(), "resolutions_nm": list(osa.RESOLUTIONS_NM)}
+            return osa_readback(osa)
         except InstrumentError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -558,16 +582,11 @@ def create_app(config: Config, sim: bool = False, poll_s: float = 2.0) -> FastAP
 
     @app.post(f"{API_PREFIX}/osa/sweep", dependencies=[auth])
     def osa_sweep(body: OsaSweepRequest) -> dict:
-        refuse_during_action()
-        osa = osa_device()
-        try:
-            if body.mode == "single":
-                osa.trigger_single()
-            else:
-                osa.sweep_continuous = body.mode == "continuous"
-            return {"mode": body.mode, "sweep_continuous": osa.sweep_continuous}
-        except InstrumentError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        """Select the acquisition cadence. Re-posting "fast" renews the
+        idle timeout — the GUI does that on user interaction."""
+        sweeper = osa_sweeper()
+        sweeper.set_mode(body.mode)
+        return sweeper.info()
 
     # Static web status page at / (added last so API routes win). The page
     # itself is public like /health; its API calls still honor the token.

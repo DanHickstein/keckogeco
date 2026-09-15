@@ -26,6 +26,45 @@ def test_pendulum_measures_16ghz():
         counter.measure_frequency_Hz("c", meas_time_s=2000)
 
 
+def test_pendulum_forces_external_reference():
+    """Connect must command :ROSC:SOUR EXT (issue #48): the counter's
+    power-up selection is AUTO, and the query reports the selection —
+    not the timebase in use — so only a forced EXT makes
+    LFC_REPRATE_REF meaningful."""
+    counter = make("pendulum_cnt90", "PendulumCNT90", "pendulum", "GPIB0::10::INSTR")
+    assert ":ROSC:SOUR EXT" in counter.transport.sent
+    assert counter.reference_source == "EXT"
+
+
+def test_pendulum_reasserts_reference_after_configure():
+    """:CONF:FREQ resets ALL settings to *RST (handbook 8-56), and
+    :ROSC:SOUR's *RST value is AUTO (8-100) — rack-observed 2026-07-21:
+    the connect-time force lasted exactly one poll. Every measurement's
+    CONFigure must be followed by a fresh :ROSC:SOUR EXT, before INIT."""
+    counter = make("pendulum_cnt90", "PendulumCNT90", "pendulum", "GPIB0::10::INSTR")
+    counter.measure_frequency_Hz("c")
+    sent = counter.transport.sent
+    conf = sent.index(":CONF:FREQ (@3)")
+    assert ":ROSC:SOUR EXT" in sent[conf:]
+    assert sent[conf:].index(":ROSC:SOUR EXT") < sent[conf:].index(":INIT")
+
+
+def test_pendulum_warns_when_external_reference_refused(caplog):
+    import logging
+
+    from keckogeco.drivers.pendulum_cnt90 import PendulumCNT90
+
+    cfg = DeviceConfig(
+        key="pendulum", driver="pendulum_cnt90", address="GPIB0::10::INSTR", options={}
+    )
+    counter = PendulumCNT90.from_config(cfg, sim=True)
+    counter.transport.responses[":ROSC:SOUR?"] = "AUTO"
+    with caplog.at_level(logging.WARNING):
+        counter.connect()
+    assert counter.connected  # a refused force degrades, never blocks
+    assert "reference refused" in caplog.text
+
+
 def test_osa_spectrum():
     osa = make("agilent_86142b", "Agilent86142B", "osa", "GPIB0::30::INSTR")
     wl, power = osa.get_spectrum("A")
@@ -76,6 +115,16 @@ def test_osa_resolution_sensitivity_sweep():
     status = osa.status()
     assert status["resolution_nm"] == pytest.approx(0.5)
     assert status["sweep_continuous"] is False
+
+
+def test_osa_grab_single_waits_for_sweep():
+    osa = make("agilent_86142b", "Agilent86142B", "osa", "GPIB0::30::INSTR")
+    wl, power = osa.grab_single()
+    assert len(wl) == len(power) == 501
+    sent = osa.transport.sent
+    # never continuous, and *OPC? gates the trace pull on sweep completion
+    assert sent.index("INIT:CONT 0") < sent.index("INIT:IMM") < sent.index("*OPC?")
+    assert osa.sweep_continuous is False
 
 
 def test_voa_attenuation_roundtrip():
