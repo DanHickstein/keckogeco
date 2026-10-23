@@ -18,6 +18,7 @@ Monitors, transition sequences, and autolocks land in Phase 2.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -349,6 +350,10 @@ class LFCController:
             # scan/auto-lock bounds
             self._im_servo.manual_output_min = -8.0
             self._im_servo.manual_output_max = 8.0
+            # "the lock hit its bias limit this lock period" latch,
+            # reported via the im_scan array (GUI lamp goes red);
+            # cleared on the next engage (_im_set_lock)
+            self._im_limit_hit = False
             # setpoint ramping OFF: it only acts in PID mode, so with the
             # unit's front-panel RAMP left on (legacy state), a lockpoint
             # change while locked crawls at RATE V/s instead of stepping —
@@ -691,6 +696,11 @@ class LFCController:
                         payload["setpoint_V"] = self._im_servo.setpoint_V
                     except InstrumentError as exc:
                         log.debug("im_scan live readout failed: %s", exc)
+                    else:
+                        payload["bias_limit_V"] = self._im_servo.manual_output_max
+                        if payload["mode"] == "PID":
+                            self._im_note_limit_hit(payload["bias_V"])
+                        payload["limit_hit"] = self._im_limit_hit
                 return payload
 
             self.arrays["im_scan"] = im_scan
@@ -877,6 +887,32 @@ class LFCController:
                 time.sleep(4)
         tec.set_temperature_C(target_C)
 
+    #: how close OMON must get to the ±8 V bias limit to count as "hit
+    #: it": the PID output is only hardware-clamped at the SIM960's
+    #: ±10 V, so it normally sails PAST ±8 and a plain >= catches it;
+    #: the tolerance covers a rail sitting exactly at the limit
+    IM_BIAS_RAIL_TOL_V: ClassVar[float] = 0.05
+
+    def _im_note_limit_hit(self, bias_V: float) -> None:
+        """Latch "the engaged lock hit its ±8 V bias limit" (Dan,
+        2026-10-23: the GUI lamp must go red for the rest of the lock
+        period). Sampled at the GUI's array poll rate — enough, because
+        a lock pushed to its rail stays there (integrator pinned) —
+        and cleared on the next engage."""
+        servo = self._im_servo
+        if self._im_limit_hit or not math.isfinite(bias_V):
+            return
+        if (
+            bias_V >= servo.manual_output_max - self.IM_BIAS_RAIL_TOL_V
+            or bias_V <= servo.manual_output_min + self.IM_BIAS_RAIL_TOL_V
+        ):
+            self._im_limit_hit = True
+            log.error(
+                "IM bias lock hit its output limit (%.3f V of ±%.0f V); re-lock needed",
+                bias_V,
+                servo.manual_output_max,
+            )
+
     def _im_set_lock(self, engage: bool) -> None:
         """LFC_IM_LOCK_MODE setter. Engaging locks at the operator's
         current panel settings: the manual bias is copied into the SIM960
@@ -893,6 +929,7 @@ class LFCController:
             self._im_servo.setpoint_ramping_on = False
             self._im_servo.output_offset_V = self._im_servo.manual_output_V
             self._im_servo.output_mode = "PID"
+            self._im_limit_hit = False  # a fresh engage starts a new lock period
         else:
             bias = self._im_servo.output_V
             bias = min(

@@ -742,6 +742,51 @@ def test_comb_state_lamps_follow_turn_on_order(qtbot):
     window.writer.stop()
 
 
+def test_im_lock_lamp_warns_near_bias_limit(qtbot, tmp_path, monkeypatch):
+    """The top IM Lock lamp (and the servo-panel lamp) warn when the
+    engaged lock nears its ±8 V bias limit: yellow within 2 V of an
+    edge, red once the server latched a limit hit this lock period —
+    each with a re-lock instruction as the rollover text (Dan,
+    2026-10-23, after a railed lock silently degraded the spectrum)."""
+    pytest.importorskip("pyqtgraph")
+    from keckogeco.gui import prefs
+    from keckogeco.gui.mainwindow import MainWindow
+
+    monkeypatch.setattr(prefs, "GUI_CONFIG_PATH", tmp_path / "gui.toml")
+    window = MainWindow(FakeClient())
+    qtbot.addWidget(window)
+    window._on_arrays_available(["im_scan"])
+    lamp = window.subsystem_lamps["im_lock"]
+
+    window._on_keywords({"LFC_IM_LOCK_MODE": {"value": True}})
+    assert "#35d07f" in lamp.styleSheet()  # locked, no readouts yet
+
+    base = {"x": [], "y": [], "running": False, "mode": "PID", "bias_limit_V": 8.0}
+    window._on_array("im_scan", {**base, "bias_V": 3.0, "input_V": 0.4, "limit_hit": False})
+    assert "#35d07f" in lamp.styleSheet()  # well inside the range
+
+    window._on_array("im_scan", {**base, "bias_V": -6.5, "input_V": 0.4, "limit_hit": False})
+    assert "#e6b04c" in lamp.styleSheet()  # within 2 V of an edge
+    assert lamp.toolTip() == "IM lock is within 2 V of its limit, please re-lock"
+    assert "#e6b04c" in window._im_servo_panel.lamp.styleSheet()
+
+    # the latch outranks the live position (back off the rail, still red)
+    window._on_array("im_scan", {**base, "bias_V": 0.5, "input_V": 0.4, "limit_hit": True})
+    assert "#e05252" in lamp.styleSheet()
+    assert lamp.toolTip() == (
+        "The IM lock has hit its limit during this lock period! Please re-lock immediately."
+    )
+    assert "#e05252" in window._im_servo_panel.lamp.styleSheet()
+
+    # unlocking returns the plain off lamp regardless of history
+    window._on_keywords({"LFC_IM_LOCK_MODE": {"value": False}})
+    assert "#3a4350" in lamp.styleSheet()
+
+    window.poller.stop()
+    window.array_poller.stop()
+    window.writer.stop()
+
+
 def test_pritel_emission_one_click_bringup(qtbot, monkeypatch):
     """Clicking Emission ON runs the full bring-up in the commissioned
     order (FIFO writer queue): preamp setpoint, pump ON, then the Power

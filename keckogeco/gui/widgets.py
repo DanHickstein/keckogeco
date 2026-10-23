@@ -62,13 +62,15 @@ class SelectAllSpinBox(QDoubleSpinBox):
 _LAMP_COLORS = {
     True: "#35d07f",  # green
     False: "#3a4350",  # grey (off)
+    "warn": "#e6b04c",  # yellow
     "fault": "#e05252",  # red
     None: "#5a6472",  # unknown
 }
 
 
 class StatusLamp(QLabel):
-    """Small round indicator: green (on/ok), grey (off), red (fault)."""
+    """Small round indicator: green (on/ok), yellow (warn), grey (off),
+    red (fault)."""
 
     def __init__(self, label: str = ""):
         super().__init__()
@@ -76,13 +78,15 @@ class StatusLamp(QLabel):
         self.setFixedSize(16, 16)
         self.set_state(None)
 
-    def set_state(self, state) -> None:
+    def set_state(self, state, note: str | None = None) -> None:
+        """``note`` replaces the default "label: state" rollover text —
+        warn/fault lamps carry their operator instruction there."""
         color = _LAMP_COLORS.get(state, _LAMP_COLORS[None])
         self.setStyleSheet(
             f"background-color: {color}; border-radius: 8px; border: 1px solid #0b0e13;"
         )
         state_name = {True: "ON", False: "OFF", None: "?"}.get(state, str(state))
-        self.setToolTip(f"{self._label}: {state_name}")
+        self.setToolTip(note or f"{self._label}: {state_name}")
 
 
 class PrecisionDisplay(QLabel):
