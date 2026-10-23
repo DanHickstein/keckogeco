@@ -72,6 +72,11 @@ comes with a delay.
   Beware: the transfer curve's amplitude scales with EDFA27 power, and
   at the commissioned 450 mW the lock photodetector clips above ~5.5 V
   (docs/hardware/design.md) — scan at the power you'll operate at.
+  A railing lock is surfaced in the GUI (2026-10-23, after one silently
+  degraded the spectrum): the IM Lock lamps turn yellow while the
+  engaged lock's output is within 2 V of the ±8 V limit and red once it
+  has HIT the limit during the current lock period — the server latches
+  the hit (`limit_hit` in the `im_scan` array) until the next engage.
 - **OSAs are never left sweeping continuously (2026-07-29).** Both the
   Agilent (server-side `comb/osa_sweeper.py`) and the Yokogawa (standalone
   GUI) only ever trigger SINGLE sweeps, so a crash of anything leaves the

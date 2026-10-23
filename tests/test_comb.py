@@ -273,6 +273,29 @@ def test_controller_im_rf_att_and_lock_mode(controller):
     assert controller.read("LFC_IM_LOCK_MODE").value is False
 
 
+def test_controller_im_lock_limit_latch(controller):
+    """The im_scan array reports the ±8 V bias limit and latches "the
+    lock hit it" for the rest of the lock period (GUI lamp goes red,
+    Dan 2026-10-23); a fresh engage clears the latch."""
+    im = controller.arrays["im_scan"]
+    controller.write("LFC_IM_BIAS", "8.0")
+    assert im()["limit_hit"] is False  # manual mode never latches
+    controller.write("LFC_IM_LOCK_MODE", "1")  # engage sitting on the rail
+    payload = im()
+    assert payload["bias_limit_V"] == pytest.approx(8.0)
+    assert payload["limit_hit"] is True
+    # the latch holds even after the PID walks back off the rail (the
+    # sim's OMON tracks the output offset while in PID mode)
+    controller._im_servo.output_offset_V = 0.0
+    assert im()["bias_V"] == pytest.approx(0.0)
+    assert im()["limit_hit"] is True
+    # re-engaging starts a new lock period: latch cleared
+    controller.write("LFC_IM_LOCK_MODE", "0")
+    controller.write("LFC_IM_BIAS", "1.0")
+    controller.write("LFC_IM_LOCK_MODE", "1")
+    assert im()["limit_hit"] is False
+
+
 def test_all_keywords_bound_with_full_config(controller):
     # with every example-config device present, only the keywords whose
     # device is absent from the example config may remain unbound

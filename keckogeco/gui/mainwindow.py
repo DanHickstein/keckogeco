@@ -383,6 +383,28 @@ class OsaControls(QWidget):
             button.setStyleSheet(f"color: {ACCENT}; font-weight: bold;" if active else "")
 
 
+#: lamp goes yellow once the locked PID output is this close to its limit
+IM_BIAS_WARN_MARGIN_V = 2.0
+
+
+def _im_lock_lamp_state(payload: dict) -> tuple[bool | str, str | None]:
+    """Lamp state + rollover text for an ENGAGED IM lock, from the
+    im_scan array's live readouts (Dan, 2026-10-23, after a poor output
+    spectrum went unnoticed because the lock sat at its rail): red once
+    the lock has hit its ±8 V bias limit during this lock period (the
+    server latches that), yellow while the output is within 2 V of the
+    limit, plain green otherwise."""
+    if payload.get("limit_hit"):
+        return (
+            "fault",
+            "The IM lock has hit its limit during this lock period! Please re-lock immediately.",
+        )
+    bias, limit = payload.get("bias_V"), payload.get("bias_limit_V")
+    if bias is not None and limit and limit - abs(bias) <= IM_BIAS_WARN_MARGIN_V:
+        return "warn", "IM lock is within 2 V of its limit, please re-lock"
+    return True, None
+
+
 class ImServoPanel(QWidget):
     """Lock controls for the IM bias servo (top of the IM Bias Lock tab).
 
@@ -503,6 +525,9 @@ class ImServoPanel(QWidget):
             self.lamp.set_state(None)
         elif payload.get("mode") is not None:
             self._show_locked(payload["mode"] == "PID")
+            if payload["mode"] == "PID":
+                # near/at the bias limit: same yellow/red as the top lamp
+                self.lamp.set_state(*_im_lock_lamp_state(payload))
         if self.setpoint is not None and payload.get("setpoint_V") is not None:
             self.setpoint.update_value(payload["setpoint_V"])
         if self.prop is not None and payload.get("prop_gain") is not None:
@@ -741,6 +766,7 @@ class MainWindow(QMainWindow):
         self.widgets: dict[str, object] = {}  # keyword -> widget
         self._action_status_shown = ""  # last action message sent to the status bar
         self._keyword_snapshot: dict = {}  # last /keywords poll (pre-flight checks)
+        self._im_locked: bool | None = None  # last LFC_IM_LOCK_MODE value
 
         self.schema = client.schema()
         try:
@@ -2111,7 +2137,8 @@ class MainWindow(QMainWindow):
         im_lock = snapshot.get("LFC_IM_LOCK_MODE")
         if im_lock is not None:
             value = im_lock.get("value")
-            self.subsystem_lamps["im_lock"].set_state(None if value is None else bool(value))
+            self._im_locked = None if value is None else bool(value)
+            self._update_im_lock_lamp()
         # so is the interlock lamp: LFC_PTAMP_LATCH enum (1 ready,
         # 0 tripped-but-resettable, 3/5 photodiode voltage out of window)
         latch = snapshot.get("LFC_PTAMP_LATCH")
@@ -2123,6 +2150,16 @@ class MainWindow(QMainWindow):
         volts = snapshot.get("LFC_PTAMP_INTERLOCK_V")
         if volts is not None:
             self._color_interlock_voltage(volts.get("value"))
+
+    def _update_im_lock_lamp(self) -> None:
+        """Top-row IM Lock lamp: on/off from LFC_IM_LOCK_MODE, shaded by
+        the latest im_scan live readouts while locked — yellow near the
+        bias limit, red once the limit was hit this lock period."""
+        state: bool | str | None = self._im_locked
+        note = None
+        if state is True:
+            state, note = _im_lock_lamp_state(getattr(self, "_im_data", None) or {})
+        self.subsystem_lamps["im_lock"].set_state(state, note)
 
     def _color_interlock_voltage(self, value) -> None:
         """Green when the photodiode voltage is inside the trip window,
@@ -2222,6 +2259,7 @@ class MainWindow(QMainWindow):
                 curve.setData(data.get("x", []), data.get("y", []))
         elif name == "im_scan" and self._im_plot is not None:
             self._im_data = data  # kept for "Save"
+            self._update_im_lock_lamp()
             _plot, curve = self._im_plot
             curve.setData(data.get("x", []), data.get("y", []))
             if self._im_controls is not None:
