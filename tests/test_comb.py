@@ -215,6 +215,7 @@ def test_controller_temp_interlock(controller):
     controller.write("LFC_RFAMP_ONOFF", "1")
     controller.write("LFC_RFOSCI_ONOFF", "1")
     controller.write("LFC_EDFA27_ONOFF", "1")
+    controller.TEMP_INTERLOCK_STAGGER_S = 0.0  # skip the Pritel->RF-amp pause
     controller._temp_interlock_shutdown("test trip")
     assert controller.device("ptamp").pump_on is False
     rf_amp_ch = controller.psu_channel("rf_amp_psu")

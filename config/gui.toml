@@ -30,7 +30,7 @@ center_nm = 1559.8
 csv = "C:/kecklfc/keckogeco/spectra/osa_2026-07-21_151353.csv"
 
 [im_lock]
-bias_start = 3.3
+bias_start = 2.0
 
 [im_reference]
 csv = "C:/kecklfc/keckogeco/spectra/im_scan_2026-07-17_113136.csv"
