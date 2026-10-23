@@ -708,6 +708,8 @@ class LFCController:
     # map (drivers/usb2408.DEFAULT_POSITIONS).
     TEMP_INTERLOCK_DELTA_C: ClassVar[float] = 8.0
     TEMP_INTERLOCK_HOLD_S: ClassVar[float] = 30.0
+    #: pause between the Pritel and RF-amplifier switch-offs in a trip
+    TEMP_INTERLOCK_STAGGER_S: ClassVar[float] = 5.0
     #: rack DAQ ch3 = "Pritel (middle upper rack)"
     PRITEL_TC_CHANNEL: ClassVar[int] = 3
     PRITEL_NOMINAL_C: ClassVar[float] = 33.9
@@ -733,14 +735,23 @@ class LFCController:
             self.temp_interlock.clear_trip()
 
     def _temp_interlock_shutdown(self, reason: str) -> None:
-        """Cut the two big heat sources; the rest of the comb stays up."""
-        for label, off in (
-            ("Pritel pump", lambda: self.device("ptamp").set_pump(False)),
+        """Cut the two big heat sources; the rest of the comb stays up.
+
+        Pritel first, then a 5 s pause before the RF amplifier (Dan,
+        2026-09-17): the pump must be off before the pulse train stops.
+        The pause runs even if the Pritel switch-off failed — the RF
+        amplifier still has to go, and 5 s of margin costs nothing.
+        """
+        for delay_s, label, off in (
+            (0.0, "Pritel pump", lambda: self.device("ptamp").set_pump(False)),
             (
+                self.TEMP_INTERLOCK_STAGGER_S,
                 "RF amplifier supply",
                 lambda: self.device("rf_amp_psu").set_output(False, self.psu_channel("rf_amp_psu")),
             ),
         ):
+            if delay_s:
+                time.sleep(delay_s)
             try:
                 off()
                 log.critical("temp interlock: %s switched OFF", label)
